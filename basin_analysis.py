@@ -32,6 +32,9 @@ misc_out = r'/ra1/pubdat/AVHRR_CloudSat_proj/miscelaneous_outs'
 
 crs = "+proj=longlat +datum=WGS84 +no_defs"  
 crs_format = 'proj4' 
+
+batch_size = 10
+
 #----------------------------------------------------------------------------------
 
 basins  = xr.open_dataset(basins_path)
@@ -56,8 +59,7 @@ era5_fle_lst = [os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_
 #%%
 # read and process satellite precipitation data
 # Split the file list into batches of 10
-batch_size = 10
-batches = [img_fle_lst[i:i + batch_size] for i in range(0, len(img_fle_lst), batch_size)]
+batches = [img_fle_lst[i:i + batch_size] for i in range(0, len(img_fle_lst[:21]), batch_size)]
 
 img_batch_results = run_batched_processing(batches, basins_zwally)
 
@@ -67,26 +69,26 @@ img_final_result = xr.concat(img_batch_results, dim='batch').mean(dim='batch', s
 stereo_img_xrr_basin_mm_per_year = img_final_result * 365
 
 # Initialize a list to store the results from each batch
-batch_results = []
+# batch_results = []
 
-for batch in batches:
-    # Process each batch
-    img_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in batch], dim='time')
+# for batch in batches:
+#     # Process each batch
+#     img_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in batch], dim='time')
 
-    # Calculate mean precipitation for each basin
-    stereo_img_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+#     # Calculate mean precipitation for each basin
+#     stereo_img_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
 
-    for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
-        basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
-        basin_precip = img_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
-        basin_mean_precip = basin_precip.mean(dim=['time', 'x', 'y'], skipna=True)  # Calculate a single mean precipitation
+#     for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
+#         basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
+#         basin_precip = img_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
+#         basin_mean_precip = basin_precip.mean(dim=['time', 'x', 'y'], skipna=True)  # Calculate a single mean precipitation
 
-        stereo_img_xrr_basin_mapped = stereo_img_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
+#         stereo_img_xrr_basin_mapped = stereo_img_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
 
-    del(img_precip_bsn_xrr, basin_precip, basin_mean_precip, basin_mask)
+#     del(img_precip_bsn_xrr, basin_precip, basin_mean_precip, basin_mask)
 
-    # Append the result for this batch
-    batch_results.append(stereo_img_xrr_basin_mapped)
+#     # Append the result for this batch
+#     batch_results.append(stereo_img_xrr_basin_mapped)
 
 
 # unique_values = np.unique(stereo_img_xrr_basin_mm_per_year.data[~np.isnan(stereo_img_xrr_basin_mm_per_year.data)])
@@ -97,70 +99,105 @@ for batch in batches:
 #----------------------------------------------------------------------------------
 
 # read and process era5 data
-era5_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in era5_fle_lst], dim='time')
 
-# Calculate mean precipitation for each basin
-stereo_era5_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+batches = [era5_fle_lst[i:i + batch_size] for i in range(0, len(era5_fle_lst[:21]), batch_size)]
 
-for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
-    basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
-    basin_precip = era5_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
-    basin_mean_precip = basin_precip.mean(dim=['time','x', 'y'], skipna=True)  # Calculate a single mean precipitation
+era5_batch_results = run_batched_processing(batches, basins_zwally)
 
-    stereo_era5_xrr_basin_mapped = stereo_era5_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
-del(basin_precip, basin_mean_precip, basin_mask)
-stereo_era5_xrr_basin_mm_per_year = stereo_era5_xrr_basin_mapped * 365
+# Calculate the final mean across all batches
+era5_final_result = xr.concat(era5_batch_results, dim='batch').mean(dim='batch', skipna=True)
+
+stereo_era5_xrr_basin_mm_per_year = era5_final_result * 365
+
+# era5_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in era5_fle_lst], dim='time')
+
+# # Calculate mean precipitation for each basin
+# stereo_era5_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+
+# for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
+#     basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
+#     basin_precip = era5_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
+#     basin_mean_precip = basin_precip.mean(dim=['time','x', 'y'], skipna=True)  # Calculate a single mean precipitation
+
+#     stereo_era5_xrr_basin_mapped = stereo_era5_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
+# del(basin_precip, basin_mean_precip, basin_mask)
 
 #----------------------------------------------------------------------------------
 
 # read and process avhrr data
-avhrr_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in avhrr_fle_lst], dim='time')
 
-# Calculate mean precipitation for each basin
-stereo_avhrr_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+batches = [avhrr_fle_lst[i:i + batch_size] for i in range(0, len(avhrr_fle_lst[:21]), batch_size)]
 
-for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
-    basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
-    basin_precip = avhrr_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
-    basin_mean_precip = basin_precip.mean(dim=['time','x', 'y'], skipna=True)  # Calculate a single mean precipitation
+avhrr_batch_results = run_batched_processing(batches, basins_zwally)
 
-    stereo_avhrr_xrr_basin_mapped = stereo_avhrr_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
+# Calculate the final mean across all batches
+avhrr_final_result = xr.concat(avhrr_batch_results, dim='batch').mean(dim='batch', skipna=True)
 
-del(basin_precip, basin_mean_precip, basin_mask)
+stereo_avhrr_xrr_basin_mm_per_year = avhrr_final_result * 365
 
-stereo_avhrr_xrr_basin_mm_per_year = stereo_avhrr_xrr_basin_mapped * 365
+# avhrr_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in avhrr_fle_lst], dim='time')
+
+# # Calculate mean precipitation for each basin
+# stereo_avhrr_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+
+# for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
+#     basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
+#     basin_precip = avhrr_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
+#     basin_mean_precip = basin_precip.mean(dim=['time','x', 'y'], skipna=True)  # Calculate a single mean precipitation
+
+#     stereo_avhrr_xrr_basin_mapped = stereo_avhrr_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
+
+# del(basin_precip, basin_mean_precip, basin_mask)
+
 
 #----------------------------------------------------------------------------------
 # read and process ssmi_17 data
-ssmis_17_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in ssmis_17_fle_lst], dim='time')
 
-# Calculate mean precipitation for each basin
-stereo_ssmi_17_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+batches = [ssmis_17_fle_lst[i:i + batch_size] for i in range(0, len(ssmis_17_fle_lst[:21]), batch_size)]
 
-for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
-    basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
-    basin_precip = ssmis_17_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
-    basin_mean_precip = basin_precip.mean(dim=['time','x', 'y'], skipna=True)  # Calculate a single mean precipitation
+ssmis_batch_results = run_batched_processing(batches, basins_zwally)
 
-    stereo_ssmi_17_xrr_basin_mapped = stereo_ssmi_17_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
-del(basin_precip, basin_mean_precip, basin_mask)
-stereo_ssmi_17_xrr_basin_mm_per_year = stereo_ssmi_17_xrr_basin_mapped * 365
+# Calculate the final mean across all batches
+ssmis_final_result = xr.concat(ssmis_batch_results, dim='batch').mean(dim='batch', skipna=True)
+
+stereo_ssmi_17_xrr_basin_mm_per_year = ssmis_final_result * 365
+
+# ssmis_17_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in ssmis_17_fle_lst], dim='time')
+
+# # Calculate mean precipitation for each basin
+# stereo_ssmi_17_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+
+# for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
+#     basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
+#     basin_precip = ssmis_17_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
+#     basin_mean_precip = basin_precip.mean(dim=['time','x', 'y'], skipna=True)  # Calculate a single mean precipitation
+
+#     stereo_ssmi_17_xrr_basin_mapped = stereo_ssmi_17_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
+# del(basin_precip, basin_mean_precip, basin_mask)
 
 #----------------------------------------------------------------------------------
 # read and process airs data
-airs_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in airs_fle_lst], dim='time')
+batches = [airs_fle_lst[i:i + batch_size] for i in range(0, len(airs_fle_lst[:21]), batch_size)]
 
-# Calculate mean precipitation for each basin
-stereo_airs_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+airs_batch_results = run_batched_processing(batches, basins_zwally)
 
-for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
-    basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
-    basin_precip = airs_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
-    basin_mean_precip = basin_precip.mean(dim=['time','x', 'y'], skipna=True)  # Calculate a single mean precipitation
+# Calculate the final mean across all batches
+airs_final_result = xr.concat(airs_batch_results, dim='batch').mean(dim='batch', skipna=True)
 
-    stereo_airs_xrr_basin_mapped = stereo_airs_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
-del(basin_precip, basin_mean_precip, basin_mask)
-stereo_airs_xrr_basin_mm_per_year = stereo_airs_xrr_basin_mapped * 365
+stereo_airs_xrr_basin_mm_per_year = airs_final_result * 365
+
+# airs_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in airs_fle_lst], dim='time')
+
+# # Calculate mean precipitation for each basin
+# stereo_airs_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+
+# for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
+#     basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
+#     basin_precip = airs_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
+#     basin_mean_precip = basin_precip.mean(dim=['time','x', 'y'], skipna=True)  # Calculate a single mean precipitation
+
+#     stereo_airs_xrr_basin_mapped = stereo_airs_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
+# del(basin_precip, basin_mean_precip, basin_mask)
 
 #----------------------------------------------------------------------------------
 
