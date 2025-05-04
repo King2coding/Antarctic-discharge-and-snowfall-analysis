@@ -59,6 +59,13 @@ era5_fle_lst = [os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_
 batch_size = 10
 batches = [img_fle_lst[i:i + batch_size] for i in range(0, len(img_fle_lst), batch_size)]
 
+img_batch_results = run_batched_processing(batches, basins_zwally)
+
+# Calculate the final mean across all batches
+img_final_result = xr.concat(img_batch_results, dim='batch').mean(dim='batch', skipna=True)
+
+stereo_img_xrr_basin_mm_per_year = img_final_result * 365
+
 # Initialize a list to store the results from each batch
 batch_results = []
 
@@ -81,10 +88,6 @@ for batch in batches:
     # Append the result for this batch
     batch_results.append(stereo_img_xrr_basin_mapped)
 
-# Calculate the final mean across all batches
-final_result = xr.concat(batch_results, dim='batch').mean(dim='batch', skipna=True)
-
-stereo_img_xrr_basin_mm_per_year = stereo_img_xrr_basin_mapped * 365
 
 # unique_values = np.unique(stereo_img_xrr_basin_mm_per_year.data[~np.isnan(stereo_img_xrr_basin_mm_per_year.data)])
 
