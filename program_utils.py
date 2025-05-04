@@ -77,7 +77,8 @@ def process_era5_file_to_basin(era5_xr_data, er_tme, basins, fle_svnme):
         er_xrr_clip_res = er_xrr_clip.rio.reproject(
             er_xrr_clip.rio.crs,
             shape=basins['zwally'].shape,  # set the shape as the basin data shape
-            resampling=Resampling.nearest
+            resampling=Resampling.nearest,
+            transform=basins['zwally'].rio.transform()
         )
 
         # Add the time coordinate to the reprojected DataArray
@@ -137,7 +138,8 @@ def process_airs_file_to_basin(airs_xrr_data, ai_tme, basins, fle_svnme):
         ai_xrr_clip_res = ai_xrr_clip.rio.reproject(
             ai_xrr_clip.rio.crs,
             shape=basins['zwally'].shape,  # set the shape as the basin data shape
-            resampling=Resampling.nearest
+            resampling=Resampling.nearest,
+            transform=basins['zwally'].rio.transform()
         )
 
         # Add the time coordinate to the reprojected DataArray
@@ -195,7 +197,8 @@ def process_ssmis_file_to_basin(ss, basins):
         ss_xrr_clip_res = ss_xrr_clip.rio.reproject(
             ss_xrr_clip.rio.crs,
             shape=basins['zwally'].shape,  # set the shape as the basin data shape
-            resampling=Resampling.nearest
+            resampling=Resampling.nearest,
+            transform=basins['zwally'].rio.transform()
         )
 
         # Add the time coordinate to the reprojected DataArray
@@ -248,7 +251,8 @@ def process_avhrr_file_to_basin(file,yr,basins):
     av_xrr_clip_res = av_xrr_clip.rio.reproject(
         av_xrr_clip.rio.crs,
         shape=basins['zwally'].shape,  # set the shape as the basin data shape
-        resampling=Resampling.nearest
+        resampling=Resampling.nearest,
+        transform=basins['zwally'].rio.transform()
     )
 
     # Add the time coordinate to the reprojected DataArray
@@ -303,7 +307,8 @@ def process_imerg_file_to_basin(im, misc_out, basins):
     img_xrr_clip_res = img_xrr_clip.rio.reproject(
         img_xrr_clip.rio.crs,
         shape=basins['zwally'].shape,  # set the shape as the autosnow data shape (1800, 3600)
-        resampling=Resampling.nearest
+        resampling=Resampling.nearest,
+        transform=basins['zwally'].rio.transform()
     )
     # Add the time coordinate to the reprojected DataArray
     img_xrr_clip_res_arr = img_xrr_clip_res['band_data'].values
