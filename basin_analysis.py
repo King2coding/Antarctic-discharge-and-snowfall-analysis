@@ -35,8 +35,16 @@ crs_format = 'proj4'
 #----------------------------------------------------------------------------------
 
 basins  = xr.open_dataset(basins_path)
+basins_zwally = basins['zwally']
+# Extract the bounds of the Zwally basins data
+x_min, x_max = basins_zwally['x'].values.min(), basins_zwally['x'].values.max()
+y_min, y_max = basins_zwally['y'].values.min(), basins_zwally['y'].values.max()
+basin_bounds = (x_min, x_max, y_min, y_max)
 
+# Print the bounds for verification
+print(f"Basin bounds: x_min={x_min}, x_max={x_max}, y_min={y_min}, y_max={y_max}")
 
+# Load the GRACE dataset
 grace = xr.open_dataset(grace_path)
 
 #%%
