@@ -502,26 +502,56 @@ def return_sim_cords(file):
 #----------------------------------------------------------------------------
 # function to run batched processing
 def run_batched_processing(batches, basins):
+    """
+    Function to process precipitation data in batches and calculate mean precipitation for each basin.
+
+    Parameters:
+    - batches: List of lists, where each inner list contains file paths to precipitation data for a batch.
+    - basins: xarray DataArray representing the basin regions, with unique IDs for each basin.
+
+    Returns:
+    - batch_results: List of xarray DataArrays containing mean precipitation for each basin in each batch.
+    """
      
-     # Initialize a list to store the results from each batch
+    # Initialize a list to store the results from each batch
     batch_results = []
 
-    for batch in batches:
-        # Process each batch
+    # Get the total number of batches to process
+    total_batches = len(batches)
+    print(f"Total number of batches to process: {total_batches}")
+
+    # Loop through each batch
+    for idx, batch in enumerate(batches, start=1):
+        # Display progress for the current batch
+        print(f"Processing batch {idx}/{total_batches} ({(idx / total_batches) * 100:.2f}%)...")
+
+        # Concatenate all precipitation data in the current batch along the 'time' dimension
         precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in batch], dim='time')
 
-        # Calculate mean precipitation for each basin
+        # Create an empty DataArray to store mean precipitation mapped to basins
         precip_xrr_basin_mapped = xr.full_like(basins, np.nan, dtype=float)
 
-        for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
-            basin_mask = basins == basin_id  # Create a mask for the current basin
-            basin_precip = precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
-            basin_mean_precip = basin_precip.mean(dim=['time', 'x', 'y'], skipna=True)  # Calculate a single mean precipitation
+        # Loop through each basin ID (Zwally basins are numbered from 1 to 27)
+        for basin_id in range(1, 28):
+            # Create a mask for the current basin
+            basin_mask = basins == basin_id
 
-            precip_xrr_basin_mapped = precip_xrr_basin_mapped.where(~basin_mask, 
-                                                                    basin_mean_precip)
+            # Mask the precipitation data for the current basin
+            basin_precip = precip_bsn_xrr.where(basin_mask.data)
 
-        del(img_precip_bsn_xrr, basin_precip, basin_mean_precip, basin_mask, basin_id)
+            # Calculate the mean precipitation for the current basin across time and spatial dimensions
+            basin_mean_precip = basin_precip.mean(dim=['time', 'x', 'y'], skipna=True)
 
-        # Append the result for this batch
+            # Map the calculated mean precipitation back to the basin region
+            precip_xrr_basin_mapped = precip_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
+
+        # Clean up variables to free memory
+        del(precip_bsn_xrr, basin_precip, basin_mean_precip, basin_mask, basin_id)
+
+        # Append the result for this batch to the results list
         batch_results.append(precip_xrr_basin_mapped)
+
+    # Indicate that all batches have been processed
+    print("All batches have been processed.")
+
+    return batch_results
