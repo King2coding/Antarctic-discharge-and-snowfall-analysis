@@ -9,9 +9,9 @@ import xarray as xr
 
 from program_utils import *
 
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
-from multiprocessing import Pool
+# from concurrent.futures import ProcessPoolExecutor
+# from functools import partial
+# from multiprocessing import Pool
 
 #%%
 # file paths
@@ -47,17 +47,27 @@ print(f"Basin bounds: x_min={x_min}, x_max={x_max}, y_min={y_min}, y_max={y_max}
 # Load the GRACE dataset
 grace = xr.open_dataset(grace_path)
 
+img_fle_lst = [os.path.join(imerg_basin_path, x) for x in os.listdir(imerg_basin_path)]
+avhrr_fle_lst = [os.path.join(avhrr_basin_path, x) for x in os.listdir(avhrr_basin_path)]
+ssmis_17_fle_lst = [os.path.join(ssmis_17_basin_path, x) for x in os.listdir(ssmis_17_basin_path)]
+airs_fle_lst = [os.path.join(airs_basin_path, x) for x in os.listdir(airs_basin_path)]
+era5_fle_lst = [os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_path)]
+
 #%%
 # read and process satellite precipitation data
 
-img_precip_bsn_xrr = xr.concat(img_precip_bsn, dim='time')
+img_precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in img_fle_lst], dim='time')
 
 # Calculate mean precipitation for each basin
 img_mean_precip_bsn = {}
+stereo_img_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+
 for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
-    basin_mask = basins['zwally'] == basin_id  # Create a mask for the current basin
+    basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
     basin_precip = img_precip_bsn_xrr.where(basin_mask.data)  # Mask the precipitation data for the basin
     basin_mean_precip = basin_precip.mean(dim=['time','x', 'y'], skipna=True)  # Calculate a single mean precipitation
+
+
     img_mean_precip_bsn[basin_id] = basin_mean_precip
 
 # Combine the mean precipitation values into a single DataArray
@@ -65,10 +75,9 @@ stereo_img_xrr_basin = xr.concat(stereo_img_xrr_basin, dim='basin')
 stereo_img_xrr_basin.coords['basin'] = range(1, 28)  # Add basin IDs as a coordinate
 
 # Multiply by 365 to get precipitation in mm/year
-stereo_img_xrr_basin_mapped = xr.full_like(basins['zwally'], np.nan, dtype=float)
 
 for basin_id in range(1, 28):  # Zwally basins are numbered from 1 to 27
-    basin_mask = basins['zwally'] == basin_id  # Create a mask for the current basin
+    basin_mask = basins_zwally == basin_id  # Create a mask for the current basin
     basin_precip_value = stereo_img_xrr_basin[basin_id].values#.sel(basin=basin_id).values[0]  # Extract the scalar value
     stereo_img_xrr_basin_mapped = stereo_img_xrr_basin_mapped.where(~basin_mask, basin_precip_value)
 
