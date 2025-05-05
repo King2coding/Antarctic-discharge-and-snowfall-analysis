@@ -223,8 +223,6 @@ stereo_airs_xrr_basin_mm_per_year_5km = stereo_airs_xrr_basin_mm_per_year.rio.re
 
 gc.collect()
 
-#----------------------------------------------------------------------------------
-
 #%%
 # plot
 import cartopy.crs as ccrs
