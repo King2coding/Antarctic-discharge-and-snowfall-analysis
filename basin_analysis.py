@@ -78,6 +78,7 @@ gc.collect()
 #%%
 # read and process satellite precipitation data
 # Split the file list into batches of 10
+print('Processing IMERG data')
 batches = [img_fle_lst[i:i + batch_size] for i in range(0, len(img_fle_lst), batch_size)]
 
 img_batch_results = run_batched_processing(batches, basins_zwally)
@@ -109,6 +110,7 @@ gc.collect()
 #----------------------------------------------------------------------------------
 
 # read and process era5 data
+print('Processing ERA5 data')
 
 batches = [era5_fle_lst[i:i + batch_size] for i in range(0, len(era5_fle_lst), batch_size)]
 
@@ -139,6 +141,7 @@ gc.collect()
 #----------------------------------------------------------------------------------
 
 # read and process avhrr data
+print('Processing AVHRR data')
 
 batches = [avhrr_fle_lst[i:i + batch_size] for i in range(0, len(avhrr_fle_lst), batch_size)]
 
@@ -168,6 +171,7 @@ gc.collect()
 
 #----------------------------------------------------------------------------------
 # read and process ssmi_17 data
+print('Processing SSMI_17 data')
 
 batches = [ssmis_17_fle_lst[i:i + batch_size] for i in range(0, len(ssmis_17_fle_lst), batch_size)]
 
@@ -197,6 +201,8 @@ gc.collect()
 
 #----------------------------------------------------------------------------------
 # read and process airs data
+print('Processing AIRS data')
+
 batches = [airs_fle_lst[i:i + batch_size] for i in range(0, len(airs_fle_lst), batch_size)]
 
 airs_batch_results = run_batched_processing(batches, basins_zwally)
@@ -226,97 +232,98 @@ gc.collect()
 #----------------------------------------------------------------------------------
 # bring CloudSat into the discusiion
 # read and process CloudSat data
-ant_data_path = r"/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/miscellaneous"  # Replace with your actual path
-cs_ant_filename = os.path.join(ant_data_path,"CS_seasonal_climatology-2007-2010.nc")
-cs_ant = xr.open_dataarray(cs_ant_filename)
+# ant_data_path = r"/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/miscellaneous"  # Replace with your actual path
+# cs_ant_filename = os.path.join(ant_data_path,"CS_seasonal_climatology-2007-2010.nc")
+# cs_ant = xr.open_dataarray(cs_ant_filename)
 
-cs_ant_annual_clim = cs_ant.mean(dim='season',skipna=True)#.where(new_mask_ == 1)
+# cs_ant_annual_clim = cs_ant.mean(dim='season',skipna=True)#.where(new_mask_ == 1)
 
-yshp, xshp = cs_ant_annual_clim.shape
+# yshp, xshp = cs_ant_annual_clim.shape
 
-minx = cs_ant_annual_clim['lon'].min().item()
-maxy = cs_ant_annual_clim['lat'].max().item()
-px_sz = round(cs_ant_annual_clim['lon'].diff('lon').mean().item(), 2)
+# minx = cs_ant_annual_clim['lon'].min().item()
+# maxy = cs_ant_annual_clim['lat'].max().item()
+# px_sz = round(cs_ant_annual_clim['lon'].diff('lon').mean().item(), 2)
 
-dest_flnme = os.path.join(misc_out, os.path.basename(cs_ant_filename))
+# dest_flnme = os.path.join(misc_out, os.path.basename(cs_ant_filename))
 
-gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, 
-                              crs, crs_format, cs_ant_annual_clim.data)
+# gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, 
+#                               crs, crs_format, cs_ant_annual_clim.data)
 
-output_file_stereo = os.path.join(misc_out, os.path.basename(cs_ant_filename).replace('.nc', '_stere.nc'))
+# output_file_stereo = os.path.join(misc_out, os.path.basename(cs_ant_filename).replace('.nc', '_stere.nc'))
 
-gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
+# gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
 
-subprocess.run(gdalwarp_command, shell=True)
+# subprocess.run(gdalwarp_command, shell=True)
 
-# Read the stereographic projection file
-cs_ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
+# # Read the stereographic projection file
+# cs_ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
 
-os.remove(dest_flnme)
-os.remove(output_file_stereo)
+# os.remove(dest_flnme)
+# os.remove(output_file_stereo)
 
-# Clip the data to the bounds of the basin dataset
-cs_ant_xrr_clip = cs_ant_xrr_sh_stereo.sel(
-    x=slice(-3333250, 3333250),
-    y=slice(-3333250, 3333250)
-).squeeze()
-
-
-# Explicitly set the CRS before reprojecting
-cs_ant_xrr_clip.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
-
-cs_ant_xrr_clip_res = cs_ant_xrr_clip.rio.reproject(
-    cs_ant_xrr_clip.rio.crs,
-    shape=basins_zwally.shape,  # set the shape as the basin data shape
-    resampling=Resampling.nearest,
-    transform=basins['zwally'].rio.transform()
-)
-
-cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res['Band1'].values
-cs_ant_xrr_clip_res_arr = np.where(basins_zwally.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
-cs_ant_xrr_clip_res = xr.DataArray(
-    cs_ant_xrr_clip_res_arr,  # Use the 2D numpy array directly
-    dims=['y', 'x'],  # Define dimensions
-    coords={'y': cs_ant_xrr_clip_res.coords['y'], 
-            'x': cs_ant_xrr_clip_res.coords['x']},
-    name='precipitation'  # Rename the DataArray to 'precipitation'
-)
-
-# Create an empty DataArray to store mean precipitation mapped to basins
-cs_ant_precip_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
-
-# Loop through each basin ID (Zwally basins are numbered from 1 to 27)
-for basin_id in range(1, 28):
-    # Create a mask for the current basin
-    basin_mask = basins_zwally == basin_id
-
-    # Mask the precipitation data for the current basin
-    basin_precip = cs_ant_xrr_clip_res.where(basin_mask.data)
-
-    # Calculate the mean precipitation for the current basin across time and spatial dimensions
-    basin_mean_precip = basin_precip.mean(dim=['x', 'y'], skipna=True)
-
-    # Map the calculated mean precipitation back to the basin region
-    cs_ant_precip_xrr_basin_mapped = cs_ant_precip_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
-
-# Clean up variables to free memory
-del(basin_precip, basin_mean_precip, basin_mask, basin_id)
+# # Clip the data to the bounds of the basin dataset
+# cs_ant_xrr_clip = cs_ant_xrr_sh_stereo.sel(
+#     x=slice(-3333250, 3333250),
+#     y=slice(-3333250, 3333250)
+# ).squeeze()
 
 
-# resample the data to the new resolution
-cs_ant_precip_xrr_basin_mapped.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+# # Explicitly set the CRS before reprojecting
+# cs_ant_xrr_clip.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
-cs_ant_precip_xrr_basin_mapped_res_5km = cs_ant_precip_xrr_basin_mapped.rio.reproject(
-                                    dst_crs=cs_ant_precip_xrr_basin_mapped.rio.crs,
-                                    shape=(1333, 1333),
-                                    transform=new_transform,
-                                    resampling=Resampling.nearest
-)
+# cs_ant_xrr_clip_res = cs_ant_xrr_clip.rio.reproject(
+#     cs_ant_xrr_clip.rio.crs,
+#     shape=basins_zwally.shape,  # set the shape as the basin data shape
+#     resampling=Resampling.nearest,
+#     transform=basins['zwally'].rio.transform()
+# )
 
-gc.collect()
+# cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res['Band1'].values
+# cs_ant_xrr_clip_res_arr = np.where(basins_zwally.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
+# cs_ant_xrr_clip_res = xr.DataArray(
+#     cs_ant_xrr_clip_res_arr,  # Use the 2D numpy array directly
+#     dims=['y', 'x'],  # Define dimensions
+#     coords={'y': cs_ant_xrr_clip_res.coords['y'], 
+#             'x': cs_ant_xrr_clip_res.coords['x']},
+#     name='precipitation'  # Rename the DataArray to 'precipitation'
+# )
+
+# # Create an empty DataArray to store mean precipitation mapped to basins
+# cs_ant_precip_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+
+# # Loop through each basin ID (Zwally basins are numbered from 1 to 27)
+# for basin_id in range(1, 28):
+#     # Create a mask for the current basin
+#     basin_mask = basins_zwally == basin_id
+
+#     # Mask the precipitation data for the current basin
+#     basin_precip = cs_ant_xrr_clip_res.where(basin_mask.data)
+
+#     # Calculate the mean precipitation for the current basin across time and spatial dimensions
+#     basin_mean_precip = basin_precip.mean(dim=['x', 'y'], skipna=True)
+
+#     # Map the calculated mean precipitation back to the basin region
+#     cs_ant_precip_xrr_basin_mapped = cs_ant_precip_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
+
+# # Clean up variables to free memory
+# del(basin_precip, basin_mean_precip, basin_mask, basin_id)
+
+
+# # resample the data to the new resolution
+# cs_ant_precip_xrr_basin_mapped.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+
+# cs_ant_precip_xrr_basin_mapped_res_5km = cs_ant_precip_xrr_basin_mapped.rio.reproject(
+#                                     dst_crs=cs_ant_precip_xrr_basin_mapped.rio.crs,
+#                                     shape=(1333, 1333),
+#                                     transform=new_transform,
+#                                     resampling=Resampling.nearest
+# )
+
+# gc.collect()
 
 
 #%%
+print('Plotting')
 # plot
 import cartopy.crs as ccrs
 import cartopy.crs as ccrs
