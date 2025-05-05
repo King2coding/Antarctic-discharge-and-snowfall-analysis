@@ -8,6 +8,7 @@ import numpy as np
 import xarray as xr
 
 from program_utils import *
+from affine import Affine
 
 # from concurrent.futures import ProcessPoolExecutor
 # from functools import partial
@@ -29,6 +30,8 @@ era5_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis
 annual_precip_in_basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/precip_in_basins/annual'
 seasonal_precip_in_basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/precip_in_basins/seasonal'
 
+# path to put outs e.g. plots, dfs
+path_to_plots = r'/home/kkumah/Projects/Antarctic_discharge_work/plots'
 #%%
 # floating variables
 misc_out = r'/ra1/pubdat/AVHRR_CloudSat_proj/miscelaneous_outs'
@@ -50,6 +53,18 @@ basin_bounds = (x_min, x_max, y_min, y_max)
 # Print the bounds for verification
 print(f"Basin bounds: x_min={x_min}, x_max={x_max}, y_min={y_min}, y_max={y_max}")
 
+# we may resample the precip data to course resolution for plotting
+new_resolution = 5000  # meters
+new_transform = Affine(
+    new_resolution, 0.0, -3333500.0,
+    0.0, -new_resolution, 3333500.0
+)
+
+new_shpe = (
+    int((y_max - y_min) / new_resolution),
+    int((x_max - x_min) / new_resolution)
+)
+
 # Load the GRACE dataset
 grace = xr.open_dataset(grace_path)
 
@@ -63,7 +78,7 @@ gc.collect()
 #%%
 # read and process satellite precipitation data
 # Split the file list into batches of 10
-batches = [img_fle_lst[i:i + batch_size] for i in range(0, len(img_fle_lst[:5]), batch_size)]
+batches = [img_fle_lst[i:i + batch_size] for i in range(0, len(img_fle_lst), batch_size)]
 
 img_batch_results = run_batched_processing(batches, basins_zwally)
 
@@ -77,6 +92,17 @@ encoding = {stereo_img_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}
 stereo_img_xrr_basin_mm_per_year.to_netcdf(os.path.join(imerg_basin_path, fle_svnme), 
                                            mode='w', format='NETCDF4', encoding=encoding)
 
+# resample the data to the new resolution
+
+# Explicitly set the CRS before reprojecting
+stereo_img_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+
+stereo_img_xrr_basin_mm_per_year_5km = stereo_img_xrr_basin_mm_per_year.rio.reproject(
+                                    dst_crs=stereo_img_xrr_basin_mm_per_year.rio.crs,
+                                    shape=(1333, 1333),
+                                    transform=new_transform,
+                                    resampling=Resampling.nearest
+)
 
 gc.collect()
 
@@ -84,7 +110,7 @@ gc.collect()
 
 # read and process era5 data
 
-batches = [era5_fle_lst[i:i + batch_size] for i in range(0, len(era5_fle_lst[:21]), batch_size)]
+batches = [era5_fle_lst[i:i + batch_size] for i in range(0, len(era5_fle_lst), batch_size)]
 
 era5_batch_results = run_batched_processing(batches, basins_zwally)
 
@@ -93,13 +119,28 @@ era5_final_result = xr.concat(era5_batch_results, dim='batch').mean(dim='batch',
 
 stereo_era5_xrr_basin_mm_per_year = era5_final_result * 365
 
+fle_svnme = os.path.join(annual_precip_in_basins_path, 'ERA5_2010_basin_annual_precip.nc')
+encoding = {stereo_era5_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
+stereo_era5_xrr_basin_mm_per_year.to_netcdf(os.path.join(era5_basin_path, fle_svnme), 
+                                            mode='w', format='NETCDF4', encoding=encoding)
+
+# resample the data to the new resolution
+stereo_era5_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+
+stereo_era5_xrr_basin_mm_per_year_5km = stereo_era5_xrr_basin_mm_per_year.rio.reproject(
+                                    dst_crs=stereo_era5_xrr_basin_mm_per_year.rio.crs,
+                                    shape=(1333, 1333),
+                                    transform=new_transform,
+                                    resampling=Resampling.nearest
+)
+
 gc.collect()
 
 #----------------------------------------------------------------------------------
 
 # read and process avhrr data
 
-batches = [avhrr_fle_lst[i:i + batch_size] for i in range(0, len(avhrr_fle_lst[:21]), batch_size)]
+batches = [avhrr_fle_lst[i:i + batch_size] for i in range(0, len(avhrr_fle_lst), batch_size)]
 
 avhrr_batch_results = run_batched_processing(batches, basins_zwally)
 
@@ -108,12 +149,27 @@ avhrr_final_result = xr.concat(avhrr_batch_results, dim='batch').mean(dim='batch
 
 stereo_avhrr_xrr_basin_mm_per_year = avhrr_final_result * 365
 
+fle_svnme = os.path.join(annual_precip_in_basins_path, 'AVHRR_2010_basin_annual_precip.nc')
+encoding = {stereo_avhrr_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
+stereo_avhrr_xrr_basin_mm_per_year.to_netcdf(os.path.join(avhrr_basin_path, fle_svnme), 
+                                             mode='w', format='NETCDF4', encoding=encoding)
+
+# resample the data to the new resolution
+stereo_avhrr_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+
+stereo_avhrr_xrr_basin_mm_per_year_5km = stereo_avhrr_xrr_basin_mm_per_year.rio.reproject(
+                                    dst_crs=stereo_avhrr_xrr_basin_mm_per_year.rio.crs,
+                                    shape=(1333, 1333),
+                                    transform=new_transform,
+                                    resampling=Resampling.nearest
+)
+
 gc.collect()
 
 #----------------------------------------------------------------------------------
 # read and process ssmi_17 data
 
-batches = [ssmis_17_fle_lst[i:i + batch_size] for i in range(0, len(ssmis_17_fle_lst[:21]), batch_size)]
+batches = [ssmis_17_fle_lst[i:i + batch_size] for i in range(0, len(ssmis_17_fle_lst), batch_size)]
 
 ssmis_batch_results = run_batched_processing(batches, basins_zwally)
 
@@ -122,11 +178,26 @@ ssmis_final_result = xr.concat(ssmis_batch_results, dim='batch').mean(dim='batch
 
 stereo_ssmi_17_xrr_basin_mm_per_year = ssmis_final_result * 365
 
+fle_svnme = os.path.join(annual_precip_in_basins_path, 'SSMIS_17_2010_basin_annual_precip.nc')
+encoding = {stereo_ssmi_17_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
+stereo_ssmi_17_xrr_basin_mm_per_year.to_netcdf(os.path.join(ssmis_17_basin_path, fle_svnme), 
+                                               mode='w', format='NETCDF4', encoding=encoding)
+
+# resample the data to the new resolution
+stereo_ssmi_17_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+
+stereo_ssmi_17_xrr_basin_mm_per_year_5km = stereo_ssmi_17_xrr_basin_mm_per_year.rio.reproject(
+                                    dst_crs=stereo_ssmi_17_xrr_basin_mm_per_year.rio.crs,
+                                    shape=(1333, 1333),
+                                    transform=new_transform,
+                                    resampling=Resampling.nearest
+)
+
 gc.collect()
 
 #----------------------------------------------------------------------------------
 # read and process airs data
-batches = [airs_fle_lst[i:i + batch_size] for i in range(0, len(airs_fle_lst[:21]), batch_size)]
+batches = [airs_fle_lst[i:i + batch_size] for i in range(0, len(airs_fle_lst), batch_size)]
 
 airs_batch_results = run_batched_processing(batches, basins_zwally)
 
@@ -134,6 +205,21 @@ airs_batch_results = run_batched_processing(batches, basins_zwally)
 airs_final_result = xr.concat(airs_batch_results, dim='batch').mean(dim='batch', skipna=True)
 
 stereo_airs_xrr_basin_mm_per_year = airs_final_result * 365
+
+fle_svnme = os.path.join(annual_precip_in_basins_path, 'AIRS_2010_basin_annual_precip.nc')
+encoding = {stereo_airs_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
+stereo_airs_xrr_basin_mm_per_year.to_netcdf(os.path.join(airs_basin_path, fle_svnme), 
+                                            mode='w', format='NETCDF4', encoding=encoding)
+
+# resample the data to the new resolution
+stereo_airs_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+
+stereo_airs_xrr_basin_mm_per_year_5km = stereo_airs_xrr_basin_mm_per_year.rio.reproject(
+                                    dst_crs=stereo_airs_xrr_basin_mm_per_year.rio.crs,
+                                    shape=(1333, 1333),
+                                    transform=new_transform,
+                                    resampling=Resampling.nearest
+)
 
 gc.collect()
 
@@ -229,112 +315,113 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300):
     plt.tight_layout()
 
 
-plot_arras = [('IMERG', stereo_img_xrr_basin_mm_per_year), 
-              ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
-              ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year), 
-              ('AIRS', stereo_airs_xrr_basin_mm_per_year),
-              ('ERA5', stereo_era5_xrr_basin_mm_per_year)] #
+plot_arras = [('IMERG', stereo_img_xrr_basin_mm_per_year_5km), 
+              ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year_5km), 
+              ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km), 
+              ('AIRS', stereo_airs_xrr_basin_mm_per_year_5km),
+              ('ERA5', stereo_era5_xrr_basin_mm_per_year_5km)] #
 
+svnme = os.path.join(misc_out, 'mean_precp_over_basins.png')
 compare_mean_precp_plot(plot_arras, vmin=0, vmax=300)
 
 #%%
 # Ensure the DataArray is sorted by its coordinates before plotting
 # Ensure the DataArray is sorted by both 'lat' and 'lons' in increasing order
-grace['lwe_thickness'].sortby('lat').sortby('lons')[0].plot()
+# grace['lwe_thickness'].sortby('lat').sortby('lons')[0].plot()
 
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-import numpy as np
+# import matplotlib.pyplot as plt
+# import matplotlib.colors as mcolors
+# import numpy as np
 
-# Custom colormap and normalization for 27 discrete basin values
-colors = plt.cm.gist_ncar(np.linspace(0, 1, 27))  # Use other palettes like 'tab20b' or 'Set3' for variety
-cmap = mcolors.ListedColormap(colors)
-norm = mcolors.BoundaryNorm(np.arange(-0.5, 27.5), cmap.N)
+# # Custom colormap and normalization for 27 discrete basin values
+# colors = plt.cm.gist_ncar(np.linspace(0, 1, 27))  # Use other palettes like 'tab20b' or 'Set3' for variety
+# cmap = mcolors.ListedColormap(colors)
+# norm = mcolors.BoundaryNorm(np.arange(-0.5, 27.5), cmap.N)
 
-fig, ax = plt.subplots(figsize=(8, 8))
+# fig, ax = plt.subplots(figsize=(8, 8))
 
-# Use masked plotting to handle NaNs gracefully
-basin_data = basins['zwally']
+# # Use masked plotting to handle NaNs gracefully
+# basin_data = basins['zwally']
 
-# Ensure data is a DataArray and mask invalid values (e.g., where basin == 0 or NaN)
-masked = basin_data.where(basin_data.notnull() & (basin_data >= 1) & (basin_data <= 26))
+# # Ensure data is a DataArray and mask invalid values (e.g., where basin == 0 or NaN)
+# masked = basin_data.where(basin_data.notnull() & (basin_data >= 1) & (basin_data <= 26))
 
-# Plot
-p = masked.plot.imshow(ax=ax, cmap=cmap, norm=norm, add_colorbar=False)
+# # Plot
+# p = masked.plot.imshow(ax=ax, cmap=cmap, norm=norm, add_colorbar=False)
 
-# Add colorbar with integer ticks only
-cbar = plt.colorbar(p, ax=ax, ticks=np.arange(0, 27))
-cbar.set_label("Basin index")
+# # Add colorbar with integer ticks only
+# cbar = plt.colorbar(p, ax=ax, ticks=np.arange(0, 27))
+# cbar.set_label("Basin index")
 
-# Aesthetic clean-up
-ax.set_xticks([])
-ax.set_yticks([])
-ax.set_xlabel('')
-ax.set_ylabel('')
-ax.set_title('Zwally Basin Map')
+# # Aesthetic clean-up
+# ax.set_xticks([])
+# ax.set_yticks([])
+# ax.set_xlabel('')
+# ax.set_ylabel('')
+# ax.set_title('Zwally Basin Map')
 
-plt.tight_layout()
-plt.show()
+# plt.tight_layout()
+# plt.show()
 
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-import numpy as np
+# import matplotlib.pyplot as plt
+# import matplotlib.colors as mcolors
+# import cartopy.crs as ccrs
+# import cartopy.feature as cfeature
+# import numpy as np
 
-# Set up colormap and norm for 27 discrete basins
-colors = plt.cm.gist_ncar(np.linspace(0, 1, 27))
-cmap = mcolors.ListedColormap(colors)
-cmap.set_bad(color='white')  # Set background (masked or NaN) to white
+# # Set up colormap and norm for 27 discrete basins
+# colors = plt.cm.gist_ncar(np.linspace(0, 1, 27))
+# cmap = mcolors.ListedColormap(colors)
+# cmap.set_bad(color='white')  # Set background (masked or NaN) to white
 
-norm = mcolors.BoundaryNorm(np.arange(-0.5, 27.5), cmap.N)
+# norm = mcolors.BoundaryNorm(np.arange(-0.5, 27.5), cmap.N)
 
-# Define Antarctic stereographic projection
-proj = ccrs.SouthPolarStereo()
+# # Define Antarctic stereographic projection
+# proj = ccrs.SouthPolarStereo()
 
-# Mask out invalid values (0 or NaN)
-zwally_data = basins['zwally'].where((basins['zwally'] > 0) & (basins['zwally'].notnull()))
+# # Mask out invalid values (0 or NaN)
+# zwally_data = basins['zwally'].where((basins['zwally'] > 0) & (basins['zwally'].notnull()))
 
-# Plot
-fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'projection': proj})
-p = zwally_data.plot(
-    ax=ax,
-    transform=ccrs.SouthPolarStereo(),  # If data is already projected in EPSG:3031
-    cmap=cmap,
-    norm=norm,
-    add_colorbar=False
-)
+# # Plot
+# fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'projection': proj})
+# p = zwally_data.plot(
+#     ax=ax,
+#     transform=ccrs.SouthPolarStereo(),  # If data is already projected in EPSG:3031
+#     cmap=cmap,
+#     norm=norm,
+#     add_colorbar=False
+# )
 
-# Add white background
-ax.set_facecolor('white')
+# # Add white background
+# ax.set_facecolor('white')
 
-# Add colorbar
-cbar = plt.colorbar(p, ax=ax, orientation='vertical', shrink=0.5, pad=0.05, ticks=np.arange(27))
-cbar.set_label("Basin Index")
+# # Add colorbar
+# cbar = plt.colorbar(p, ax=ax, orientation='vertical', shrink=0.5, pad=0.05, ticks=np.arange(27))
+# cbar.set_label("Basin Index")
 
-# Optional: Add coastlines or other features
-ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
-ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.4)
+# # Optional: Add coastlines or other features
+# ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+# ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.4)
 
-# Set limits for Antarctica view
-ax.set_extent([-2800000, 2800000, -2800000, 2800000], crs=ccrs.SouthPolarStereo())
+# # Set limits for Antarctica view
+# ax.set_extent([-2800000, 2800000, -2800000, 2800000], crs=ccrs.SouthPolarStereo())
 
-# Final cleanup
-ax.set_title("Zwally Basins")
-plt.tight_layout()
-plt.show()
+# # Final cleanup
+# ax.set_title("Zwally Basins")
+# plt.tight_layout()
+# plt.show()
 
-# Ensure img_xrr_clip is a DataArray by selecting a specific variable if it's a Dataset
-if isinstance(img_xrr_clip, xr.Dataset):
-    variable_name = list(img_xrr_clip.data_vars.keys())[0]  # Select the first variable
-    img_xrr_clip = img_xrr_clip[variable_name]
+# # Ensure img_xrr_clip is a DataArray by selecting a specific variable if it's a Dataset
+# if isinstance(img_xrr_clip, xr.Dataset):
+#     variable_name = list(img_xrr_clip.data_vars.keys())[0]  # Select the first variable
+#     img_xrr_clip = img_xrr_clip[variable_name]
 
-fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'projection': ccrs.SouthPolarStereo()})
-img_xrr_clip.plot(
-    ax=ax,
-    transform=ccrs.SouthPolarStereo(),  # Data is already in polar stereographic projection
-    cmap='jet',
-    add_colorbar=True
-)
-ax.set_title("Projected Data")
-plt.show()
+# fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'projection': ccrs.SouthPolarStereo()})
+# img_xrr_clip.plot(
+#     ax=ax,
+#     transform=ccrs.SouthPolarStereo(),  # Data is already in polar stereographic projection
+#     cmap='jet',
+#     add_colorbar=True
+# )
+# ax.set_title("Projected Data")
+# plt.show()
