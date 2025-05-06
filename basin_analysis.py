@@ -432,7 +432,6 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300):
     # Show the plot
     plt.tight_layout()
 
-
 plot_arras = [('IMERG', stereo_img_xrr_basin_mm_per_year_5km), 
               ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year_5km), 
               ('ERA5', stereo_era5_xrr_basin_mm_per_year_5km),]
@@ -444,6 +443,129 @@ svnme = os.path.join(path_to_plots, 'annual_snpwfall_accumulation_over_basins.pn
 compare_mean_precp_plot(plot_arras, vmin=0, vmax=300)
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
 
+
+
+def compare_mean_precp_plotV2(arr_lst_mean, vmin=0, vmax=300):
+    """
+    Optimized version of the multi-row grid plot for mean precipitation over 27 basins.
+
+    Parameters:
+    arr_lst_mean (list of tuples): List of tuples with product names and their mean precipitation data.
+    vmin (float): Minimum value for colorbar.
+    vmax (float): Maximum value for colorbar.
+    """
+    proj = ccrs.SouthPolarStereo()
+
+    # Use the 'jet' colormap
+    cmap = plt.cm.jet
+    levels = np.linspace(vmin, vmax, 28)  # 27 basins + 1 for boundaries
+    norm = BoundaryNorm(levels, cmap.N)
+
+    # Determine the number of rows and columns for the grid
+    n_products = len(arr_lst_mean)
+    ncols = 3  # Number of columns
+    nrows = (n_products + ncols - 1) // ncols  # Calculate rows needed
+
+    # Create the figure and axes
+    fig, axes = plt.subplots(
+        nrows=nrows, ncols=ncols, figsize=(28, 10 * nrows),
+        subplot_kw={'projection': proj}, constrained_layout=True
+    )
+
+    # Flatten axes for easier iteration
+    axes = axes.flatten()
+
+    # Loop through each dataset to create the plots
+    for i, (product_name, data) in enumerate(arr_lst_mean):
+        ax = axes[i]
+        ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+        ax.coastlines(lw=0.25, resolution="110m", zorder=2)
+
+        # Plot the data
+        data['zwally'].plot(
+            ax=ax,
+            transform=ccrs.PlateCarree(),
+            cmap=cmap,
+            norm=norm,
+            add_colorbar=False
+        )
+
+        ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
+        ax.set_title(product_name, fontsize=20)
+
+        print(f"done Plotting {product_name}...")
+
+    # Remove unused axes
+    for j in range(len(arr_lst_mean), len(axes)):
+        fig.delaxes(axes[j])
+
+    # Create a colorbar at the bottom spanning all subplots
+    cb = fig.colorbar(
+        ScalarMappable(norm=norm, cmap=cmap),
+        ax=axes[:len(arr_lst_mean)],  # Attach the colorbar to used axes
+        orientation="horizontal",
+        fraction=0.04,  # Fraction of the original axes height
+        pad=0.1,  # Distance from the bottom of the subplots
+        extend="max"
+    )
+    cb.ax.tick_params(labelsize=20)
+    cb.set_label("Snowfall Rate (mm/year)", fontsize=20)
+
+    # Show the plot
+    plt.show()
+
+svnme = os.path.join(path_to_plots, 'annual_snpwfall_accumulation_over_basins_v2.png')
+compare_mean_precp_plotV2(plot_arras, vmin=0, vmax=300)
+plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
+
+
+# single plot fucntion
+def single_precp_plot(data, product_name, vmin=0, vmax=300):
+    """
+    Plots mean precipitation for a single product over 27 basins.
+
+    Parameters:
+    data (xarray.DataArray): The precipitation data to plot.
+    product_name (str): Name of the product for the title.
+    vmin (float): Minimum value for colorbar.
+    vmax (float): Maximum value for colorbar.
+    """
+    proj = ccrs.SouthPolarStereo()
+
+    # Use the 'jet' colormap
+    cmap = plt.cm.jet
+    levels = np.linspace(vmin, vmax, 28)  # 27 basins + 1 for boundaries
+    norm = BoundaryNorm(levels, cmap.N)
+
+    fig, ax = plt.subplots(figsize=(28, 10), subplot_kw={'projection': proj})
+    ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+    ax.coastlines(lw=0.25, resolution="110m", zorder=2)
+
+    # Plot the data
+    data['zwally'].plot(
+        ax=ax,
+        transform=ccrs.PlateCarree(),
+        cmap=cmap,
+        norm=norm,
+        add_colorbar=False
+    )
+
+    ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
+    ax.set_title(product_name, fontsize=20)
+
+    # Add gridlines
+    gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
+                      linestyle='--', color='k', linewidth=0.75)
+    gl.xlocator = MaxNLocator(nbins=5)
+    gl.ylocator = MaxNLocator(nbins=5)
+    gl.xlabel_style = {'size': 20, 'color': 'k'}
+    gl.ylabel_style = {'size': 20, 'color': 'k'}
+
+    # Only show specific labels
+    gl.top_labels = False
+    gl.bottom_labels = True
+    gl.left_labels = True
+    gl.right_labels = True
 #%%
 # make a table of the mean precipitation for each basin
 annual_mean_df = pd.DataFrame(columns=list(range(1, 28)), index=[x[0] for x in plot_arras])
