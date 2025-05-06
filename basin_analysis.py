@@ -94,7 +94,8 @@ stereo_img_xrr_basin_mm_per_year.to_netcdf(os.path.join(imerg_basin_path, fle_sv
                                            mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-
+stereo_img_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'IMERG_2010_basin_annual_precip.nc')) 
 # Explicitly set the CRS before reprojecting
 stereo_img_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
@@ -127,6 +128,9 @@ stereo_era5_xrr_basin_mm_per_year.to_netcdf(os.path.join(era5_basin_path, fle_sv
                                             mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
+stereo_era5_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'ERA5_2010_basin_annual_precip.nc')) 
+# Explicitly set the CRS before reprojecting
 stereo_era5_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
 stereo_era5_xrr_basin_mm_per_year_5km = stereo_era5_xrr_basin_mm_per_year.rio.reproject(
@@ -158,6 +162,11 @@ stereo_avhrr_xrr_basin_mm_per_year.to_netcdf(os.path.join(avhrr_basin_path, fle_
                                              mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
+stereo_avhrr_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'AVHRR_2010_basin_annual_precip.nc')) 
+
+# Explicitly set the CRS before reprojecting
+
 stereo_avhrr_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
 stereo_avhrr_xrr_basin_mm_per_year_5km = stereo_avhrr_xrr_basin_mm_per_year.rio.reproject(
@@ -188,6 +197,11 @@ stereo_ssmi_17_xrr_basin_mm_per_year.to_netcdf(os.path.join(ssmis_17_basin_path,
                                                mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
+stereo_ssmi_17_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'SSMIS_17_2010_basin_annual_precip.nc')) 
+
+# Explicitly set the CRS before reprojecting
+
 stereo_ssmi_17_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
 stereo_ssmi_17_xrr_basin_mm_per_year_5km = stereo_ssmi_17_xrr_basin_mm_per_year.rio.reproject(
@@ -218,6 +232,11 @@ stereo_airs_xrr_basin_mm_per_year.to_netcdf(os.path.join(airs_basin_path, fle_sv
                                             mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
+stereo_airs_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'AIRS_2010_basin_annual_precip.nc')) 
+
+# Explicitly set the CRS before reprojecting
+
 stereo_airs_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
 stereo_airs_xrr_basin_mm_per_year_5km = stereo_airs_xrr_basin_mm_per_year.rio.reproject(
@@ -370,7 +389,7 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300):
         ax.coastlines(lw=0.25, resolution="110m", zorder=2)
 
         # Plot the data
-        data.plot(
+        data['zwally'].plot(
             ax=ax,
             transform=ccrs.PlateCarree(),
             cmap=cmap,
@@ -415,14 +434,29 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300):
 
 plot_arras = [('IMERG', stereo_img_xrr_basin_mm_per_year_5km), 
               ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year_5km), 
-              ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km), 
-              ('AIRS', stereo_airs_xrr_basin_mm_per_year_5km),
-              ('ERA5', stereo_era5_xrr_basin_mm_per_year_5km)] #
+              ('ERA5', stereo_era5_xrr_basin_mm_per_year_5km),]
+            #   ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km), 
+            #   ('AIRS', stereo_airs_xrr_basin_mm_per_year_5km),
+            #   ] #
 
 svnme = os.path.join(path_to_plots, 'annual_snpwfall_accumulation_over_basins.png')
 compare_mean_precp_plot(plot_arras, vmin=0, vmax=300)
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
 
+#%%
+# make a table of the mean precipitation for each basin
+annual_mean_df = pd.DataFrame(columns=list(range(1, 28)), index=[x[0] for x in plot_arras])
+for product_name, data in plot_arras:
+    print(product_name)
+
+    for basin_id in range(1, 28):
+        # Create a mask for the current basin
+        basin_mask = basins_zwally == basin_id
+
+        # Mask the precipitation data for the current basin
+        basin_precip = data.where(basin_mask.data)
+    
+    print(data.mean(dim=['x', 'y'], skipna=True))
 #%%
 # Ensure the DataArray is sorted by its coordinates before plotting
 # Ensure the DataArray is sorted by both 'lat' and 'lons' in increasing order
