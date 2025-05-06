@@ -60,7 +60,7 @@ norm = mcolors.BoundaryNorm(np.arange(-0.5, 27.5), cmap.N)
 zwally_data = basins_zwally.where((basins_zwally > 0) & (basins_zwally.notnull()))
 
 # Plot
-fig, ax = plt.subplots(figsize=(10, 10))
+fig, ax = plt.subplots(figsize=(12, 8))
 p = zwally_data.plot(
     ax=ax,
     cmap=cmap,
@@ -87,13 +87,14 @@ for basin_id in range(1, 28):
         centroid_y = basins_zwally['y'].values[y].mean()
         ax.text(
             centroid_x, centroid_y, str(basin_id),
-            color='black', fontsize=10, ha='center', va='center', zorder=5
+            color='black', fontsize=15, ha='center', va='center', zorder=5
         )
 
 # Final cleanup
 ax.set_title("Zwally Basins with IDs")
 plt.tight_layout()
 plt.show()
+
 # Extract the bounds of the Zwally basins data
 x_min, x_max = basins_zwally['x'].values.min(), basins_zwally['x'].values.max()
 y_min, y_max = basins_zwally['y'].values.min(), basins_zwally['y'].values.max()
