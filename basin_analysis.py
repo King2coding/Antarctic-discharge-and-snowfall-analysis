@@ -90,6 +90,11 @@ for basin_id in range(1, 28):
             color='black', fontsize=15, ha='center', va='center', zorder=5
         )
 
+ax.set_xlabel("Longitude", fontsize=18)
+ax.set_ylabel("Latitude", fontsize=18)
+ax.tick_params(axis='both', which='major', labelsize=18)  # Increase tick font sizes
+
+
 # Final cleanup
 ax.set_title("Zwally Basins with IDs")
 plt.tight_layout()
