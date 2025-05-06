@@ -46,6 +46,54 @@ batch_size = 10
 
 basins  = xr.open_dataset(basins_path)
 basins_zwally = basins['zwally']
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
+# Set up colormap and norm for 27 discrete basins
+colors = plt.cm.gist_ncar(np.linspace(0, 1, 27))
+cmap = mcolors.ListedColormap(colors)
+cmap.set_bad(color='white')  # Set background (masked or NaN) to white
+
+norm = mcolors.BoundaryNorm(np.arange(-0.5, 27.5), cmap.N)
+
+# Mask out invalid values (0 or NaN)
+zwally_data = basins_zwally.where((basins_zwally > 0) & (basins_zwally.notnull()))
+
+# Plot
+fig, ax = plt.subplots(figsize=(10, 10))
+p = zwally_data.plot(
+    ax=ax,
+    cmap=cmap,
+    norm=norm,
+    add_colorbar=False
+)
+
+# Add white background
+ax.set_facecolor('white')
+
+# Add colorbar
+cbar = plt.colorbar(p, ax=ax, orientation='vertical', shrink=0.5, pad=0.05, ticks=np.arange(1, 28))
+cbar.set_label("Basin Index")
+
+# Annotate each basin with its ID
+for basin_id in range(1, 28):
+    # Create a mask for the current basin
+    basin_mask = basins_zwally == basin_id
+
+    # Get the centroid of the basin
+    y, x = np.where(basin_mask)
+    if len(x) > 0 and len(y) > 0:
+        centroid_x = basins_zwally['x'].values[x].mean()
+        centroid_y = basins_zwally['y'].values[y].mean()
+        ax.text(
+            centroid_x, centroid_y, str(basin_id),
+            color='black', fontsize=10, ha='center', va='center', zorder=5
+        )
+
+# Final cleanup
+ax.set_title("Zwally Basins with IDs")
+plt.tight_layout()
+plt.show()
 # Extract the bounds of the Zwally basins data
 x_min, x_max = basins_zwally['x'].values.min(), basins_zwally['x'].values.max()
 y_min, y_max = basins_zwally['y'].values.min(), basins_zwally['y'].values.max()
@@ -434,8 +482,9 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300):
 
 plot_arras = [('IMERG', stereo_img_xrr_basin_mm_per_year_5km), 
               ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year_5km), 
-              ('ERA5', stereo_era5_xrr_basin_mm_per_year_5km),]
-            #   ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km), 
+              ('ERA5', stereo_era5_xrr_basin_mm_per_year_5km),
+              ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km), ]
+            #   
             #   ('AIRS', stereo_airs_xrr_basin_mm_per_year_5km),
             #   ] #
 
@@ -530,46 +579,50 @@ def single_precp_plot(data, product_name, vmin=0, vmax=300):
     vmin (float): Minimum value for colorbar.
     vmax (float): Maximum value for colorbar.
     """
-    proj = ccrs.SouthPolarStereo()
-
     # Use the 'jet' colormap
     cmap = plt.cm.jet
     levels = np.linspace(vmin, vmax, 28)  # 27 basins + 1 for boundaries
     norm = BoundaryNorm(levels, cmap.N)
 
-    fig, ax = plt.subplots(figsize=(28, 10), subplot_kw={'projection': proj})
-    ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
-    ax.coastlines(lw=0.25, resolution="110m", zorder=2)
-
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
     # Plot the data
-    data['zwally'].plot(
+    im = data['zwally'].plot(
         ax=ax,
-        transform=ccrs.PlateCarree(),
         cmap=cmap,
         norm=norm,
         add_colorbar=False
     )
 
-    ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
-    ax.set_title(product_name, fontsize=20)
+    ax.set_title(product_name, fontsize=18)
+    ax.set_xlabel("Longitude", fontsize=18)
+    ax.set_ylabel("Latitude", fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)  # Increase tick font sizes
 
-    # Add gridlines
-    gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
-                      linestyle='--', color='k', linewidth=0.75)
-    gl.xlocator = MaxNLocator(nbins=5)
-    gl.ylocator = MaxNLocator(nbins=5)
-    gl.xlabel_style = {'size': 20, 'color': 'k'}
-    gl.ylabel_style = {'size': 20, 'color': 'k'}
+    # Create a colorbar
+    cbar = fig.colorbar(im, ax=ax, orientation="vertical", fraction=0.046, pad=0.04)
+    cbar.ax.tick_params(labelsize=15)
+    cbar.set_label("Precipitation [mm/yr]", fontsize=15)
+    cbar.set_ticks([round(tick, 0) for tick in cbar.get_ticks()])  # Round tick values to 0 decimal places
 
-    # Only show specific labels
-    gl.top_labels = False
-    gl.bottom_labels = True
-    gl.left_labels = True
-    gl.right_labels = True
+    plt.tight_layout()
+    plt.show()
+
+# Example usage
+single_precp_plot(stereo_img_xrr_basin_mm_per_year_5km, 'IMERG', vmin=0, vmax=50)
+single_precp_plot(stereo_avhrr_xrr_basin_mm_per_year_5km, 'AVHRR', vmin=0, vmax=350)
+single_precp_plot(stereo_era5_xrr_basin_mm_per_year_5km, 'ERA5', vmin=0, vmax=350)
 #%%
+arras = [('IMERG', stereo_img_xrr_basin_mm_per_year), 
+              ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
+              ('ERA5', stereo_era5_xrr_basin_mm_per_year),
+              ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year), ]
+            #   
+            #   ('AIRS', stereo_airs_xrr_basin_mm_per_year_5km),
+            #   ] #
 # make a table of the mean precipitation for each basin
 annual_mean_df = pd.DataFrame(columns=list(range(1, 28)), index=[x[0] for x in plot_arras])
-for product_name, data in plot_arras:
+for product_name, data in arras:
     print(product_name)
 
     for basin_id in range(1, 28):
@@ -577,13 +630,44 @@ for product_name, data in plot_arras:
         basin_mask = basins_zwally == basin_id
 
         # Mask the precipitation data for the current basin
-        basin_precip = np.unique(~np.isnan(data.where(basin_mask.data).data))
+        # Ensure 'data' is a DataArray by selecting the first variable if it's a Dataset
+        if isinstance(data, xr.Dataset):
+            data = list(data.data_vars.values())[0]
+
+        basin_precip = np.unique(data.where(basin_mask.data).values[~np.isnan(data.where(basin_mask.data).values)])[0]
 
         annual_mean_df.loc[product_name, basin_id] = basin_precip
 
+annual_mean_df = annual_mean_df.applymap(lambda x: round(x, 2) if pd.notnull(x) else x)
 # Save the DataFrame to a CSV file
 annual_mean_df.to_csv(os.path.join(path_to_dfs, 'annual_mean_precip_over_basins.csv'))
-    
+
+
+ncolors = 15
+
+# 2) Get discrete ‘jet’ colormap
+cmap = plt.get_cmap('jet', ncolors)
+
+# 3) Define bin edges
+levels = np.linspace(0,
+                     500,
+                     ncolors + 1)
+norm = BoundaryNorm(levels, ncolors)
+
+# 4) Plot
+plt.figure(figsize=(12, 4))
+im = plt.imshow(annual_mean_df, aspect='auto', cmap=cmap, norm=norm)
+cbar = plt.colorbar(im, ticks=levels, spacing='proportional')
+cbar.set_label('Annual Precipitation (mm)')
+plt.xticks(ticks=np.arange(annual_mean_df.shape[1]),
+           labels=annual_mean_df.columns, rotation=90)
+plt.yticks(ticks=np.arange(annual_mean_df.shape[0]),
+           labels=annual_mean_df.index)
+plt.xlabel('Basin ID')
+plt.ylabel('Satellite Product')
+plt.title('Annual Precipitation by Basin (Discrete Jet Colormap)')
+plt.tight_layout()
+plt.show()
 #%%
 # Ensure the DataArray is sorted by its coordinates before plotting
 # Ensure the DataArray is sorted by both 'lat' and 'lons' in increasing order
