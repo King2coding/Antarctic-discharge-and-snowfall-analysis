@@ -32,6 +32,7 @@ seasonal_precip_in_basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_dis
 
 # path to put outs e.g. plots, dfs
 path_to_plots = r'/home/kkumah/Projects/Antarctic_discharge_work/plots'
+path_to_dfs = r'/home/kkumah/Projects/Antarctic_discharge_work/dfs'
 #%%
 # floating variables
 misc_out = r'/ra1/pubdat/AVHRR_CloudSat_proj/miscelaneous_outs'
@@ -454,9 +455,13 @@ for product_name, data in plot_arras:
         basin_mask = basins_zwally == basin_id
 
         # Mask the precipitation data for the current basin
-        basin_precip = data.where(basin_mask.data)
+        basin_precip = np.unique(~np.isnan(data.where(basin_mask.data).data))
+
+        annual_mean_df.loc[product_name, basin_id] = basin_precip
+
+# Save the DataFrame to a CSV file
+annual_mean_df.to_csv(os.path.join(path_to_dfs, 'annual_mean_precip_over_basins.csv'))
     
-    print(data.mean(dim=['x', 'y'], skipna=True))
 #%%
 # Ensure the DataArray is sorted by its coordinates before plotting
 # Ensure the DataArray is sorted by both 'lat' and 'lons' in increasing order
