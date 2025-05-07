@@ -60,7 +60,7 @@ norm = mcolors.BoundaryNorm(np.arange(-0.5, 27.5), cmap.N)
 zwally_data = basins_zwally.where((basins_zwally > 0) & (basins_zwally.notnull()))
 
 # Plot
-fig, ax = plt.subplots(figsize=(12, 8))
+fig, ax = plt.subplots(figsize=(12, 8), dpi=300)
 p = zwally_data.plot(
     ax=ax,
     cmap=cmap,
@@ -70,10 +70,6 @@ p = zwally_data.plot(
 
 # Add white background
 ax.set_facecolor('white')
-
-# Add colorbar
-cbar = plt.colorbar(p, ax=ax, orientation='vertical', shrink=0.5, pad=0.05, ticks=np.arange(1, 28))
-cbar.set_label("Basin Index")
 
 # Annotate each basin with its ID
 for basin_id in range(1, 28):
@@ -90,13 +86,11 @@ for basin_id in range(1, 28):
             color='black', fontsize=15, ha='center', va='center', zorder=5
         )
 
-ax.set_xlabel("Longitude", fontsize=18)
-ax.set_ylabel("Latitude", fontsize=18)
-ax.tick_params(axis='both', which='major', labelsize=18)  # Increase tick font sizes
-
+# Remove axis
+ax.axis('off')
 
 # Final cleanup
-ax.set_title("Zwally Basins with IDs")
+ax.set_title("Zwally Basins with IDs", fontsize=18)
 plt.tight_layout()
 plt.show()
 
