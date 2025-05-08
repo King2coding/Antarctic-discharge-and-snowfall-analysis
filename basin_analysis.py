@@ -9,6 +9,7 @@ import xarray as xr
 
 from program_utils import *
 from affine import Affine
+from datetime import date
 
 # from concurrent.futures import ProcessPoolExecutor
 # from functools import partial
@@ -42,10 +43,13 @@ crs_format = 'proj4'
 
 batch_size = 10
 
+cde_run_dte = str(date.today().strftime('%Y%m%d'))
+
 #----------------------------------------------------------------------------------
 
 basins  = xr.open_dataset(basins_path)
 basins_zwally = basins['zwally']
+
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
@@ -54,15 +58,25 @@ colors = plt.cm.gist_ncar(np.linspace(0, 1, 27))
 cmap = mcolors.ListedColormap(colors)
 cmap.set_bad(color='white')  # Set background (masked or NaN) to white
 
-norm = mcolors.BoundaryNorm(np.arange(-0.5, 27.5), cmap.N)
+# Use min and max values for levels
+vmin, vmax = 1, 27
+levels = np.linspace(vmin, vmax, vmax - vmin + 2)  # 27 basins + 1 for boundaries
+norm = mcolors.BoundaryNorm(levels, cmap.N)
 
 # Mask out invalid values (0 or NaN)
 zwally_data = basins_zwally.where((basins_zwally > 0) & (basins_zwally.notnull()))
 
 # Plot
-fig, ax = plt.subplots(figsize=(12, 8), dpi=300)
+proj = ccrs.SouthPolarStereo()
+fig, ax = plt.subplots(figsize=(12, 8), dpi=300, subplot_kw={'projection': proj})
+
+# Set extent for Antarctica
+ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
+
+# Plot the data
 p = zwally_data.plot(
     ax=ax,
+    transform=ccrs.SouthPolarStereo(),
     cmap=cmap,
     norm=norm,
     add_colorbar=False
@@ -83,14 +97,18 @@ for basin_id in range(1, 28):
         centroid_y = basins_zwally['y'].values[y].mean()
         ax.text(
             centroid_x, centroid_y, str(basin_id),
-            color='black', fontsize=15, ha='center', va='center', zorder=5
+            color='black', fontsize=15, ha='center', va='center', zorder=5,
+            transform=ccrs.SouthPolarStereo()
         )
+
+# Add coastlines
+ax.coastlines(resolution='110m', color='black', linewidth=0.5)
 
 # Remove axis
 ax.axis('off')
 
 # Final cleanup
-ax.set_title("Zwally Basins with IDs", fontsize=18)
+ax.set_title("Zwally Basins with IDs (Polar Stereographic)", fontsize=18)
 plt.tight_layout()
 plt.show()
 
@@ -300,94 +318,94 @@ gc.collect()
 #----------------------------------------------------------------------------------
 # bring CloudSat into the discusiion
 # read and process CloudSat data
-# ant_data_path = r"/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/miscellaneous"  # Replace with your actual path
-# cs_ant_filename = os.path.join(ant_data_path,"CS_seasonal_climatology-2007-2010.nc")
-# cs_ant = xr.open_dataarray(cs_ant_filename)
+ant_data_path = r"/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/miscellaneous"  # Replace with your actual path
+cs_ant_filename = os.path.join(ant_data_path,"CS_seasonal_climatology-2007-2010.nc")
+cs_ant = xr.open_dataarray(cs_ant_filename)
 
-# cs_ant_annual_clim = cs_ant.mean(dim='season',skipna=True)#.where(new_mask_ == 1)
+cs_ant_annual_clim = cs_ant.mean(dim='season',skipna=True)#.where(new_mask_ == 1)
 
-# yshp, xshp = cs_ant_annual_clim.shape
+yshp, xshp = cs_ant_annual_clim.shape
 
-# minx = cs_ant_annual_clim['lon'].min().item()
-# maxy = cs_ant_annual_clim['lat'].max().item()
-# px_sz = round(cs_ant_annual_clim['lon'].diff('lon').mean().item(), 2)
+minx = cs_ant_annual_clim['lon'].min().item()
+maxy = cs_ant_annual_clim['lat'].max().item()
+px_sz = round(cs_ant_annual_clim['lon'].diff('lon').mean().item(), 2)
 
-# dest_flnme = os.path.join(misc_out, os.path.basename(cs_ant_filename))
+dest_flnme = os.path.join(misc_out, os.path.basename(cs_ant_filename))
 
-# gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, 
-#                               crs, crs_format, cs_ant_annual_clim.data)
+gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, 
+                              crs, crs_format, cs_ant_annual_clim.data)
 
-# output_file_stereo = os.path.join(misc_out, os.path.basename(cs_ant_filename).replace('.nc', '_stere.nc'))
+output_file_stereo = os.path.join(misc_out, os.path.basename(cs_ant_filename).replace('.nc', '_stere.nc'))
 
-# gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
+gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
 
-# subprocess.run(gdalwarp_command, shell=True)
+subprocess.run(gdalwarp_command, shell=True)
 
-# # Read the stereographic projection file
-# cs_ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
+# Read the stereographic projection file
+cs_ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
 
-# os.remove(dest_flnme)
-# os.remove(output_file_stereo)
+os.remove(dest_flnme)
+os.remove(output_file_stereo)
 
-# # Clip the data to the bounds of the basin dataset
-# cs_ant_xrr_clip = cs_ant_xrr_sh_stereo.sel(
-#     x=slice(-3333250, 3333250),
-#     y=slice(-3333250, 3333250)
-# ).squeeze()
-
-
-# # Explicitly set the CRS before reprojecting
-# cs_ant_xrr_clip.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
-
-# cs_ant_xrr_clip_res = cs_ant_xrr_clip.rio.reproject(
-#     cs_ant_xrr_clip.rio.crs,
-#     shape=basins_zwally.shape,  # set the shape as the basin data shape
-#     resampling=Resampling.nearest,
-#     transform=basins['zwally'].rio.transform()
-# )
-
-# cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res['Band1'].values
-# cs_ant_xrr_clip_res_arr = np.where(basins_zwally.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
-# cs_ant_xrr_clip_res = xr.DataArray(
-#     cs_ant_xrr_clip_res_arr,  # Use the 2D numpy array directly
-#     dims=['y', 'x'],  # Define dimensions
-#     coords={'y': cs_ant_xrr_clip_res.coords['y'], 
-#             'x': cs_ant_xrr_clip_res.coords['x']},
-#     name='precipitation'  # Rename the DataArray to 'precipitation'
-# )
-
-# # Create an empty DataArray to store mean precipitation mapped to basins
-# cs_ant_precip_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
-
-# # Loop through each basin ID (Zwally basins are numbered from 1 to 27)
-# for basin_id in range(1, 28):
-#     # Create a mask for the current basin
-#     basin_mask = basins_zwally == basin_id
-
-#     # Mask the precipitation data for the current basin
-#     basin_precip = cs_ant_xrr_clip_res.where(basin_mask.data)
-
-#     # Calculate the mean precipitation for the current basin across time and spatial dimensions
-#     basin_mean_precip = basin_precip.mean(dim=['x', 'y'], skipna=True)
-
-#     # Map the calculated mean precipitation back to the basin region
-#     cs_ant_precip_xrr_basin_mapped = cs_ant_precip_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
-
-# # Clean up variables to free memory
-# del(basin_precip, basin_mean_precip, basin_mask, basin_id)
+# Clip the data to the bounds of the basin dataset
+cs_ant_xrr_clip = cs_ant_xrr_sh_stereo.sel(
+    x=slice(-3333250, 3333250),
+    y=slice(-3333250, 3333250)
+).squeeze()
 
 
-# # resample the data to the new resolution
-# cs_ant_precip_xrr_basin_mapped.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+# Explicitly set the CRS before reprojecting
+cs_ant_xrr_clip.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
-# cs_ant_precip_xrr_basin_mapped_res_5km = cs_ant_precip_xrr_basin_mapped.rio.reproject(
-#                                     dst_crs=cs_ant_precip_xrr_basin_mapped.rio.crs,
-#                                     shape=(1333, 1333),
-#                                     transform=new_transform,
-#                                     resampling=Resampling.nearest
-# )
+cs_ant_xrr_clip_res = cs_ant_xrr_clip.rio.reproject(
+    cs_ant_xrr_clip.rio.crs,
+    shape=basins_zwally.shape,  # set the shape as the basin data shape
+    resampling=Resampling.nearest,
+    transform=basins['zwally'].rio.transform()
+)
 
-# gc.collect()
+cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res['Band1'].values
+cs_ant_xrr_clip_res_arr = np.where(basins_zwally.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
+cs_ant_xrr_clip_res = xr.DataArray(
+    cs_ant_xrr_clip_res_arr,  # Use the 2D numpy array directly
+    dims=['y', 'x'],  # Define dimensions
+    coords={'y': cs_ant_xrr_clip_res.coords['y'], 
+            'x': cs_ant_xrr_clip_res.coords['x']},
+    name='precipitation'  # Rename the DataArray to 'precipitation'
+)
+
+# Create an empty DataArray to store mean precipitation mapped to basins
+cs_ant_precip_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+
+# Loop through each basin ID (Zwally basins are numbered from 1 to 27)
+for basin_id in range(1, 28):
+    # Create a mask for the current basin
+    basin_mask = basins_zwally == basin_id
+
+    # Mask the precipitation data for the current basin
+    basin_precip = cs_ant_xrr_clip_res.where(basin_mask.data)
+
+    # Calculate the mean precipitation for the current basin across time and spatial dimensions
+    basin_mean_precip = basin_precip.mean(dim=['x', 'y'], skipna=True)
+
+    # Map the calculated mean precipitation back to the basin region
+    cs_ant_precip_xrr_basin_mapped = cs_ant_precip_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
+
+# Clean up variables to free memory
+del(basin_precip, basin_mean_precip, basin_mask, basin_id)
+
+
+# resample the data to the new resolution
+cs_ant_precip_xrr_basin_mapped.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+
+cs_ant_precip_xrr_basin_mapped_res_5km = cs_ant_precip_xrr_basin_mapped.rio.reproject(
+                                    dst_crs=cs_ant_precip_xrr_basin_mapped.rio.crs,
+                                    shape=(1333, 1333),
+                                    transform=new_transform,
+                                    resampling=Resampling.nearest
+)
+
+gc.collect()
 
 
 #%%
@@ -405,7 +423,7 @@ import cartopy.feature as cfeature
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib import cm
 
-def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300):
+def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
     """
     Plots a multi-row grid of mean precipitation for different products over 27 basins.
 
@@ -440,7 +458,7 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300):
         # Plot the data
         data['zwally'].plot(
             ax=ax,
-            transform=ccrs.PlateCarree(),
+            transform=ccrs.SouthPolarStereo(),
             cmap=cmap,
             norm=norm,
             add_colorbar=False
@@ -471,25 +489,35 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300):
         ax=axes,  # Attach the colorbar to all axes for better placement
         orientation="horizontal",
         fraction=0.04,  # Fraction of the original axes height
-        pad=0.1,  # Distance from the bottom of the subplots
+        pad=0.15,  # Distance from the bottom of the subplots
         extend="max"
     )
+    cb.set_ticks(cbar_tcks)  # Set integer ticks
     cb.ax.tick_params(labelsize=20)
-    cb.set_label("Snowfall Rate (mm/year)", fontsize=20)
+    cb.set_label("Precipitation [mm/year]", fontsize=20)
 
     # Show the plot
     plt.tight_layout()
 
-plot_arras = [('IMERG', stereo_img_xrr_basin_mm_per_year_5km), 
+plot_arras = [ 
               ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year_5km), 
               ('ERA5', stereo_era5_xrr_basin_mm_per_year_5km),
-              ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km), ]
+              ('AIRS', stereo_airs_xrr_basin_mm_per_year_5km),]
+            #   ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km), ]
+            #   ('IMERG', stereo_img_xrr_basin_mm_per_year_5km),
             #   
-            #   ('AIRS', stereo_airs_xrr_basin_mm_per_year_5km),
             #   ] #
 
 svnme = os.path.join(path_to_plots, 'annual_snpwfall_accumulation_over_basins.png')
-compare_mean_precp_plot(plot_arras, vmin=0, vmax=300)
+compare_mean_precp_plot(plot_arras, vmin=0, vmax=300, cbar_tcks=[0, 50, 100, 150, 200, 250, 300])
+plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
+
+
+plot_arras = [ ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km),
+              ('IMERG', stereo_img_xrr_basin_mm_per_year_5km), ] #
+
+svnme = os.path.join(path_to_plots, 'annual_snpwfall_accumulation_over_basins.png')
+compare_mean_precp_plot(plot_arras, vmin=0, vmax=100, cbar_tcks=[0, 10 ,25, 50, 75, 85 ,100])
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
 
 
@@ -533,7 +561,7 @@ def compare_mean_precp_plotV2(arr_lst_mean, vmin=0, vmax=300):
         # Plot the data
         data['zwally'].plot(
             ax=ax,
-            transform=ccrs.PlateCarree(),
+            transform=ccrs.SouthPolarStereo(),
             cmap=cmap,
             norm=norm,
             add_colorbar=False
@@ -587,7 +615,7 @@ def single_precp_plot(data, product_name, vmin=0, vmax=300):
     fig, ax = plt.subplots(figsize=(12, 8))
     
     # Plot the data
-    im = data['zwally'].plot(
+    im = data.plot(
         ax=ax,
         cmap=cmap,
         norm=norm,
@@ -609,19 +637,23 @@ def single_precp_plot(data, product_name, vmin=0, vmax=300):
     plt.show()
 
 # Example usage
-single_precp_plot(stereo_img_xrr_basin_mm_per_year_5km, 'IMERG', vmin=0, vmax=50)
-single_precp_plot(stereo_avhrr_xrr_basin_mm_per_year_5km, 'AVHRR', vmin=0, vmax=350)
-single_precp_plot(stereo_era5_xrr_basin_mm_per_year_5km, 'ERA5', vmin=0, vmax=350)
+single_precp_plot(stereo_img_xrr_basin_mm_per_year_5km['zwally'], 'IMERG', vmin=0, vmax=100)
+single_precp_plot(stereo_avhrr_xrr_basin_mm_per_year_5km['zwally'], 'AVHRR', vmin=0, vmax=350)
+single_precp_plot(stereo_era5_xrr_basin_mm_per_year_5km['zwally'], 'ERA5', vmin=0, vmax=350)
+single_precp_plot(stereo_ssmi_17_xrr_basin_mm_per_year_5km['zwally'], 'SSMIS-F17', vmin=0, vmax=100)
+single_precp_plot(stereo_airs_xrr_basin_mm_per_year_5km['zwally'], 'AIRS', vmin=0, vmax=350)
+single_precp_plot(cs_ant_precip_xrr_basin_mapped_res_5km*365, 'CloudSat', vmin=0, vmax=350)
+
+
 #%%
 arras = [('IMERG', stereo_img_xrr_basin_mm_per_year), 
-              ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
-              ('ERA5', stereo_era5_xrr_basin_mm_per_year),
-              ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year), ]
-            #   
-            #   ('AIRS', stereo_airs_xrr_basin_mm_per_year_5km),
-            #   ] #
+        ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
+        ('ERA5', stereo_era5_xrr_basin_mm_per_year),
+        ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year), 
+        ('AIRS', stereo_airs_xrr_basin_mm_per_year),
+        ('CS', cs_ant_precip_xrr_basin_mapped)] #
 # make a table of the mean precipitation for each basin
-annual_mean_df = pd.DataFrame(columns=list(range(1, 28)), index=[x[0] for x in plot_arras])
+annual_mean_df = pd.DataFrame(columns=list(range(1, 28)), index=[x[0] for x in arras])
 for product_name, data in arras:
     print(product_name)
 
@@ -640,7 +672,7 @@ for product_name, data in arras:
 
 annual_mean_df = annual_mean_df.applymap(lambda x: round(x, 2) if pd.notnull(x) else x)
 # Save the DataFrame to a CSV file
-annual_mean_df.to_csv(os.path.join(path_to_dfs, 'annual_mean_precip_over_basins.csv'))
+annual_mean_df.to_csv(os.path.join(path_to_dfs, f'annual_mean_precip_over_basins_{cde_run_dte}.csv'))
 
 
 ncolors = 15
@@ -769,3 +801,79 @@ plt.show()
 # )
 # ax.set_title("Projected Data")
 # plt.show()
+
+
+new_res = 5000#50000  # meters
+
+new_shpe_ = (
+    int((y_max - y_min) / new_res),
+    int((x_max - x_min) / new_res)
+)
+
+
+new_trans = Affine(
+    50000, 0.0, -3333500.0,
+    0.0, -50000, 3333500.0
+)
+
+avhrr_precip_xrr_basin_mapped_res_50km = stereo_avhrr_xrr_basin_mm_per_year_5km.rio.reproject(
+                                    dst_crs=stereo_avhrr_xrr_basin_mm_per_year_5km.rio.crs,
+                                    shape=new_shpe_,
+                                    transform=new_trans,
+                                    resampling=Resampling.nearest
+)
+
+fig = plt.figure(figsize=(12, 10))
+proj = ccrs.SouthPolarStereo()
+
+# Use the 'jet' colormap
+cmap = plt.cm.jet
+levels = np.linspace(0, 300, 28)  # 27 basins + 1 for boundaries
+norm = BoundaryNorm(levels, cmap.N)
+
+ax = fig.add_subplot(1, 1, 1, projection=proj)
+ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+ax.coastlines(lw=0.25, resolution="110m", zorder=2)
+
+# Plot the data
+(cs_ant_precip_xrr_basin_mapped_res_5km*360).plot(
+    ax=ax,
+    transform=ccrs.SouthPolarStereo(),
+    cmap=cmap,
+    norm=norm,
+    add_colorbar=False
+)
+
+ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
+ax.set_title("CS", fontsize=20)
+
+# Add gridlines
+gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
+                  linestyle='--', color='k', linewidth=0.75)
+gl.xlocator = MaxNLocator(nbins=5)
+gl.ylocator = MaxNLocator(nbins=5)
+gl.xlabel_style = {'size': 20, 'color': 'k'}
+gl.ylabel_style = {'size': 20, 'color': 'k'}
+
+# Only show specific labels
+gl.top_labels = False
+gl.bottom_labels = True
+gl.left_labels = True
+gl.right_labels = False
+
+# Create a colorbar at the bottom
+cb = fig.colorbar(
+    ScalarMappable(norm=norm, cmap=cmap),
+    ax=ax,
+    orientation="horizontal",
+    fraction=0.04,  # Fraction of the original axes height
+    pad=0.15,  # Distance from the bottom of the subplots
+    extend="max"
+)
+cb.set_ticks([0,50,100,150,200,250,300])
+cb.ax.tick_params(labelsize=15)
+cb.set_label("Precipitation [mm/year]", fontsize=15)
+
+# Show the plot
+plt.tight_layout()
+plt.show()
