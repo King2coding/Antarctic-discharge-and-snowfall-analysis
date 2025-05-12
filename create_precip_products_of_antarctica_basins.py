@@ -47,7 +47,7 @@ basins  = xr.open_dataset(basins_path)
 # process imerg files
 for idx, im in enumerate(imerg_files_2010, start=1):
     fle_svnme = os.path.join(imerg_basin_path,os.path.basename(im).replace('.nc4', '_imbie_basin_precip.nc'))
-    img_bsn = process_imerg_file_to_basin(im, misc_out, basins)
+    img_bsn = process_imerg_file_to_basin(im, misc_out, basins['imbie'])
 
     encoding = {img_bsn.name:{"zlib": True, "complevel": 9}}
     img_bsn.to_netcdf(os.path.join(imerg_basin_path, fle_svnme), 
@@ -64,7 +64,7 @@ for idx, im in enumerate(imerg_files_2010, start=1):
 # process avhrr files
 for idx, avhrr in enumerate(avhrr_precp_files, start=1):
     fle_svnme = os.path.join(avhrr_basin_path,os.path.basename(avhrr).replace('.tif', '_imbie_basin_precip.nc'))
-    avh_bsn = process_avhrr_file_to_basin(avhrr, '2010', basins)
+    avh_bsn = process_avhrr_file_to_basin(avhrr, '2010', basins['imbie'])
 
     encoding = {avh_bsn.name:{"zlib": True, "complevel": 9}}
     avh_bsn.to_netcdf(os.path.join(avhrr_basin_path, fle_svnme), 
@@ -81,7 +81,7 @@ for idx, avhrr in enumerate(avhrr_precp_files, start=1):
 # process ssmis_17 files
 for idx, ss in enumerate(ssmis_17_files_2010, start=1):
     fle_svnme = os.path.join(ssmis_17_basin_path,os.path.basename(ss).replace('.nc', '_imbie_basin_precip.nc'))
-    ssmis_bsn = process_ssmis_file_to_basin(ss, basins)
+    ssmis_bsn = process_ssmis_file_to_basin(ss, basins['imbie'])
 
     encoding = {ssmis_bsn.name:{"zlib": True, "complevel": 9}}
     ssmis_bsn.to_netcdf(os.path.join(ssmis_17_basin_path, fle_svnme), 
@@ -104,7 +104,7 @@ for idx, ai_tme in enumerate(airs_data.time.values, start=1):
     airs_time = pd.to_datetime(ai_tme).strftime('%Y%m%d')
     fle_svnme = os.path.join(airs_basin_path, f'AIRS_3A_AIRSV6_IR_HDD_daily_precipitation_imbie_basin_{airs_time}.nc')
 
-    airs_bsn = process_airs_file_to_basin(airs_data, ai_tme, basins, fle_svnme)
+    airs_bsn = process_airs_file_to_basin(airs_data, ai_tme, basins['imbie'], fle_svnme)
 
     encoding = {airs_bsn.name: {"zlib": True, "complevel": 9}}
     airs_bsn.to_netcdf(os.path.join(airs_basin_path, fle_svnme), 
@@ -127,7 +127,7 @@ for idx, er_tme in enumerate(era5_data.time.values, start=1):
     era5_time = pd.to_datetime(er_tme).strftime('%Y%m%d')
     fle_svnme = os.path.join(era5_basin_path, f'ERA5_daily_precipitation_imbie_basin_{era5_time}.nc')
 
-    era5_bsn = process_era5_file_to_basin(era5_data, er_tme, basins, fle_svnme)
+    era5_bsn = process_era5_file_to_basin(era5_data, er_tme, basins['imbie'], fle_svnme)
 
     encoding = {era5_bsn.name: {"zlib": True, "complevel": 9}}
     era5_bsn.to_netcdf(os.path.join(era5_basin_path, fle_svnme), 
