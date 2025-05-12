@@ -88,15 +88,15 @@ p = imbie_data.plot(
 ax.set_facecolor('white')
 
 # Annotate each basin with its ID
-for basin_id in range(1, 19):
+for basin_id in range(1, 20):
     # Create a mask for the current basin
-    basin_mask = basins_zwally == basin_id
+    basin_mask = basins_imbie == basin_id
 
     # Get the centroid of the basin
     y, x = np.where(basin_mask)
     if len(x) > 0 and len(y) > 0:
-        centroid_x = basins_zwally['x'].values[x].mean()
-        centroid_y = basins_zwally['y'].values[y].mean()
+        centroid_x = basins_imbie['x'].values[x].mean()
+        centroid_y = basins_imbie['y'].values[y].mean()
         ax.text(
             centroid_x, centroid_y, str(basin_id),
             color='black', fontsize=15, ha='center', va='center', zorder=5,
@@ -115,8 +115,8 @@ plt.tight_layout()
 plt.show()
 
 # Extract the bounds of the Zwally basins data
-x_min, x_max = basins_zwally['x'].values.min(), basins_zwally['x'].values.max()
-y_min, y_max = basins_zwally['y'].values.min(), basins_zwally['y'].values.max()
+x_min, x_max = basins_imbie['x'].values.min(), basins_imbie['x'].values.max()
+y_min, y_max = basins_imbie['y'].values.min(), basins_imbie['y'].values.max()
 basin_bounds = (x_min, x_max, y_min, y_max)
 
 # Print the bounds for verification
@@ -361,13 +361,13 @@ cs_ant_xrr_clip.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=Tr
 
 cs_ant_xrr_clip_res = cs_ant_xrr_clip.rio.reproject(
     cs_ant_xrr_clip.rio.crs,
-    shape=basins_zwally.shape,  # set the shape as the basin data shape
+    shape=basins_imbie.shape,  # set the shape as the basin data shape
     resampling=Resampling.nearest,
     transform=basins['zwally'].rio.transform()
 )
 
 cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res['Band1'].values
-cs_ant_xrr_clip_res_arr = np.where(basins_zwally.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
+cs_ant_xrr_clip_res_arr = np.where(basins_imbie.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
 cs_ant_xrr_clip_res = xr.DataArray(
     cs_ant_xrr_clip_res_arr,  # Use the 2D numpy array directly
     dims=['y', 'x'],  # Define dimensions
@@ -377,12 +377,12 @@ cs_ant_xrr_clip_res = xr.DataArray(
 )
 
 # Create an empty DataArray to store mean precipitation mapped to basins
-cs_ant_precip_xrr_basin_mapped = xr.full_like(basins_zwally, np.nan, dtype=float)
+cs_ant_precip_xrr_basin_mapped = xr.full_like(basins_imbie, np.nan, dtype=float)
 
 # Loop through each basin ID (Zwally basins are numbered from 1 to 27)
-for basin_id in range(1, 28):
+for basin_id in range(1, 19):
     # Create a mask for the current basin
-    basin_mask = basins_zwally == basin_id
+    basin_mask = basins_imbie == basin_id
 
     # Mask the precipitation data for the current basin
     basin_precip = cs_ant_xrr_clip_res.where(basin_mask.data)

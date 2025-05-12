@@ -47,7 +47,7 @@ crs_stereo = "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=W
 #%%
 # fucntions
 # function to read and process ERA5 precip file
-def process_era5_file_to_basin(era5_xr_data, er_tme, basins, fle_svnme):
+def process_era5_file_to_basin(era5_xr_data, er_tme, basin, fle_svnme):
 
         er_time = pd.to_datetime(er_tme).strftime('%Y%m%d')
 
@@ -88,14 +88,14 @@ def process_era5_file_to_basin(era5_xr_data, er_tme, basins, fle_svnme):
 
         er_xrr_clip_res = er_xrr_clip.rio.reproject(
             er_xrr_clip.rio.crs,
-            shape=basins['zwally'].shape,  # set the shape as the basin data shape
+            shape=basin.shape,  # set the shape as the basin data shape
             resampling=Resampling.nearest,
-            transform=basins['zwally'].rio.transform()
+            transform=basin.rio.transform()
         )
 
         # Add the time coordinate to the reprojected DataArray
         er_xrr_clip_res_arr = er_xrr_clip_res['Band1'].values
-        er_xrr_clip_res_arr = np.where(basins['zwally'].values > 0, er_xrr_clip_res_arr, np.nan)
+        er_xrr_clip_res_arr = np.where(basin.values > 0, er_xrr_clip_res_arr, np.nan)
         er_xrr_clip_res = xr.DataArray(
             np.expand_dims(er_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
             dims=['time', 'y', 'x'],
@@ -108,7 +108,7 @@ def process_era5_file_to_basin(era5_xr_data, er_tme, basins, fle_svnme):
         return er_xrr_clip_res
 #----------------------------------------------------------------------------
 # function to read and process AIRS precip file
-def process_airs_file_to_basin(airs_xrr_data, ai_tme, basins, fle_svnme):
+def process_airs_file_to_basin(airs_xrr_data, ai_tme, basin, fle_svnme):
         
         airs_time = pd.to_datetime(ai_tme).strftime('%Y%m%d')
 
@@ -149,14 +149,14 @@ def process_airs_file_to_basin(airs_xrr_data, ai_tme, basins, fle_svnme):
         ai_xrr_clip.rio.write_crs(ccrs.to_string(), inplace=True)
         ai_xrr_clip_res = ai_xrr_clip.rio.reproject(
             ai_xrr_clip.rio.crs,
-            shape=basins['zwally'].shape,  # set the shape as the basin data shape
+            shape=basin.shape,  # set the shape as the basin data shape
             resampling=Resampling.nearest,
-            transform=basins['zwally'].rio.transform()
+            transform=basin.rio.transform()
         )
 
         # Add the time coordinate to the reprojected DataArray
         ai_xrr_clip_res_arr = ai_xrr_clip_res['Band1'].values
-        ai_xrr_clip_res_arr = np.where(basins['zwally'].values > 0, ai_xrr_clip_res_arr, np.nan)
+        ai_xrr_clip_res_arr = np.where(basin.values > 0, ai_xrr_clip_res_arr, np.nan)
         ai_xrr_clip_res = xr.DataArray(
             np.expand_dims(ai_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
             dims=['time', 'y', 'x'],
@@ -166,7 +166,7 @@ def process_airs_file_to_basin(airs_xrr_data, ai_tme, basins, fle_svnme):
 
         return ai_xrr_clip_res
 #----------------------------------------------------------------------------
-def process_ssmis_file_to_basin(ss, basins):
+def process_ssmis_file_to_basin(ss, basin):
 
         ss_time = os.path.basename(ss).split('.')[4].split('-')[0]
 
@@ -208,14 +208,14 @@ def process_ssmis_file_to_basin(ss, basins):
         ss_xrr_clip.rio.write_crs(ccrs.to_string(), inplace=True)
         ss_xrr_clip_res = ss_xrr_clip.rio.reproject(
             ss_xrr_clip.rio.crs,
-            shape=basins['zwally'].shape,  # set the shape as the basin data shape
+            shape=basin.shape,  # set the shape as the basin data shape
             resampling=Resampling.nearest,
-            transform=basins['zwally'].rio.transform()
+            transform=basin.rio.transform()
         )
 
         # Add the time coordinate to the reprojected DataArray
         ss_xrr_clip_res_arr = ss_xrr_clip_res['Band1'].values
-        ss_xrr_clip_res_arr = np.where(basins['zwally'].values > 0, ss_xrr_clip_res_arr, np.nan)
+        ss_xrr_clip_res_arr = np.where(basin.values > 0, ss_xrr_clip_res_arr, np.nan)
         ss_xrr_clip_res = xr.DataArray(
             np.expand_dims(ss_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
             dims=['time', 'y', 'x'],
@@ -225,7 +225,7 @@ def process_ssmis_file_to_basin(ss, basins):
 
         return ss_xrr_clip_res
 #----------------------------------------------------------------------------
-def process_avhrr_file_to_basin(file,yr,basins):
+def process_avhrr_file_to_basin(file,yr,basin):
     av_x, av_y = return_sim_cords(file)
     av_arr, av_time = read_tif_sim_file(file,yr)
 
@@ -262,14 +262,14 @@ def process_avhrr_file_to_basin(file,yr,basins):
 
     av_xrr_clip_res = av_xrr_clip.rio.reproject(
         av_xrr_clip.rio.crs,
-        shape=basins['zwally'].shape,  # set the shape as the basin data shape
+        shape=basin.shape,  # set the shape as the basin data shape
         resampling=Resampling.nearest,
-        transform=basins['zwally'].rio.transform()
+        transform=basin.rio.transform()
     )
 
     # Add the time coordinate to the reprojected DataArray
     av_xrr_clip_res_arr = av_xrr_clip_res['band_data'].values
-    av_xrr_clip_res_arr = np.where(basins['zwally'].values > 0, av_xrr_clip_res_arr, np.nan)
+    av_xrr_clip_res_arr = np.where(basin.values > 0, av_xrr_clip_res_arr, np.nan)
     av_xrr_clip_res = xr.DataArray(
         np.expand_dims(av_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
         dims=['time', 'y', 'x'],
@@ -281,7 +281,7 @@ def process_avhrr_file_to_basin(file,yr,basins):
     return av_xrr_clip_res
 #----------------------------------------------------------------------------
 # function to process IMERG file to basin
-def process_imerg_file_to_basin(im, misc_out, basins):
+def process_imerg_file_to_basin(im, misc_out, basin):
     img_x, img_y = return_imerg_cords(im)
     img_arr, img_time = read_nc_imger_file(im, 'imerg_fn')
 
@@ -318,13 +318,13 @@ def process_imerg_file_to_basin(im, misc_out, basins):
 
     img_xrr_clip_res = img_xrr_clip.rio.reproject(
         img_xrr_clip.rio.crs,
-        shape=basins['zwally'].shape,  # set the shape as the autosnow data shape (1800, 3600)
+        shape=basin.shape,  # set the shape as the autosnow data shape (1800, 3600)
         resampling=Resampling.nearest,
-        transform=basins['zwally'].rio.transform()
+        transform=basin.rio.transform()
     )
     # Add the time coordinate to the reprojected DataArray
     img_xrr_clip_res_arr = img_xrr_clip_res['band_data'].values
-    img_xrr_clip_res_arr = np.where(basins['zwally'].values > 0, img_xrr_clip_res_arr, np.nan)
+    img_xrr_clip_res_arr = np.where(basin.values > 0, img_xrr_clip_res_arr, np.nan)
     img_xrr_clip_res = xr.DataArray(
         np.expand_dims(img_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
         dims=['time', 'y', 'x'],
@@ -513,7 +513,7 @@ def return_sim_cords(file):
 
 #----------------------------------------------------------------------------
 # function to run batched processing
-def run_batched_processing(batches, basins):
+def run_batched_processing(batches, basin):
     """
     Function to process precipitation data in batches and calculate mean precipitation for each basin.
 
@@ -541,12 +541,12 @@ def run_batched_processing(batches, basins):
         precip_bsn_xrr = xr.concat([xr.open_dataarray(x) for x in batch], dim='time')
 
         # Create an empty DataArray to store mean precipitation mapped to basins
-        precip_xrr_basin_mapped = xr.full_like(basins, np.nan, dtype=float)
+        precip_xrr_basin_mapped = xr.full_like(basin, np.nan, dtype=float)
 
         # Loop through each basin ID (Zwally basins are numbered from 1 to 27)
-        for basin_id in range(1, 28):
+        for basin_id in range(1, 20):
             # Create a mask for the current basin
-            basin_mask = basins == basin_id
+            basin_mask = basin == basin_id
 
             # Mask the precipitation data for the current basin
             basin_precip = precip_bsn_xrr.where(basin_mask.data)
