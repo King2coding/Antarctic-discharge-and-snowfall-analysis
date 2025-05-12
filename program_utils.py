@@ -568,7 +568,7 @@ def run_batched_processing(batches, basin):
 
     return batch_results
 
-#----------------------------------------------------------------------------
+#%%
 # plot
 
 def compare_mean_precp_plot(arr_lst_mean, basin_nme,vmin=0, vmax=300, cbar_tcks=None):
