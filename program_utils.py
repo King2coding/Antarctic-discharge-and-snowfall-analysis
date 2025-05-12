@@ -646,3 +646,44 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
 
     # Show the plot
     plt.tight_layout()
+
+#-----------------------------------------------------------------------------
+# single plot fucntion
+def single_precp_plot(data, product_name, vmin=0, vmax=300):
+    """
+    Plots mean precipitation for a single product over 27 basins.
+
+    Parameters:
+    data (xarray.DataArray): The precipitation data to plot.
+    product_name (str): Name of the product for the title.
+    vmin (float): Minimum value for colorbar.
+    vmax (float): Maximum value for colorbar.
+    """
+    # Use the 'jet' colormap
+    cmap = plt.cm.jet
+    levels = np.linspace(vmin, vmax, 28)  # 27 basins + 1 for boundaries
+    norm = BoundaryNorm(levels, cmap.N)
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Plot the data
+    im = data.plot(
+        ax=ax,
+        cmap=cmap,
+        norm=norm,
+        add_colorbar=False
+    )
+
+    ax.set_title(product_name, fontsize=18)
+    ax.set_xlabel("Longitude", fontsize=18)
+    ax.set_ylabel("Latitude", fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)  # Increase tick font sizes
+
+    # Create a colorbar
+    cbar = fig.colorbar(im, ax=ax, orientation="vertical", fraction=0.046, pad=0.04)
+    cbar.ax.tick_params(labelsize=15)
+    cbar.set_label("Precipitation [mm/yr]", fontsize=15)
+    cbar.set_ticks([round(tick, 0) for tick in cbar.get_ticks()])  # Round tick values to 0 decimal places
+
+    plt.tight_layout()
+    plt.show()
