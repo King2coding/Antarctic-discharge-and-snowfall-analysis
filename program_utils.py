@@ -571,7 +571,7 @@ def run_batched_processing(batches, basins):
 #----------------------------------------------------------------------------
 # plot
 
-def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
+def compare_mean_precp_plot(arr_lst_mean, basin_nme,vmin=0, vmax=300, cbar_tcks=None):
     """
     Plots a multi-row grid of mean precipitation for different products over 27 basins.
 
@@ -604,7 +604,7 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
         ax.coastlines(lw=0.25, resolution="110m", zorder=2)
 
         # Plot the data
-        data['zwally'].plot(
+        data[basin_nme].plot(
             ax=ax,
             transform=ccrs.SouthPolarStereo(),
             cmap=cmap,

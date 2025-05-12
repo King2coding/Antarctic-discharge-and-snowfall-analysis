@@ -150,7 +150,7 @@ gc.collect()
 print('Processing IMERG data')
 batches = [img_fle_lst[i:i + batch_size] for i in range(0, len(img_fle_lst), batch_size)]
 
-img_batch_results = run_batched_processing(batches, basins_zwally)
+img_batch_results = run_batched_processing(batches, basins_imbie)
 
 # Calculate the final mean across all batches
 img_final_result = xr.concat(img_batch_results, dim='batch').mean(dim='batch', skipna=True)
@@ -184,7 +184,7 @@ print('Processing ERA5 data')
 
 batches = [era5_fle_lst[i:i + batch_size] for i in range(0, len(era5_fle_lst), batch_size)]
 
-era5_batch_results = run_batched_processing(batches, basins_zwally)
+era5_batch_results = run_batched_processing(batches, basins_imbie)
 
 # Calculate the final mean across all batches
 era5_final_result = xr.concat(era5_batch_results, dim='batch').mean(dim='batch', skipna=True)
@@ -218,7 +218,7 @@ print('Processing AVHRR data')
 
 batches = [avhrr_fle_lst[i:i + batch_size] for i in range(0, len(avhrr_fle_lst), batch_size)]
 
-avhrr_batch_results = run_batched_processing(batches, basins_zwally)
+avhrr_batch_results = run_batched_processing(batches, basins_imbie)
 
 # Calculate the final mean across all batches
 avhrr_final_result = xr.concat(avhrr_batch_results, dim='batch').mean(dim='batch', skipna=True)
@@ -253,7 +253,7 @@ print('Processing SSMI_17 data')
 
 batches = [ssmis_17_fle_lst[i:i + batch_size] for i in range(0, len(ssmis_17_fle_lst), batch_size)]
 
-ssmis_batch_results = run_batched_processing(batches, basins_zwally)
+ssmis_batch_results = run_batched_processing(batches, basins_imbie)
 
 # Calculate the final mean across all batches
 ssmis_final_result = xr.concat(ssmis_batch_results, dim='batch').mean(dim='batch', skipna=True)
@@ -288,7 +288,7 @@ print('Processing AIRS data')
 
 batches = [airs_fle_lst[i:i + batch_size] for i in range(0, len(airs_fle_lst), batch_size)]
 
-airs_batch_results = run_batched_processing(batches, basins_zwally)
+airs_batch_results = run_batched_processing(batches, basins_imbie)
 
 # Calculate the final mean across all batches
 airs_final_result = xr.concat(airs_batch_results, dim='batch').mean(dim='batch', skipna=True)
@@ -434,46 +434,6 @@ plot_arras = [ ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km),
 svnme = os.path.join(path_to_plots, 'annual_snpwfall_accumulation_over_basins.png')
 compare_mean_precp_plot(plot_arras, vmin=0, vmax=100, cbar_tcks=[0, 10 ,25, 50, 75, 85 ,100])
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
-
-# single plot fucntion
-def single_precp_plot(data, product_name, vmin=0, vmax=300):
-    """
-    Plots mean precipitation for a single product over 27 basins.
-
-    Parameters:
-    data (xarray.DataArray): The precipitation data to plot.
-    product_name (str): Name of the product for the title.
-    vmin (float): Minimum value for colorbar.
-    vmax (float): Maximum value for colorbar.
-    """
-    # Use the 'jet' colormap
-    cmap = plt.cm.jet
-    levels = np.linspace(vmin, vmax, 28)  # 27 basins + 1 for boundaries
-    norm = BoundaryNorm(levels, cmap.N)
-
-    fig, ax = plt.subplots(figsize=(12, 8))
-    
-    # Plot the data
-    im = data.plot(
-        ax=ax,
-        cmap=cmap,
-        norm=norm,
-        add_colorbar=False
-    )
-
-    ax.set_title(product_name, fontsize=18)
-    ax.set_xlabel("Longitude", fontsize=18)
-    ax.set_ylabel("Latitude", fontsize=18)
-    ax.tick_params(axis='both', which='major', labelsize=18)  # Increase tick font sizes
-
-    # Create a colorbar
-    cbar = fig.colorbar(im, ax=ax, orientation="vertical", fraction=0.046, pad=0.04)
-    cbar.ax.tick_params(labelsize=15)
-    cbar.set_label("Precipitation [mm/yr]", fontsize=15)
-    cbar.set_ticks([round(tick, 0) for tick in cbar.get_ticks()])  # Round tick values to 0 decimal places
-
-    plt.tight_layout()
-    plt.show()
 
 # Example usage
 single_precp_plot(stereo_img_xrr_basin_mm_per_year_5km['zwally'], 'IMERG', vmin=0, vmax=100)
