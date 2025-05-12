@@ -50,22 +50,24 @@ cde_run_dte = str(date.today().strftime('%Y%m%d'))
 basins  = xr.open_dataset(basins_path)
 basins_zwally = basins['zwally']
 
+basins_imbie = basins['imbie']
+
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
 # Set up colormap and norm for 27 discrete basins
-colors = plt.cm.gist_ncar(np.linspace(0, 1, 27))
+colors = plt.cm.gist_ncar(np.linspace(0, 1, 19))
 cmap = mcolors.ListedColormap(colors)
 cmap.set_bad(color='white')  # Set background (masked or NaN) to white
 
 # Use min and max values for levels
-vmin, vmax = 1, 27
+vmin, vmax = 1,19 #1, 27
 levels = np.linspace(vmin, vmax, vmax - vmin + 2)  # 27 basins + 1 for boundaries
 norm = mcolors.BoundaryNorm(levels, cmap.N)
 
 # Mask out invalid values (0 or NaN)
 zwally_data = basins_zwally.where((basins_zwally > 0) & (basins_zwally.notnull()))
-
+imbie_data = basins_imbie.where((basins_imbie > 0) & (basins_imbie.notnull()))
 # Plot
 proj = ccrs.SouthPolarStereo()
 fig, ax = plt.subplots(figsize=(12, 8), dpi=300, subplot_kw={'projection': proj})
@@ -74,7 +76,7 @@ fig, ax = plt.subplots(figsize=(12, 8), dpi=300, subplot_kw={'projection': proj}
 ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
 
 # Plot the data
-p = zwally_data.plot(
+p = imbie_data.plot(
     ax=ax,
     transform=ccrs.SouthPolarStereo(),
     cmap=cmap,
@@ -575,7 +577,7 @@ arras = [('IMERG', stereo_img_xrr_basin_mm_per_year),
         ('ERA5', stereo_era5_xrr_basin_mm_per_year),
         ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year), 
         ('AIRS', stereo_airs_xrr_basin_mm_per_year),
-        ('CS', cs_ant_precip_xrr_basin_mapped)] #
+        ('CS', cs_ant_precip_xrr_basin_mapped * 365)] #
 # make a table of the mean precipitation for each basin
 annual_mean_df = pd.DataFrame(columns=list(range(1, 28)), index=[x[0] for x in arras])
 for product_name, data in arras:
@@ -795,8 +797,8 @@ cb = fig.colorbar(
     extend="max"
 )
 cb.set_ticks([0,50,100,150,200,250,300])
-cb.ax.tick_params(labelsize=15)
-cb.set_label("Precipitation [mm/year]", fontsize=15)
+cb.ax.tick_params(labelsize=20)
+cb.set_label("Precipitation [mm/year]", fontsize=20)
 
 # Show the plot
 plt.tight_layout()
