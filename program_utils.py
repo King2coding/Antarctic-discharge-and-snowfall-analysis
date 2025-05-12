@@ -23,6 +23,18 @@ from osgeo import gdal, osr
 
 import h5py
 
+import cartopy.crs as ccrs
+import cartopy.crs as ccrs
+
+from matplotlib.colors import LogNorm, Normalize
+from matplotlib.ticker import MaxNLocator, FuncFormatter
+from matplotlib.cm import ScalarMappable
+
+import matplotlib.gridspec as gridspec
+import cartopy.feature as cfeature
+from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib import cm
+
 
 #%%
 # floating variables
@@ -555,3 +567,82 @@ def run_batched_processing(batches, basins):
     print("All batches have been processed.")
 
     return batch_results
+
+#----------------------------------------------------------------------------
+# plot
+
+def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
+    """
+    Plots a multi-row grid of mean precipitation for different products over 27 basins.
+
+    Parameters:
+    arr_lst_mean (list of tuples): List of tuples with product names and their mean precipitation data.
+    vmin (float): Minimum value for colorbar.
+    vmax (float): Maximum value for colorbar.
+    """
+    proj = ccrs.SouthPolarStereo()
+
+    # Use the 'jet' colormap
+    cmap = plt.cm.jet
+    levels = np.linspace(vmin, vmax, 28)  # 27 basins + 1 for boundaries
+    norm = BoundaryNorm(levels, cmap.N)
+
+    # Determine the number of rows and columns for the grid
+    n_products = len(arr_lst_mean)
+    ncols = 3  # Number of columns
+    nrows = (n_products + ncols - 1) // ncols  # Calculate rows needed
+
+    # Create a GridSpec with precise control over spacing
+    fig = plt.figure(figsize=(28, 10 * nrows))
+    gs = gridspec.GridSpec(nrows, ncols, wspace=0.025, hspace=0.15)
+
+    # Loop through each dataset to create the plots
+    axes = []
+    for i, (product_name, data) in enumerate(arr_lst_mean):
+        ax = fig.add_subplot(gs[i], projection=proj)
+        ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+        ax.coastlines(lw=0.25, resolution="110m", zorder=2)
+
+        # Plot the data
+        data['zwally'].plot(
+            ax=ax,
+            transform=ccrs.SouthPolarStereo(),
+            cmap=cmap,
+            norm=norm,
+            add_colorbar=False
+        )
+
+        ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
+        ax.set_title(product_name, fontsize=20)
+
+        # Add gridlines
+        gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
+                          linestyle='--', color='k', linewidth=0.75)
+        gl.xlocator = MaxNLocator(nbins=5)
+        gl.ylocator = MaxNLocator(nbins=5)
+        gl.xlabel_style = {'size': 20, 'color': 'k'}
+        gl.ylabel_style = {'size': 20, 'color': 'k'}
+
+        # Only show specific labels
+        gl.top_labels = False
+        gl.bottom_labels = i >= n_products - ncols  # Bottom labels only for the last row
+        gl.left_labels = i % ncols == 0  # Left labels for the first column
+        gl.right_labels = i % ncols == ncols - 1  # Right labels for the last column
+
+        axes.append(ax)
+
+    # Create a colorbar at the bottom spanning all subplots
+    cb = fig.colorbar(
+        ScalarMappable(norm=norm, cmap=cmap),
+        ax=axes,  # Attach the colorbar to all axes for better placement
+        orientation="horizontal",
+        fraction=0.04,  # Fraction of the original axes height
+        pad=0.15,  # Distance from the bottom of the subplots
+        extend="max"
+    )
+    cb.set_ticks(cbar_tcks)  # Set integer ticks
+    cb.ax.tick_params(labelsize=20)
+    cb.set_label("Precipitation [mm/year]", fontsize=20)
+
+    # Show the plot
+    plt.tight_layout()
