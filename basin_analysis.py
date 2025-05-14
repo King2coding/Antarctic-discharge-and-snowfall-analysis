@@ -462,6 +462,11 @@ ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
 # plt.title("SMB Total Mapped to IMBIE Basins (Polar Stereo)")
 plt.show()
 
+# save imbie basins 
+encoding = {P_MB_mm.name:{"zlib": True, "complevel": 9}}
+svename = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins/P_MB_2013-2022_basin_annual_precip.nc'
+P_MB_mm.to_netcdf(svename, mode='w', format='NETCDF4', encoding=encoding)
+
 gc.collect()
 #%%
 print('Plotting')
