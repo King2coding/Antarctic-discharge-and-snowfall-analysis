@@ -30,6 +30,8 @@ from matplotlib.colors import LogNorm, Normalize
 from matplotlib.ticker import MaxNLocator, FuncFormatter
 from matplotlib.cm import ScalarMappable
 
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
 import cartopy.feature as cfeature
 from matplotlib.colors import BoundaryNorm, ListedColormap

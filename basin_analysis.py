@@ -160,17 +160,17 @@ stereo_img_xrr_basin_mm_per_year.to_netcdf(os.path.join(imerg_basin_path, fle_sv
                                            mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-stereo_img_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-                                                              'IMERG_2010_basin_annual_precip.nc')) 
+# stereo_img_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+#                                                               'IMERG_2010_basin_annual_precip.nc')) 
 # Explicitly set the CRS before reprojecting
-stereo_img_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+# stereo_img_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
-stereo_img_xrr_basin_mm_per_year_5km = stereo_img_xrr_basin_mm_per_year.rio.reproject(
-                                    dst_crs=stereo_img_xrr_basin_mm_per_year.rio.crs,
-                                    shape=(1333, 1333),
-                                    transform=new_transform,
-                                    resampling=Resampling.nearest
-)
+# stereo_img_xrr_basin_mm_per_year_5km = stereo_img_xrr_basin_mm_per_year.rio.reproject(
+#                                     dst_crs=stereo_img_xrr_basin_mm_per_year.rio.crs,
+#                                     shape=(1333, 1333),
+#                                     transform=new_transform,
+#                                     resampling=Resampling.nearest
+# )
 
 gc.collect()
 
@@ -194,17 +194,17 @@ stereo_era5_xrr_basin_mm_per_year.to_netcdf(os.path.join(era5_basin_path, fle_sv
                                             mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-stereo_era5_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-                                                              'ERA5_2010_basin_annual_precip.nc')) 
+# stereo_era5_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+#                                                               'ERA5_2010_basin_annual_precip.nc')) 
 # Explicitly set the CRS before reprojecting
-stereo_era5_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+# stereo_era5_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
-stereo_era5_xrr_basin_mm_per_year_5km = stereo_era5_xrr_basin_mm_per_year.rio.reproject(
-                                    dst_crs=stereo_era5_xrr_basin_mm_per_year.rio.crs,
-                                    shape=(1333, 1333),
-                                    transform=new_transform,
-                                    resampling=Resampling.nearest
-)
+# stereo_era5_xrr_basin_mm_per_year_5km = stereo_era5_xrr_basin_mm_per_year.rio.reproject(
+#                                     dst_crs=stereo_era5_xrr_basin_mm_per_year.rio.crs,
+#                                     shape=(1333, 1333),
+#                                     transform=new_transform,
+#                                     resampling=Resampling.nearest
+# )
 
 gc.collect()
 
@@ -228,19 +228,19 @@ stereo_avhrr_xrr_basin_mm_per_year.to_netcdf(os.path.join(avhrr_basin_path, fle_
                                              mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-stereo_avhrr_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-                                                              'AVHRR_2010_basin_annual_precip.nc')) 
+# stereo_avhrr_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+#                                                               'AVHRR_2010_basin_annual_precip.nc')) 
 
-# Explicitly set the CRS before reprojecting
+# # Explicitly set the CRS before reprojecting
 
-stereo_avhrr_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+# stereo_avhrr_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
-stereo_avhrr_xrr_basin_mm_per_year_5km = stereo_avhrr_xrr_basin_mm_per_year.rio.reproject(
-                                    dst_crs=stereo_avhrr_xrr_basin_mm_per_year.rio.crs,
-                                    shape=(1333, 1333),
-                                    transform=new_transform,
-                                    resampling=Resampling.nearest
-)
+# stereo_avhrr_xrr_basin_mm_per_year_5km = stereo_avhrr_xrr_basin_mm_per_year.rio.reproject(
+#                                     dst_crs=stereo_avhrr_xrr_basin_mm_per_year.rio.crs,
+#                                     shape=(1333, 1333),
+#                                     transform=new_transform,
+#                                     resampling=Resampling.nearest
+# )
 
 gc.collect()
 
@@ -263,19 +263,19 @@ stereo_ssmi_17_xrr_basin_mm_per_year.to_netcdf(os.path.join(ssmis_17_basin_path,
                                                mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-stereo_ssmi_17_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-                                                              'SSMIS_17_2010_basin_annual_precip.nc')) 
+# stereo_ssmi_17_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+#                                                               'SSMIS_17_2010_basin_annual_precip.nc')) 
 
-# Explicitly set the CRS before reprojecting
+# # Explicitly set the CRS before reprojecting
 
-stereo_ssmi_17_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+# stereo_ssmi_17_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
-stereo_ssmi_17_xrr_basin_mm_per_year_5km = stereo_ssmi_17_xrr_basin_mm_per_year.rio.reproject(
-                                    dst_crs=stereo_ssmi_17_xrr_basin_mm_per_year.rio.crs,
-                                    shape=(1333, 1333),
-                                    transform=new_transform,
-                                    resampling=Resampling.nearest
-)
+# stereo_ssmi_17_xrr_basin_mm_per_year_5km = stereo_ssmi_17_xrr_basin_mm_per_year.rio.reproject(
+#                                     dst_crs=stereo_ssmi_17_xrr_basin_mm_per_year.rio.crs,
+#                                     shape=(1333, 1333),
+#                                     transform=new_transform,
+#                                     resampling=Resampling.nearest
+# )
 
 gc.collect()
 
@@ -298,19 +298,19 @@ stereo_airs_xrr_basin_mm_per_year.to_netcdf(os.path.join(airs_basin_path, fle_sv
                                             mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-stereo_airs_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-                                                              'AIRS_2010_basin_annual_precip.nc')) 
+# stereo_airs_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+#                                                               'AIRS_2010_basin_annual_precip.nc')) 
 
-# Explicitly set the CRS before reprojecting
+# # Explicitly set the CRS before reprojecting
 
-stereo_airs_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+# stereo_airs_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
-stereo_airs_xrr_basin_mm_per_year_5km = stereo_airs_xrr_basin_mm_per_year.rio.reproject(
-                                    dst_crs=stereo_airs_xrr_basin_mm_per_year.rio.crs,
-                                    shape=(1333, 1333),
-                                    transform=new_transform,
-                                    resampling=Resampling.nearest
-)
+# stereo_airs_xrr_basin_mm_per_year_5km = stereo_airs_xrr_basin_mm_per_year.rio.reproject(
+#                                     dst_crs=stereo_airs_xrr_basin_mm_per_year.rio.crs,
+#                                     shape=(1333, 1333),
+#                                     transform=new_transform,
+#                                     resampling=Resampling.nearest
+# )
 
 gc.collect()
 
