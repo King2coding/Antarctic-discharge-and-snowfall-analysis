@@ -377,7 +377,8 @@ cs_ant_xrr_clip_res = xr.DataArray(
 cs_ant_precip_xrr_basin_mapped = xr.full_like(basins_imbie, np.nan, dtype=float)
 
 # Loop through each basin ID (Zwally basins are numbered from 1 to 27)
-for basin_id in range(1, 19):
+for basin_id in range(1, 20):
+    # print(f"Processing basin {basin_id}")
     # Create a mask for the current basin
     basin_mask = basins_imbie == basin_id
 
@@ -393,16 +394,18 @@ for basin_id in range(1, 19):
 # Clean up variables to free memory
 del(basin_precip, basin_mean_precip, basin_mask, basin_id)
 
+cs_ant_precip_xrr_basin_mapped_mm_per_year = cs_ant_precip_xrr_basin_mapped * 365
+
 
 # resample the data to the new resolution
-cs_ant_precip_xrr_basin_mapped.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+# cs_ant_precip_xrr_basin_mapped.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
-cs_ant_precip_xrr_basin_mapped_res_5km = cs_ant_precip_xrr_basin_mapped.rio.reproject(
-                                    dst_crs=cs_ant_precip_xrr_basin_mapped.rio.crs,
-                                    shape=(1333, 1333),
-                                    transform=new_transform,
-                                    resampling=Resampling.nearest
-)
+# cs_ant_precip_xrr_basin_mapped_res_5km = cs_ant_precip_xrr_basin_mapped.rio.reproject(
+#                                     dst_crs=cs_ant_precip_xrr_basin_mapped.rio.crs,
+#                                     shape=(1333, 1333),
+#                                     transform=new_transform,
+#                                     resampling=Resampling.nearest
+# )
 
 gc.collect()
 
@@ -412,33 +415,33 @@ print('Plotting')
 
 
 plot_arras = [ 
-              ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year_5km), 
-              ('ERA5', stereo_era5_xrr_basin_mm_per_year_5km),
-              ('AIRS', stereo_airs_xrr_basin_mm_per_year_5km),]
-            #   ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km), ]
+              ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
+              ('ERA5', stereo_era5_xrr_basin_mm_per_year),
+              ('AIRS', stereo_airs_xrr_basin_mm_per_year),
+              ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year), ]
             #   ('IMERG', stereo_img_xrr_basin_mm_per_year_5km),
             #   
             #   ] #
 
-svnme = os.path.join(path_to_plots, 'annual_snpwfall_accumulation_over_basins.png')
+svnme = os.path.join(path_to_plots, 'annual_snowfall_accumulation_over_imbie_basins.png')
 compare_mean_precp_plot(plot_arras, vmin=0, vmax=300, cbar_tcks=[0, 50, 100, 150, 200, 250, 300])
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
 
 
-plot_arras = [ ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year_5km),
-              ('IMERG', stereo_img_xrr_basin_mm_per_year_5km), ] #
+plot_arras = [ ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year),
+              ('IMERG', stereo_img_xrr_basin_mm_per_year), ] #
 
 svnme = os.path.join(path_to_plots, 'annual_snpwfall_accumulation_over_basins.png')
 compare_mean_precp_plot(plot_arras, vmin=0, vmax=100, cbar_tcks=[0, 10 ,25, 50, 75, 85 ,100])
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
 
 # Example usage
-single_precp_plot(stereo_img_xrr_basin_mm_per_year_5km['zwally'], 'IMERG', vmin=0, vmax=100)
-single_precp_plot(stereo_avhrr_xrr_basin_mm_per_year_5km['zwally'], 'AVHRR', vmin=0, vmax=350)
-single_precp_plot(stereo_era5_xrr_basin_mm_per_year_5km['zwally'], 'ERA5', vmin=0, vmax=350)
-single_precp_plot(stereo_ssmi_17_xrr_basin_mm_per_year_5km['zwally'], 'SSMIS-F17', vmin=0, vmax=100)
-single_precp_plot(stereo_airs_xrr_basin_mm_per_year_5km['zwally'], 'AIRS', vmin=0, vmax=350)
-single_precp_plot(cs_ant_precip_xrr_basin_mapped_res_5km*365, 'CloudSat', vmin=0, vmax=350)
+single_precp_plot(stereo_img_xrr_basin_mm_per_year['imbie'], 'IMERG', vmin=0, vmax=100)
+single_precp_plot(stereo_avhrr_xrr_basin_mm_per_year['imbie'], 'AVHRR', vmin=0, vmax=350)
+single_precp_plot(stereo_era5_xrr_basin_mm_per_year['imbie'], 'ERA5', vmin=0, vmax=350)
+single_precp_plot(stereo_ssmi_17_xrr_basin_mm_per_year['imbie'], 'SSMIS-F17', vmin=0, vmax=100)
+single_precp_plot(stereo_airs_xrr_basin_mm_per_year['imbie'], 'AIRS', vmin=0, vmax=350)
+single_precp_plot(cs_ant_precip_xrr_basin_mapped_res*365, 'CloudSat', vmin=0, vmax=350)
 
 
 #%%
