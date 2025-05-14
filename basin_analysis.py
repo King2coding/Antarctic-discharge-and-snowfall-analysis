@@ -513,7 +513,7 @@ annual_mean_df = pd.DataFrame(columns=list(range(1, 28)), index=[x[0] for x in a
 for product_name, data in arras:
     print(product_name)
 
-    for basin_id in range(1, 28):
+    for basin_id in range(1, 20):
         # Create a mask for the current basin
         basin_mask = basins_zwally == basin_id
 
