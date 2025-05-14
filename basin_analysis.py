@@ -52,9 +52,6 @@ basins_zwally = basins['zwally']
 
 basins_imbie = basins['imbie']
 
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-
 # Set up colormap and norm for 27 discrete basins
 colors = plt.cm.gist_ncar(np.linspace(0, 1, 19))
 cmap = mcolors.ListedColormap(colors)
