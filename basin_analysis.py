@@ -140,7 +140,6 @@ ssmis_17_fle_lst = [os.path.join(ssmis_17_basin_path, x) for x in os.listdir(ssm
 airs_fle_lst = [os.path.join(airs_basin_path, x) for x in os.listdir(airs_basin_path) if 'imbie_basin' in x]
 era5_fle_lst = [os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_path) if 'imbie_basin' in x]
 
-gc.collect()
 #%%
 # read and process satellite precipitation data
 # Split the file list into batches of 10
@@ -408,17 +407,72 @@ cs_ant_precip_xrr_basin_mapped_mm_per_year = cs_ant_precip_xrr_basin_mapped * 36
 # )
 
 gc.collect()
+#%%
+# work on the reference data
+
+imbie_basin_discharge_params = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins/antarctic_discharge_2013-2022_imbie.xlsx'
+# xls = pd.ExcelFile(imbie_basin_discharge_params)
+# print("Sheets:", xls.sheet_names)
 
 
+# # 2) Preview each sheet
+# for sheet in xls.sheet_names:
+#     df = xls.parse(sheet)
+#     print(f"\n--- {sheet} (first 5 rows) ---")
+#     print(df.head())
+
+df_sum = pd.read_excel(
+    imbie_basin_discharge_params,
+    sheet_name="Summary",
+    engine="openpyxl"
+)
+
+# 2) Build lookup but only for the first 19 basins
+lookup_gt = {
+    i+1: gt
+    for i, gt in enumerate(df_sum["SMB total 2013-2022 Gt/yr"].values[:19])
+}
+# 3) Convert Gt/yr → mm/yr on the uniform 500 m grid
+cell_area = 500.0 * 500.0   # m² per grid cell (500 m × 500 m)
+P_MB_mm = xr.full_like(basins_imbie, np.nan, dtype=float)
+
+# 4) Loop over each basin code
+for code, smb_gt in lookup_gt.items():
+    mask = (basins_imbie == code)               # DataArray of True/False
+    n_cells = int(mask.sum(dim=("y","x")).values)  # extract integer count
+    area = n_cells * cell_area
+    # Convert: Gt/yr → m³/yr → m/yr depth → mm/yr
+    depth_mm = (smb_gt * 1e9) / area * 1000.0
+    P_MB_mm = P_MB_mm.where(~mask, other=depth_mm)
+
+# 2) For a proper map projection (optional)
+ax = plt.axes(projection=ccrs.SouthPolarStereo())
+P_MB_mm.plot.imshow(
+    x="x", y="y",
+    transform=ccrs.SouthPolarStereo(),
+    cmap="jet",
+    origin="lower",
+    yincrease=False,
+    ax=ax,
+    vmin=0,
+    vmax=300
+)
+ax.coastlines(color="k", linewidth=0.5)
+ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
+# plt.title("SMB Total Mapped to IMBIE Basins (Polar Stereo)")
+plt.show()
+
+gc.collect()
 #%%
 print('Plotting')
 
 
-plot_arras = [ 
+plot_arras = [('P_MB', P_MB_mm),
               ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
               ('ERA5', stereo_era5_xrr_basin_mm_per_year),
               ('AIRS', stereo_airs_xrr_basin_mm_per_year),
-              ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year), ]
+              ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year) 
+             ]
             #   ('IMERG', stereo_img_xrr_basin_mm_per_year_5km),
             #   
             #   ] #
@@ -426,22 +480,24 @@ plot_arras = [
 svnme = os.path.join(path_to_plots, 'annual_snowfall_accumulation_over_imbie_basins.png')
 compare_mean_precp_plot(plot_arras, vmin=0, vmax=300, cbar_tcks=[0, 50, 100, 150, 200, 250, 300])
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
+gc.collect()
 
 
 plot_arras = [ ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year),
-              ('IMERG', stereo_img_xrr_basin_mm_per_year), ] #
+               ('IMERG', stereo_img_xrr_basin_mm_per_year), ] #
 
-svnme = os.path.join(path_to_plots, 'annual_snpwfall_accumulation_over_basins.png')
+svnme = os.path.join(path_to_plots, 'IMERG-SSMIS-F17-annual_snowfall_accumulation_over_imbie_basins.png')
 compare_mean_precp_plot(plot_arras, vmin=0, vmax=100, cbar_tcks=[0, 10 ,25, 50, 75, 85 ,100])
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
+gc.collect()
 
 # Example usage
-single_precp_plot(stereo_img_xrr_basin_mm_per_year['imbie'], 'IMERG', vmin=0, vmax=100)
-single_precp_plot(stereo_avhrr_xrr_basin_mm_per_year['imbie'], 'AVHRR', vmin=0, vmax=350)
-single_precp_plot(stereo_era5_xrr_basin_mm_per_year['imbie'], 'ERA5', vmin=0, vmax=350)
-single_precp_plot(stereo_ssmi_17_xrr_basin_mm_per_year['imbie'], 'SSMIS-F17', vmin=0, vmax=100)
-single_precp_plot(stereo_airs_xrr_basin_mm_per_year['imbie'], 'AIRS', vmin=0, vmax=350)
-single_precp_plot(cs_ant_precip_xrr_basin_mapped_res*365, 'CloudSat', vmin=0, vmax=350)
+# single_precp_plot(stereo_img_xrr_basin_mm_per_year['imbie'], 'IMERG', vmin=0, vmax=100)
+# single_precp_plot(stereo_avhrr_xrr_basin_mm_per_year['imbie'], 'AVHRR', vmin=0, vmax=350)
+# single_precp_plot(stereo_era5_xrr_basin_mm_per_year['imbie'], 'ERA5', vmin=0, vmax=350)
+# single_precp_plot(stereo_ssmi_17_xrr_basin_mm_per_year['imbie'], 'SSMIS-F17', vmin=0, vmax=100)
+# single_precp_plot(stereo_airs_xrr_basin_mm_per_year['imbie'], 'AIRS', vmin=0, vmax=350)
+# single_precp_plot(cs_ant_precip_xrr_basin_mapped_mm_per_year, 'CloudSat', vmin=0, vmax=350)
 
 
 #%%
