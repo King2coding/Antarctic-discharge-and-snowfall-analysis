@@ -501,12 +501,13 @@ gc.collect()
 
 
 #%%
-arras = [('IMERG', stereo_img_xrr_basin_mm_per_year), 
+arras = [('P_MB', P_MB_mm),
+        ('IMERG', stereo_img_xrr_basin_mm_per_year), 
         ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
         ('ERA5', stereo_era5_xrr_basin_mm_per_year),
         ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year), 
         ('AIRS', stereo_airs_xrr_basin_mm_per_year),
-        ('CS', cs_ant_precip_xrr_basin_mapped * 365)] #
+        ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year)] #
 # make a table of the mean precipitation for each basin
 annual_mean_df = pd.DataFrame(columns=list(range(1, 28)), index=[x[0] for x in arras])
 for product_name, data in arras:
@@ -529,32 +530,62 @@ annual_mean_df = annual_mean_df.applymap(lambda x: round(x, 2) if pd.notnull(x) 
 # Save the DataFrame to a CSV file
 annual_mean_df.to_csv(os.path.join(path_to_dfs, f'annual_mean_precip_over_basins_{cde_run_dte}.csv'))
 
+# make a scatter plot of all products agianst P_MB
+svename = os.path.join(path_to_plots, f'scatter_compare_annual_mean_precip_over_basins_{cde_run_dte}.png')
 
-ncolors = 15
+x = annual_mean_df.loc['P_MB'].astype(float).values
+products = [p for p in annual_mean_df.index if p != 'P_MB']
 
-# 2) Get discrete ‘jet’ colormap
-cmap = plt.get_cmap('jet', ncolors)
+rows, cols = 2, 3
+fig, axes = plt.subplots(rows, cols, figsize=(15, 10), sharex=True, sharey=True)
+axes_flat = axes.flatten()
 
-# 3) Define bin edges
-levels = np.linspace(0,
-                     500,
-                     ncolors + 1)
-norm = BoundaryNorm(levels, ncolors)
+for ax, prod in zip(axes_flat, products):
+    y = annual_mean_df.loc[prod].astype(float).values
+    valid = (~np.isnan(x)) & (~np.isnan(y))
+    cc = np.corrcoef(x[valid], y[valid])[0,1]
+    bias = np.nanmean(y) / np.nanmean(x)
+    ax.scatter(x, y, alpha=0.7)
+    lims = [min(np.nanmin(x), np.nanmin(y)), max(np.nanmax(x), np.nanmax(y))]
+    ax.plot(lims, lims, 'k--', linewidth=1)
+    ax.set_title(f"{prod}\nCC={cc:.2f}, Bias={bias:.2f}")
+    ax.set_xlabel("P_MB (mm/yr)")
+    ax.set_ylabel(f"{prod} (mm/yr)")
 
-# 4) Plot
-plt.figure(figsize=(12, 4))
-im = plt.imshow(annual_mean_df, aspect='auto', cmap=cmap, norm=norm)
-cbar = plt.colorbar(im, ticks=levels, spacing='proportional')
-cbar.set_label('Annual Precipitation (mm)')
-plt.xticks(ticks=np.arange(annual_mean_df.shape[1]),
-           labels=annual_mean_df.columns, rotation=90)
-plt.yticks(ticks=np.arange(annual_mean_df.shape[0]),
-           labels=annual_mean_df.index)
-plt.xlabel('Basin ID')
-plt.ylabel('Satellite Product')
-plt.title('Annual Precipitation by Basin (Discrete Jet Colormap)')
+for ax in axes_flat[len(products):]:
+    ax.axis('off')
+
 plt.tight_layout()
-plt.show()
+plt.savefig(svename,  dpi=1000, bbox_inches='tight')
+# plt.show()
+
+#%%
+
+# ncolors = 15
+
+# # 2) Get discrete ‘jet’ colormap
+# cmap = plt.get_cmap('jet', ncolors)
+
+# # 3) Define bin edges
+# levels = np.linspace(0,
+#                      500,
+#                      ncolors + 1)
+# norm = BoundaryNorm(levels, ncolors)
+
+# # 4) Plot
+# plt.figure(figsize=(12, 4))
+# im = plt.imshow(annual_mean_df, aspect='auto', cmap=cmap, norm=norm)
+# cbar = plt.colorbar(im, ticks=levels, spacing='proportional')
+# cbar.set_label('Annual Precipitation (mm)')
+# plt.xticks(ticks=np.arange(annual_mean_df.shape[1]),
+#            labels=annual_mean_df.columns, rotation=90)
+# plt.yticks(ticks=np.arange(annual_mean_df.shape[0]),
+#            labels=annual_mean_df.index)
+# plt.xlabel('Basin ID')
+# plt.ylabel('Satellite Product')
+# plt.title('Annual Precipitation by Basin (Discrete Jet Colormap)')
+# plt.tight_layout()
+# plt.show()
 #%%
 # Ensure the DataArray is sorted by its coordinates before plotting
 # Ensure the DataArray is sorted by both 'lat' and 'lons' in increasing order
@@ -658,77 +689,77 @@ plt.show()
 # plt.show()
 
 
-new_res = 5000#50000  # meters
+# new_res = 5000#50000  # meters
 
-new_shpe_ = (
-    int((y_max - y_min) / new_res),
-    int((x_max - x_min) / new_res)
-)
+# new_shpe_ = (
+#     int((y_max - y_min) / new_res),
+#     int((x_max - x_min) / new_res)
+# )
 
 
-new_trans = Affine(
-    50000, 0.0, -3333500.0,
-    0.0, -50000, 3333500.0
-)
+# new_trans = Affine(
+#     50000, 0.0, -3333500.0,
+#     0.0, -50000, 3333500.0
+# )
 
-avhrr_precip_xrr_basin_mapped_res_50km = stereo_avhrr_xrr_basin_mm_per_year_5km.rio.reproject(
-                                    dst_crs=stereo_avhrr_xrr_basin_mm_per_year_5km.rio.crs,
-                                    shape=new_shpe_,
-                                    transform=new_trans,
-                                    resampling=Resampling.nearest
-)
+# avhrr_precip_xrr_basin_mapped_res_50km = stereo_avhrr_xrr_basin_mm_per_year_5km.rio.reproject(
+#                                     dst_crs=stereo_avhrr_xrr_basin_mm_per_year_5km.rio.crs,
+#                                     shape=new_shpe_,
+#                                     transform=new_trans,
+#                                     resampling=Resampling.nearest
+# )
 
-fig = plt.figure(figsize=(12, 10))
-proj = ccrs.SouthPolarStereo()
+# fig = plt.figure(figsize=(12, 10))
+# proj = ccrs.SouthPolarStereo()
 
-# Use the 'jet' colormap
-cmap = plt.cm.jet
-levels = np.linspace(0, 300, 28)  # 27 basins + 1 for boundaries
-norm = BoundaryNorm(levels, cmap.N)
+# # Use the 'jet' colormap
+# cmap = plt.cm.jet
+# levels = np.linspace(0, 300, 28)  # 27 basins + 1 for boundaries
+# norm = BoundaryNorm(levels, cmap.N)
 
-ax = fig.add_subplot(1, 1, 1, projection=proj)
-ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
-ax.coastlines(lw=0.25, resolution="110m", zorder=2)
+# ax = fig.add_subplot(1, 1, 1, projection=proj)
+# ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+# ax.coastlines(lw=0.25, resolution="110m", zorder=2)
 
-# Plot the data
-(cs_ant_precip_xrr_basin_mapped_res_5km*360).plot(
-    ax=ax,
-    transform=ccrs.SouthPolarStereo(),
-    cmap=cmap,
-    norm=norm,
-    add_colorbar=False
-)
+# # Plot the data
+# (cs_ant_precip_xrr_basin_mapped_res_5km*360).plot(
+#     ax=ax,
+#     transform=ccrs.SouthPolarStereo(),
+#     cmap=cmap,
+#     norm=norm,
+#     add_colorbar=False
+# )
 
-ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
-ax.set_title("CS", fontsize=20)
+# ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
+# ax.set_title("CS", fontsize=20)
 
-# Add gridlines
-gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
-                  linestyle='--', color='k', linewidth=0.75)
-gl.xlocator = MaxNLocator(nbins=5)
-gl.ylocator = MaxNLocator(nbins=5)
-gl.xlabel_style = {'size': 20, 'color': 'k'}
-gl.ylabel_style = {'size': 20, 'color': 'k'}
+# # Add gridlines
+# gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
+#                   linestyle='--', color='k', linewidth=0.75)
+# gl.xlocator = MaxNLocator(nbins=5)
+# gl.ylocator = MaxNLocator(nbins=5)
+# gl.xlabel_style = {'size': 20, 'color': 'k'}
+# gl.ylabel_style = {'size': 20, 'color': 'k'}
 
-# Only show specific labels
-gl.top_labels = False
-gl.bottom_labels = True
-gl.left_labels = True
-gl.right_labels = False
+# # Only show specific labels
+# gl.top_labels = False
+# gl.bottom_labels = True
+# gl.left_labels = True
+# gl.right_labels = False
 
-# Create a colorbar at the bottom
-cb = fig.colorbar(
-    ScalarMappable(norm=norm, cmap=cmap),
-    ax=ax,
-    orientation="horizontal",
-    fraction=0.04,  # Fraction of the original axes height
-    pad=0.15,  # Distance from the bottom of the subplots
-    extend="max"
-)
-cb.set_ticks([0,50,100,150,200,250,300])
-cb.ax.tick_params(labelsize=20)
-cb.set_label("Precipitation [mm/year]", fontsize=20)
+# # Create a colorbar at the bottom
+# cb = fig.colorbar(
+#     ScalarMappable(norm=norm, cmap=cmap),
+#     ax=ax,
+#     orientation="horizontal",
+#     fraction=0.04,  # Fraction of the original axes height
+#     pad=0.15,  # Distance from the bottom of the subplots
+#     extend="max"
+# )
+# cb.set_ticks([0,50,100,150,200,250,300])
+# cb.ax.tick_params(labelsize=20)
+# cb.set_label("Precipitation [mm/year]", fontsize=20)
 
-# Show the plot
-plt.tight_layout()
-plt.show()
+# # Show the plot
+# plt.tight_layout()
+# plt.show()
