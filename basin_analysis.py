@@ -134,11 +134,11 @@ new_shpe = (
 # Load the GRACE dataset
 grace = xr.open_dataset(grace_path)
 
-img_fle_lst = [os.path.join(imerg_basin_path, x) for x in os.listdir(imerg_basin_path)]
-avhrr_fle_lst = [os.path.join(avhrr_basin_path, x) for x in os.listdir(avhrr_basin_path)]
-ssmis_17_fle_lst = [os.path.join(ssmis_17_basin_path, x) for x in os.listdir(ssmis_17_basin_path)]
-airs_fle_lst = [os.path.join(airs_basin_path, x) for x in os.listdir(airs_basin_path)]
-era5_fle_lst = [os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_path)]
+img_fle_lst = [os.path.join(imerg_basin_path, x) for x in os.listdir(imerg_basin_path) if 'imbie_basin' in x]
+avhrr_fle_lst = [os.path.join(avhrr_basin_path, x) for x in os.listdir(avhrr_basin_path) if 'imbie_basin' in x]
+ssmis_17_fle_lst = [os.path.join(ssmis_17_basin_path, x) for x in os.listdir(ssmis_17_basin_path) if 'imbie_basin' in x]
+airs_fle_lst = [os.path.join(airs_basin_path, x) for x in os.listdir(airs_basin_path) if 'imbie_basin' in x]
+era5_fle_lst = [os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_path) if 'imbie_basin' in x]
 
 gc.collect()
 #%%
