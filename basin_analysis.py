@@ -153,7 +153,7 @@ img_final_result = xr.concat(img_batch_results, dim='batch').mean(dim='batch', s
 
 stereo_img_xrr_basin_mm_per_year = img_final_result * 365
 
-fle_svnme = os.path.join(annual_precip_in_basins_path, 'IMERG_2010_basin_annual_precip.nc')
+fle_svnme = os.path.join(annual_precip_in_basins_path, 'IMERG_2010_imbie_basin_annual_precip.nc')
 encoding = {stereo_img_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
 stereo_img_xrr_basin_mm_per_year.to_netcdf(os.path.join(imerg_basin_path, fle_svnme), 
                                            mode='w', format='NETCDF4', encoding=encoding)
@@ -187,7 +187,7 @@ era5_final_result = xr.concat(era5_batch_results, dim='batch').mean(dim='batch',
 
 stereo_era5_xrr_basin_mm_per_year = era5_final_result * 365
 
-fle_svnme = os.path.join(annual_precip_in_basins_path, 'ERA5_2010_basin_annual_precip.nc')
+fle_svnme = os.path.join(annual_precip_in_basins_path, 'ERA5_2010_imbie_basin_annual_precip.nc')
 encoding = {stereo_era5_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
 stereo_era5_xrr_basin_mm_per_year.to_netcdf(os.path.join(era5_basin_path, fle_svnme), 
                                             mode='w', format='NETCDF4', encoding=encoding)
@@ -221,7 +221,7 @@ avhrr_final_result = xr.concat(avhrr_batch_results, dim='batch').mean(dim='batch
 
 stereo_avhrr_xrr_basin_mm_per_year = avhrr_final_result * 365
 
-fle_svnme = os.path.join(annual_precip_in_basins_path, 'AVHRR_2010_basin_annual_precip.nc')
+fle_svnme = os.path.join(annual_precip_in_basins_path, 'AVHRR_2010_imbie_basin_annual_precip.nc')
 encoding = {stereo_avhrr_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
 stereo_avhrr_xrr_basin_mm_per_year.to_netcdf(os.path.join(avhrr_basin_path, fle_svnme), 
                                              mode='w', format='NETCDF4', encoding=encoding)
@@ -256,7 +256,7 @@ ssmis_final_result = xr.concat(ssmis_batch_results, dim='batch').mean(dim='batch
 
 stereo_ssmi_17_xrr_basin_mm_per_year = ssmis_final_result * 365
 
-fle_svnme = os.path.join(annual_precip_in_basins_path, 'SSMIS_17_2010_basin_annual_precip.nc')
+fle_svnme = os.path.join(annual_precip_in_basins_path, 'SSMIS_17_2010_imbie_basin_annual_precip.nc')
 encoding = {stereo_ssmi_17_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
 stereo_ssmi_17_xrr_basin_mm_per_year.to_netcdf(os.path.join(ssmis_17_basin_path, fle_svnme), 
                                                mode='w', format='NETCDF4', encoding=encoding)
@@ -291,7 +291,7 @@ airs_final_result = xr.concat(airs_batch_results, dim='batch').mean(dim='batch',
 
 stereo_airs_xrr_basin_mm_per_year = airs_final_result * 365
 
-fle_svnme = os.path.join(annual_precip_in_basins_path, 'AIRS_2010_basin_annual_precip.nc')
+fle_svnme = os.path.join(annual_precip_in_basins_path, 'AIRS_2010_imbie_basin_annual_precip.nc')
 encoding = {stereo_airs_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
 stereo_airs_xrr_basin_mm_per_year.to_netcdf(os.path.join(airs_basin_path, fle_svnme), 
                                             mode='w', format='NETCDF4', encoding=encoding)
@@ -359,7 +359,7 @@ cs_ant_xrr_clip_res = cs_ant_xrr_clip.rio.reproject(
     cs_ant_xrr_clip.rio.crs,
     shape=basins_imbie.shape,  # set the shape as the basin data shape
     resampling=Resampling.nearest,
-    transform=basins['zwally'].rio.transform()
+    transform=basins['imbie'].rio.transform()
 )
 
 cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res['Band1'].values
@@ -533,10 +533,10 @@ for product_name, data in arras:
 
 annual_mean_df = annual_mean_df.applymap(lambda x: round(x, 2) if pd.notnull(x) else x)
 # Save the DataFrame to a CSV file
-annual_mean_df.to_csv(os.path.join(path_to_dfs, f'annual_mean_precip_over_basins_{cde_run_dte}.csv'))
+annual_mean_df.to_csv(os.path.join(path_to_dfs, f'annual_mean_precip_over_imbie_basins_{cde_run_dte}.csv'))
 
 # make a scatter plot of all products agianst P_MB
-svename = os.path.join(path_to_plots, f'scatter_compare_annual_mean_precip_over_basins_{cde_run_dte}.png')
+svename = os.path.join(path_to_plots, f'scatter_compare_annual_mean_precip_over_imbie_basins_{cde_run_dte}.png')
 
 x = annual_mean_df.loc['P_MB'].astype(float).values
 products = [p for p in annual_mean_df.index if p != 'P_MB']
