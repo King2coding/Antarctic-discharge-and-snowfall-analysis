@@ -586,7 +586,7 @@ def compare_mean_precp_plot(arr_lst_mean, basin_nme,vmin=0, vmax=300, cbar_tcks=
 
     # Use the 'jet' colormap
     cmap = plt.cm.jet
-    levels = np.linspace(vmin, vmax, 28)  # 27 basins + 1 for boundaries
+    levels = np.linspace(vmin, vmax, 20)  # 27 basins + 1 for boundaries
     norm = BoundaryNorm(levels, cmap.N)
 
     # Determine the number of rows and columns for the grid
@@ -663,7 +663,7 @@ def single_precp_plot(data, product_name, vmin=0, vmax=300):
     """
     # Use the 'jet' colormap
     cmap = plt.cm.jet
-    levels = np.linspace(vmin, vmax, 28)  # 27 basins + 1 for boundaries
+    levels = np.linspace(vmin, vmax, 20)  # 27 basins + 1 for boundaries
     norm = BoundaryNorm(levels, cmap.N)
 
     fig, ax = plt.subplots(figsize=(12, 8))
