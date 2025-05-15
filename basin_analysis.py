@@ -464,7 +464,7 @@ plt.show()
 
 # save imbie basins 
 encoding = {P_MB_mm.name:{"zlib": True, "complevel": 9}}
-svename = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins/P_MB_2013-2022_basin_annual_precip.nc'
+svename = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins/P_MB_2013-2022_imbie_basin_annual_precip.nc'
 P_MB_mm.to_netcdf(svename, mode='w', format='NETCDF4', encoding=encoding)
 
 gc.collect()
@@ -564,6 +564,37 @@ plt.tight_layout()
 plt.savefig(svename,  dpi=1000, bbox_inches='tight')
 # plt.show()
 
+#------------------------------------------------------------------------------
+df = annual_mean_df.copy().astype(float)
+
+# 2) Products list (excluding P_MB)
+products = [p for p in df.index if p != 'P_MB']
+
+# 3) References
+refs = ['CS', 'ERA5']
+
+# 4) Prepare results table
+cols = [f"CC_vs_{ref}" for ref in refs] + [f"Bias_vs_{ref}" for ref in refs]
+results = pd.DataFrame(index=products, columns=cols)
+
+# 5) Compute CC and Bias for each scenario
+for ref in refs:
+    x_ref = df.loc[ref].values
+    for prod in products:
+        if prod == ref:
+            results.loc[prod, f"CC_vs_{ref}"] = 1.0
+            results.loc[prod, f"Bias_vs_{ref}"] = 1.0
+        else:
+            y = df.loc[prod].values
+            valid = (~np.isnan(x_ref)) & (~np.isnan(y))
+            cc = np.corrcoef(x_ref[valid], y[valid])[0,1]
+            bias = np.nanmean(y) / np.nanmean(x_ref)
+            results.loc[prod, f"CC_vs_{ref}"] = round(cc, 2)
+            results.loc[prod, f"Bias_vs_{ref}"] = round(bias, 2)
+
+svnme = os.path.join(path_to_dfs, f'metrics_compare_annual_mean_precip_over_basins_{cde_run_dte}.csv')
+
+results.to_csv(svnme)
 #%%
 
 # ncolors = 15
