@@ -592,7 +592,7 @@ for ref in refs:
             results.loc[prod, f"CC_vs_{ref}"] = round(cc, 2)
             results.loc[prod, f"Bias_vs_{ref}"] = round(bias, 2)
 
-svnme = os.path.join(path_to_dfs, f'metrics_compare_annual_mean_precip_over_basins_{cde_run_dte}.csv')
+svnme = os.path.join(path_to_dfs, f'metrics_compare_annual_mean_precip_over_imbie_basins_{cde_run_dte}.csv')
 
 results.to_csv(svnme)
 #%%
