@@ -506,6 +506,7 @@ gc.collect()
 
 
 #%%
+print('Making a table of annual mean precipitation for each basin')
 arras = [('P_MB', P_MB_mm),
         ('IMERG', stereo_img_xrr_basin_mm_per_year), 
         ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
