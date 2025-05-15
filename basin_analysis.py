@@ -109,7 +109,10 @@ ax.axis('off')
 # Final cleanup
 ax.set_title("Zwally Basins with IDs (Polar Stereographic)", fontsize=18)
 plt.tight_layout()
-plt.show()
+# plt.show()
+# Save the imbie basin plot
+output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
 
 # Extract the bounds of the Zwally basins data
 x_min, x_max = basins_imbie['x'].values.min(), basins_imbie['x'].values.max()
