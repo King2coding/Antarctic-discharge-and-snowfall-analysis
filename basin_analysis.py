@@ -486,7 +486,9 @@ plot_arras = [('P_MB', P_MB_mm),
             #   ] #
 
 svnme = os.path.join(path_to_plots, 'annual_snowfall_accumulation_over_imbie_basins.png')
-compare_mean_precp_plot(plot_arras, vmin=0, vmax=300, cbar_tcks=[0, 50, 100, 150, 200, 250, 300])
+compare_mean_precp_plot(plot_arras, basins_imbie, 
+                        vmin=0, vmax=300, 
+                        cbar_tcks=[0, 50, 100, 150, 200, 250, 300])
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
 gc.collect()
 
@@ -495,7 +497,10 @@ plot_arras = [ ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year),
                ('IMERG', stereo_img_xrr_basin_mm_per_year), ] #
 
 svnme = os.path.join(path_to_plots, 'IMERG-SSMIS-F17-annual_snowfall_accumulation_over_imbie_basins.png')
-compare_mean_precp_plot(plot_arras, vmin=0, vmax=100, cbar_tcks=[0, 10 ,25, 50, 75, 85 ,100])
+compare_mean_precp_plot(plot_arras, basins_imbie,
+                        vmin=0, vmax=100, 
+                        cbar_tcks=[0, 10 ,25, 50, 75, 85 ,100])
+                        
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
 gc.collect()
 
@@ -599,6 +604,29 @@ for ref in refs:
 svnme = os.path.join(path_to_dfs, f'metrics_compare_annual_mean_precip_over_imbie_basins_{cde_run_dte}.csv')
 
 results.to_csv(svnme)
+
+#%%
+from scipy.io import loadmat
+
+mask_path = "/ra1/pubdat/mask_land_ocean/mask50km.mat"
+mask = loadmat(mask_path)["mask50"][-60:, :].swapaxes(0, 1)
+mask = np.flip(mask, axis=1)
+mask_binary = mask < 75
+new_mask = mask_binary.copy()
+new_mask[:360, :] = mask_binary[360:, :].copy()
+new_mask[360:, :] = mask_binary[:360, :].copy()
+new_mask = np.flip(new_mask.T, axis=0)
+new_mask_ = new_mask.astype(int)
+
+
+cs_annual_path = r'/home/kkumah/CS_2022_Maps/annual'
+cs_annual_filename = os.path.join(cs_annual_path,"2007_2010.npy")
+raw = np.load(cs_annual_filename, allow_pickle=True)
+cs_annual = np.flip(raw[:,:].transpose(), axis=0)
+cs_annual = xr.DataArray(raw)
+cs_antarctica_data = cs_annual.where(new_mask_ == 1)
+
+
 #%%
 
 # ncolors = 15
@@ -685,121 +713,4 @@ results.to_csv(svnme)
 # zwally_data = basins['zwally'].where((basins['zwally'] > 0) & (basins['zwally'].notnull()))
 
 # # Plot
-# fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'projection': proj})
-# p = zwally_data.plot(
-#     ax=ax,
-#     transform=ccrs.SouthPolarStereo(),  # If data is already projected in EPSG:3031
-#     cmap=cmap,
-#     norm=norm,
-#     add_colorbar=False
-# )
-
-# # Add white background
-# ax.set_facecolor('white')
-
-# # Add colorbar
-# cbar = plt.colorbar(p, ax=ax, orientation='vertical', shrink=0.5, pad=0.05, ticks=np.arange(27))
-# cbar.set_label("Basin Index")
-
-# # Optional: Add coastlines or other features
-# ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
-# ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.4)
-
-# # Set limits for Antarctica view
-# ax.set_extent([-2800000, 2800000, -2800000, 2800000], crs=ccrs.SouthPolarStereo())
-
-# # Final cleanup
-# ax.set_title("Zwally Basins")
-# plt.tight_layout()
-# plt.show()
-
-# # Ensure img_xrr_clip is a DataArray by selecting a specific variable if it's a Dataset
-# if isinstance(img_xrr_clip, xr.Dataset):
-#     variable_name = list(img_xrr_clip.data_vars.keys())[0]  # Select the first variable
-#     img_xrr_clip = img_xrr_clip[variable_name]
-
-# fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'projection': ccrs.SouthPolarStereo()})
-# img_xrr_clip.plot(
-#     ax=ax,
-#     transform=ccrs.SouthPolarStereo(),  # Data is already in polar stereographic projection
-#     cmap='jet',
-#     add_colorbar=True
-# )
-# ax.set_title("Projected Data")
-# plt.show()
-
-
-# new_res = 5000#50000  # meters
-
-# new_shpe_ = (
-#     int((y_max - y_min) / new_res),
-#     int((x_max - x_min) / new_res)
-# )
-
-
-# new_trans = Affine(
-#     50000, 0.0, -3333500.0,
-#     0.0, -50000, 3333500.0
-# )
-
-# avhrr_precip_xrr_basin_mapped_res_50km = stereo_avhrr_xrr_basin_mm_per_year_5km.rio.reproject(
-#                                     dst_crs=stereo_avhrr_xrr_basin_mm_per_year_5km.rio.crs,
-#                                     shape=new_shpe_,
-#                                     transform=new_trans,
-#                                     resampling=Resampling.nearest
-# )
-
-# fig = plt.figure(figsize=(12, 10))
-# proj = ccrs.SouthPolarStereo()
-
-# # Use the 'jet' colormap
-# cmap = plt.cm.jet
-# levels = np.linspace(0, 300, 28)  # 27 basins + 1 for boundaries
-# norm = BoundaryNorm(levels, cmap.N)
-
-# ax = fig.add_subplot(1, 1, 1, projection=proj)
-# ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
-# ax.coastlines(lw=0.25, resolution="110m", zorder=2)
-
-# # Plot the data
-# (cs_ant_precip_xrr_basin_mapped_res_5km*360).plot(
-#     ax=ax,
-#     transform=ccrs.SouthPolarStereo(),
-#     cmap=cmap,
-#     norm=norm,
-#     add_colorbar=False
-# )
-
-# ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
-# ax.set_title("CS", fontsize=20)
-
-# # Add gridlines
-# gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
-#                   linestyle='--', color='k', linewidth=0.75)
-# gl.xlocator = MaxNLocator(nbins=5)
-# gl.ylocator = MaxNLocator(nbins=5)
-# gl.xlabel_style = {'size': 20, 'color': 'k'}
-# gl.ylabel_style = {'size': 20, 'color': 'k'}
-
-# # Only show specific labels
-# gl.top_labels = False
-# gl.bottom_labels = True
-# gl.left_labels = True
-# gl.right_labels = False
-
-# # Create a colorbar at the bottom
-# cb = fig.colorbar(
-#     ScalarMappable(norm=norm, cmap=cmap),
-#     ax=ax,
-#     orientation="horizontal",
-#     fraction=0.04,  # Fraction of the original axes height
-#     pad=0.15,  # Distance from the bottom of the subplots
-#     extend="max"
-# )
-# cb.set_ticks([0,50,100,150,200,250,300])
-# cb.ax.tick_params(labelsize=20)
-# cb.set_label("Precipitation [mm/year]", fontsize=20)
-
-# # Show the plot
-# plt.tight_layout()
-# plt.show()
+# fig, ax = plt.su<truncated__content/>
