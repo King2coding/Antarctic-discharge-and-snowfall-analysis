@@ -162,8 +162,8 @@ stereo_img_xrr_basin_mm_per_year.to_netcdf(os.path.join(imerg_basin_path, fle_sv
                                            mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-# stereo_img_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-#                                                               'IMERG_2010_basin_annual_precip.nc')) 
+stereo_img_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'IMERG_2010_imbie_basin_annual_precip.nc')) 
 # Explicitly set the CRS before reprojecting
 # stereo_img_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
@@ -196,8 +196,8 @@ stereo_era5_xrr_basin_mm_per_year.to_netcdf(os.path.join(era5_basin_path, fle_sv
                                             mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-# stereo_era5_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-#                                                               'ERA5_2010_basin_annual_precip.nc')) 
+stereo_era5_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'ERA5_2010_imbie_basin_annual_precip.nc')) 
 # Explicitly set the CRS before reprojecting
 # stereo_era5_xrr_basin_mm_per_year.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
 
@@ -230,8 +230,8 @@ stereo_avhrr_xrr_basin_mm_per_year.to_netcdf(os.path.join(avhrr_basin_path, fle_
                                              mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-# stereo_avhrr_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-#                                                               'AVHRR_2010_basin_annual_precip.nc')) 
+stereo_avhrr_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'AVHRR_2010_imbie_basin_annual_precip.nc')) 
 
 # # Explicitly set the CRS before reprojecting
 
@@ -265,8 +265,8 @@ stereo_ssmi_17_xrr_basin_mm_per_year.to_netcdf(os.path.join(ssmis_17_basin_path,
                                                mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-# stereo_ssmi_17_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-#                                                               'SSMIS_17_2010_basin_annual_precip.nc')) 
+stereo_ssmi_17_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'SSMIS_17_2010_imbie_basin_annual_precip.nc')) 
 
 # # Explicitly set the CRS before reprojecting
 
@@ -300,8 +300,8 @@ stereo_airs_xrr_basin_mm_per_year.to_netcdf(os.path.join(airs_basin_path, fle_sv
                                             mode='w', format='NETCDF4', encoding=encoding)
 
 # resample the data to the new resolution
-# stereo_airs_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-#                                                               'AIRS_2010_basin_annual_precip.nc')) 
+stereo_airs_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+                                                              'AIRS_2010_imbie_basin_annual_precip.nc')) 
 
 # # Explicitly set the CRS before reprojecting
 
@@ -319,31 +319,69 @@ gc.collect()
 #----------------------------------------------------------------------------------
 # bring CloudSat into the discusiion
 # read and process CloudSat data
-ant_data_path = r"/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/miscellaneous"  # Replace with your actual path
-cs_ant_filename = os.path.join(ant_data_path,"CS_seasonal_climatology-2007-2010.nc")
-cs_ant = xr.open_dataarray(cs_ant_filename)
+# ant_data_path = r"/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/miscellaneous"  # Replace with your actual path
+# cs_ant_filename = os.path.join(ant_data_path,"CS_seasonal_climatology-2007-2010.nc")
+# cs_ant = xr.open_dataarray(cs_ant_filename)
 
-cs_ant_annual_clim = cs_ant.mean(dim='season',skipna=True)#.where(new_mask_ == 1)
+# cs_ant_annual_clim = cs_ant.mean(dim='season',skipna=True)#.where(new_mask_ == 1)
 
-yshp, xshp = cs_ant_annual_clim.shape
+# we will fill nan areas in cs ant with era5 data so create that data
+era5_data = xr.open_dataarray(r'/ra1/pubdat/AVHRR_CloudSat_proj/ERA5_0.25deg/ERA5_to_netcdf_files/ERA5_daily_precipitation_2010.nc')
+if 'lon' in era5_data.coords and 'lat' in era5_data.coords:
+    era5_data = era5_data.rename({'lon': 'x', 'lat': 'y'})
+era5_data_ant = era5_data.sel(y=slice(-55, -90), x=slice(-180, 180))
+era5_data_ant = era5_data_ant.mean(dim='time',skipna=True)
 
-minx = cs_ant_annual_clim['lon'].min().item()
-maxy = cs_ant_annual_clim['lat'].max().item()
-px_sz = round(cs_ant_annual_clim['lon'].diff('lon').mean().item(), 2)
+era5_data_ant.rio.write_crs(CRS.from_proj4(crs).to_string(), inplace=True)
+# era5_trns = Affine(round(np.unique(np.diff(era5_data_ant['x'].values))[0],2),
+#                    0.0,
+#                    era5_data_ant['x'].min().item(),
+#                    0.0,
+#                    round(np.unique(np.diff(era5_data_ant['y'].values))[0],2),
+#                    era5_data_ant['y'].max().item())
 
-dest_flnme = os.path.join(misc_out, os.path.basename(cs_ant_filename))
+era5_data_ant = era5_data_ant.rio.reproject(
+                                    dst_crs=era5_data_ant.rio.crs,
+                                    shape=(70, 720),                                    
+                                    resampling=Resampling.nearest
+)
+
+# Set the fill value to NaN
+# era5_data_ant = era5_data_ant.where(era5_data_ant != era5_data_ant.attrs['_FillValue'], np.nan)
+
+cs_annual_path = r'/home/kkumah/CS_2022_Maps/annual'
+cs_annual_filename = os.path.join(cs_annual_path,"2007_2010.npy")
+raw = np.load(cs_annual_filename, allow_pickle=True)
+cs_annual = np.flip(raw[:,:].transpose(), axis=0)
+cs_annual = xr.DataArray(cs_annual,
+                         dims=['lat', 'lon'],
+                         coords={'lat': np.arange(90,-89.75, -0.5),
+                          'lon': np.arange(-179.75, 180, 0.5)},
+                          name = 'precipitation')
+cs_annual_ant = cs_annual.sel(lat=slice(-55, -90), lon=slice(-180, 180))
+
+# set areas in cs with na to era5 values
+cs_annual_ant = cs_annual_ant.fillna(era5_data_ant.values)
+
+yshp, xshp = cs_annual_ant.shape
+
+minx = cs_annual_ant['lon'].min().item()
+maxy = cs_annual_ant['lat'].max().item()
+px_sz = round(cs_annual_ant['lon'].diff('lon').mean().item(), 2)
+
+dest_flnme = os.path.join(misc_out, os.path.basename(cs_annual_filename).replace('.npy', '.tif'))
 
 gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, 
-                              crs, crs_format, cs_ant_annual_clim.data)
+                              crs, crs_format, cs_annual_ant.data)
 
-output_file_stereo = os.path.join(misc_out, os.path.basename(cs_ant_filename).replace('.nc', '_stere.nc'))
+output_file_stereo = os.path.join(misc_out, os.path.basename(cs_annual_filename).replace('.npy', '_stere.tif'))
 
 gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
 
 subprocess.run(gdalwarp_command, shell=True)
 
 # Read the stereographic projection file
-cs_ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
+cs_ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)['band_data']
 
 os.remove(dest_flnme)
 os.remove(output_file_stereo)
@@ -351,7 +389,7 @@ os.remove(output_file_stereo)
 # Clip the data to the bounds of the basin dataset
 cs_ant_xrr_clip = cs_ant_xrr_sh_stereo.sel(
     x=slice(-3333250, 3333250),
-    y=slice(-3333250, 3333250)
+    y=slice(3333250, -3333250)
 ).squeeze()
 
 
@@ -362,10 +400,10 @@ cs_ant_xrr_clip_res = cs_ant_xrr_clip.rio.reproject(
     cs_ant_xrr_clip.rio.crs,
     shape=basins_imbie.shape,  # set the shape as the basin data shape
     resampling=Resampling.nearest,
-    transform=basins['imbie'].rio.transform()
+    transform=basins_imbie.rio.transform()
 )
 
-cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res['Band1'].values
+cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res.values
 cs_ant_xrr_clip_res_arr = np.where(basins_imbie.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
 cs_ant_xrr_clip_res = xr.DataArray(
     cs_ant_xrr_clip_res_arr,  # Use the 2D numpy array directly
@@ -476,31 +514,31 @@ print('Plotting')
 
 
 plot_arras = [('P_MB', P_MB_mm),
-              ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
-              ('ERA5', stereo_era5_xrr_basin_mm_per_year),
-              ('AIRS', stereo_airs_xrr_basin_mm_per_year),
-              ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year) 
-             ]
+              ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year['imbie']), 
+              ('ERA5', stereo_era5_xrr_basin_mm_per_year['imbie']),
+              ('AIRS', stereo_airs_xrr_basin_mm_per_year['imbie']),]
+            #   ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year) 
+            #  ]
             #   ('IMERG', stereo_img_xrr_basin_mm_per_year_5km),
             #   
             #   ] #
 
 svnme = os.path.join(path_to_plots, 'annual_snowfall_accumulation_over_imbie_basins.png')
-compare_mean_precp_plot(plot_arras, basins_imbie, 
+compare_mean_precp_plot(plot_arras, 
                         vmin=0, vmax=300, 
                         cbar_tcks=[0, 50, 100, 150, 200, 250, 300])
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
 gc.collect()
 
 
-plot_arras = [ ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year),
-               ('IMERG', stereo_img_xrr_basin_mm_per_year), ] #
+plot_arras = [ ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year['imbie']),
+               ('IMERG', stereo_img_xrr_basin_mm_per_year['imbie']), ] #
 
 svnme = os.path.join(path_to_plots, 'IMERG-SSMIS-F17-annual_snowfall_accumulation_over_imbie_basins.png')
-compare_mean_precp_plot(plot_arras, basins_imbie,
+compare_mean_precp_plot(plot_arras, 
                         vmin=0, vmax=100, 
                         cbar_tcks=[0, 10 ,25, 50, 75, 85 ,100])
-                        
+
 plt.savefig(svnme,  dpi=1000, bbox_inches='tight')
 gc.collect()
 
@@ -520,10 +558,10 @@ arras = [('P_MB', P_MB_mm),
         ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
         ('ERA5', stereo_era5_xrr_basin_mm_per_year),
         ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year), 
-        ('AIRS', stereo_airs_xrr_basin_mm_per_year),
-        ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year)] #
+        ('AIRS', stereo_airs_xrr_basin_mm_per_year),]
+        # ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year)] #
 # make a table of the mean precipitation for each basin
-annual_mean_df = pd.DataFrame(columns=list(range(1, 28)), index=[x[0] for x in arras])
+annual_mean_df = pd.DataFrame(columns=list(range(1, 20)), index=[x[0] for x in arras])
 for product_name, data in arras:
     print(product_name)
 
