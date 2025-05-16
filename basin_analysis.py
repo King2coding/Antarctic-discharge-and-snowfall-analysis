@@ -579,6 +579,7 @@ for product_name, data in arras:
         annual_mean_df.loc[product_name, basin_id] = basin_precip
 
 annual_mean_df = annual_mean_df.applymap(lambda x: round(x, 2) if pd.notnull(x) else x)
+
 # Save the DataFrame to a CSV file
 annual_mean_df.to_csv(os.path.join(path_to_dfs, f'annual_mean_precip_over_imbie_basins_{cde_run_dte}.csv'))
 
