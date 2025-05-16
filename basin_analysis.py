@@ -107,7 +107,7 @@ ax.coastlines(resolution='110m', color='black', linewidth=0.5)
 ax.axis('off')
 
 # Final cleanup
-ax.set_title("Zwally Basins with IDs (Polar Stereographic)", fontsize=18)
+ax.set_title("IMBIE Basins with IDs ", fontsize=18)
 plt.tight_layout()
 # plt.show()
 # Save the imbie basin plot
@@ -359,7 +359,7 @@ cs_annual = xr.DataArray(cs_annual,
                           'lon': np.arange(-179.75, 180, 0.5)},
                           name = 'precipitation')
 cs_annual_ant = cs_annual.sel(lat=slice(-55, -90), lon=slice(-180, 180))
-
+cs_annual_ant = cs_annual_ant*24
 # set areas in cs with na to era5 values
 cs_annual_ant = cs_annual_ant.fillna(era5_data_ant.values)
 
@@ -512,13 +512,12 @@ gc.collect()
 #%%
 print('Plotting')
 
-
 plot_arras = [('P_MB', P_MB_mm),
               ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year['imbie']), 
               ('ERA5', stereo_era5_xrr_basin_mm_per_year['imbie']),
-              ('AIRS', stereo_airs_xrr_basin_mm_per_year['imbie']),]
-            #   ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year) 
-            #  ]
+              ('AIRS', stereo_airs_xrr_basin_mm_per_year['imbie']),
+              ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year) 
+             ]
             #   ('IMERG', stereo_img_xrr_basin_mm_per_year_5km),
             #   
             #   ] #
@@ -558,8 +557,8 @@ arras = [('P_MB', P_MB_mm),
         ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
         ('ERA5', stereo_era5_xrr_basin_mm_per_year),
         ('SSMIS-F17', stereo_ssmi_17_xrr_basin_mm_per_year), 
-        ('AIRS', stereo_airs_xrr_basin_mm_per_year),]
-        # ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year)] #
+        ('AIRS', stereo_airs_xrr_basin_mm_per_year),
+        ('CS', cs_ant_precip_xrr_basin_mapped_mm_per_year)] #
 # make a table of the mean precipitation for each basin
 annual_mean_df = pd.DataFrame(columns=list(range(1, 20)), index=[x[0] for x in arras])
 for product_name, data in arras:
