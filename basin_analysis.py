@@ -349,7 +349,7 @@ era5_data_ant = era5_data_ant.rio.reproject(
 # Set the fill value to NaN
 # era5_data_ant = era5_data_ant.where(era5_data_ant != era5_data_ant.attrs['_FillValue'], np.nan)
 
-cs_annual_path = r'/home/kkumah/CS_2022_Maps/annual'
+cs_annual_path = r'/ra1/pubdat/Reza_archive/CS_2022_Maps/annual'
 cs_annual_filename = os.path.join(cs_annual_path,"2007_2010.npy")
 raw = np.load(cs_annual_filename, allow_pickle=True)
 cs_annual = np.flip(raw[:,:].transpose(), axis=0)
@@ -512,7 +512,7 @@ gc.collect()
 #%%
 print('Plotting')
 
-plot_arras = [('P_MB', P_MB_mm),
+plot_arras = [('P$_{MB}$', P_MB_mm),
               ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year['imbie']), 
               ('ERA5', stereo_era5_xrr_basin_mm_per_year['imbie']),
               ('AIRS', stereo_airs_xrr_basin_mm_per_year['imbie']),
@@ -552,7 +552,7 @@ gc.collect()
 
 #%%
 print('Making a table of annual mean precipitation for each basin')
-arras = [('P_MB', P_MB_mm),
+arras = [('P$_{MB}$', P_MB_mm),
         ('IMERG', stereo_img_xrr_basin_mm_per_year), 
         ('AVHRR', stereo_avhrr_xrr_basin_mm_per_year), 
         ('ERA5', stereo_era5_xrr_basin_mm_per_year),
@@ -600,9 +600,10 @@ for ax, prod in zip(axes_flat, products):
     ax.scatter(x, y, alpha=0.7)
     lims = [min(np.nanmin(x), np.nanmin(y)), max(np.nanmax(x), np.nanmax(y))]
     ax.plot(lims, lims, 'k--', linewidth=1)
-    ax.set_title(f"{prod}\nCC={cc:.2f}, Bias={bias:.2f}")
-    ax.set_xlabel("P_MB (mm/yr)")
-    ax.set_ylabel(f"{prod} (mm/yr)")
+    ax.text(0.05, 0.95, f"CC={cc:.2f}\nBias={bias:.2f}", transform=ax.transAxes, fontsize=20, 
+            verticalalignment='top', horizontalalignment='left')
+    ax.set_xlabel("P$_{MB}$ (mm/yr)", fontsize=20)
+    ax.set_ylabel(f"{prod} (mm/yr)", fontsize=20)
 
 for ax in axes_flat[len(products):]:
     ax.axis('off')
