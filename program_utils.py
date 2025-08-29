@@ -10,6 +10,10 @@ import pandas as pd
 import numpy as np
 import datetime
 
+from datetime import datetime, timedelta
+from scipy.stats import linregress
+import math
+
 import matplotlib.pyplot as plt
 
 import subprocess
@@ -570,6 +574,91 @@ def run_batched_processing(batches, basin):
 
     return batch_results
 
+#-----------------------------------------------------------------------------
+def decimal_year_to_date(decimal_year):
+    """
+    Converts a decimal year representation to a datetime object.
+
+    A decimal year is a floating-point number where the integer part represents the year,
+    and the fractional part represents the fraction of the year that has passed.
+
+    Args:
+        decimal_year (float): The year in decimal format (e.g., 2023.5 for mid-2023).
+
+    Returns:
+        datetime.datetime: A datetime object representing the corresponding date.
+
+    Notes:
+        - The function accounts for leap years when calculating the number of days in a year.
+        - A leap year is defined as a year divisible by 4, except for years divisible by 100
+          unless they are also divisible by 400.
+
+    Example:
+        >>> from datetime import datetime
+        >>> decimal_year_to_date(2023.5)
+        datetime.datetime(2023, 7, 2, 12, 0)
+    """
+    year = int(decimal_year)
+    rem = decimal_year - year
+    base = datetime(year, 1, 1)
+    days_in_year = 366 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 365
+    return base + timedelta(days=rem * days_in_year)
+
+#-----------------------------------------------------------------------------
+
+def annual_slopes_with_se(df_year, cols):
+    """
+    Calculate annual mass balance rates (slopes) and their uncertainties for each basin.
+
+    Parameters
+    ----------
+    df_year : DataFrame
+        Subset of the basin time series for a single calendar year. 
+        Must contain 'Time' (decimal years) and basin columns (mass anomalies in Gt).
+    cols : list of str
+        Names of the basin columns to process.
+
+    Returns
+    -------
+    results : dict
+        Dictionary keyed by basin name. Each entry is a dict with:
+            - slope_Gt_per_yr : float
+                Estimated rate of storage change (Gt/yr) for that year.
+            - slope_stderr : float
+                Standard error of the slope (Gt/yr).
+            - n : int
+                Number of valid (non-NaN) data points used in the regression.
+    """
+
+    # Extract decimal year values for the given year
+    x = df_year["Time"].values
+
+    # Center the time axis around its mean for numerical stability in regression
+    # x_center = x - x.mean()
+
+    results = {}
+    for c in cols:
+        # Mass anomaly values for the current basin
+        y = df_year[c].values
+
+        # Only proceed if at least 3 valid points exist (needed for a meaningful regression)
+        if np.isfinite(y).sum() >= 3:
+            # Perform linear regression: slope is ΔS rate (Gt/yr), stderr is its uncertainty
+            slope, intercept, r, p, stderr = linregress(x, y)
+            results[c] = {
+                "slope_Gt_per_yr": slope,    # rate of mass change (Gt/yr)
+                "slope_stderr": stderr,      # uncertainty in the slope
+                "n": np.isfinite(y).sum()    # number of valid samples
+            }
+        else:
+            # Not enough data to compute a slope
+            results[c] = {
+                "slope_Gt_per_yr": np.nan,
+                "slope_stderr": np.nan,
+                "n": int(np.isfinite(y).sum())
+            }
+    return results
+
 #%%
 # plot
 
@@ -689,3 +778,7 @@ def single_precp_plot(data, product_name, vmin=0, vmax=300):
 
     plt.tight_layout()
     plt.show()
+
+
+#-----------------------------------------------------------------------------
+
