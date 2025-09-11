@@ -36,7 +36,6 @@ path_to_plots = r'/home/kkumah/Projects/Antarctic_discharge_work/plots'
 path_to_dfs = r'/home/kkumah/Projects/Antarctic_discharge_work/dfs'
 #%%
 # floating variables
-misc_out = r'/ra1/pubdat/AVHRR_CloudSat_proj/miscelaneous_outs'
 
 crs = "+proj=longlat +datum=WGS84 +no_defs"  
 crs_format = 'proj4' 
