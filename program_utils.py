@@ -781,4 +781,13 @@ def single_precp_plot(data, product_name, vmin=0, vmax=300):
 
 
 #-----------------------------------------------------------------------------
+def annual_to_monthly_long(df_years, YEARS, value_name):
+    longy = df_years.melt(id_vars="basin", var_name="year", value_name=value_name)
+    longy["year"] = longy["year"].astype(int)
+    # make 12 rows per basin-year, one per month
+    longy = longy.loc[longy["year"].isin(YEARS)].copy()
+    longy = longy.merge(pd.DataFrame({"month": np.arange(1,13)}), how="cross")
+    longy["date"] = pd.to_datetime(dict(year=longy["year"], month=longy["month"], day=1))
+    longy[value_name] = longy[value_name] / 12.0
+    return longy[["date","basin", value_name]]
 
