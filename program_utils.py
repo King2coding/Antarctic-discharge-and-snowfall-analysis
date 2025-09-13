@@ -15,7 +15,6 @@ from scipy.stats import linregress
 import math
 from collections import Counter
 
-
 import matplotlib.pyplot as plt
 
 import subprocess
@@ -827,3 +826,129 @@ def norm_name(s):
             .replace('–','-').replace('—','-')  # dash variants
             .replace(' ', '')                   # remove spaces
             .upper())
+
+#----------------------------------------------------------------------------
+# Build a robust ID↔name mapping from the grid itself (use most frequent name per ID)
+
+def generate_basin_id_mapping(basin_id, basin_name, input_df):
+    """
+    Generates a mapping between basin IDs and their corresponding names, and maps basin IDs to an input DataFrame.
+
+    Parameters:
+    -----------
+    basin_id : xarray.DataArray
+        A 2D array where each cell contains the ID of the basin it belongs to.
+    basin_name : xarray.DataArray
+        A 2D array where each cell contains the name of the basin it belongs to.
+    input_df : pandas.DataFrame
+        A DataFrame containing basin data with a 'basin' column for basin names.
+
+    Returns:
+    --------
+    pandas.DataFrame
+        A modified DataFrame with an additional 'basin_id' column mapping basin names to their IDs.
+        Rows with unmapped basins or islands (ID==1) are dropped.
+
+    Notes:
+    ------
+    - The function uses the most common name within each basin ID to create the mapping.
+    - Basin names are normalized to ensure consistent matching.
+    - Rows with unmapped basins or islands (ID==1) are excluded from the output DataFrame.
+    """
+    # Extract unique basin IDs, ignoring NaN values, and sort them
+    ids = np.sort(np.unique(basin_id.values[~np.isnan(basin_id.values)])).astype(int)
+
+    # Create a dictionary to map basin IDs to their most common names
+    id_to_name = {}
+    for bid in ids:
+        # Create a mask for the current basin ID
+        mask = (basin_id == bid)
+
+        # Extract names corresponding to the current basin ID
+        names_here = basin_name.where(mask).values
+        names_here = [n for n in names_here.ravel() if isinstance(n, str) and n != 'NA']
+
+        if len(names_here):
+            # Find the most common name in the basin
+            modal = Counter(names_here).most_common(1)[0][0]
+            id_to_name[bid] = modal
+
+    # Create a normalized dictionary for matching to the input DataFrame's column labels
+    id_to_name_norm = {bid: norm_name(nm) for bid, nm in id_to_name.items() if nm is not None}
+    name_to_id_norm = {nm: bid for bid, nm in id_to_name_norm.items()}
+
+    # Normalize basin names in the input DataFrame and attach basin IDs
+    df = input_df.copy()
+    df['basin_norm'] = df['basin'].map(norm_name)  # Normalize basin names
+    df['basin_id'] = df['basin_norm'].map(name_to_id_norm)  # Map normalized names to basin IDs
+
+    # Drop rows with unmapped basins and exclude islands (ID==1)
+    df = df.dropna(subset=['basin_id']).copy()
+    df['basin_id'] = df['basin_id'].astype(int)
+    df = df[df['basin_id'] != 1]
+
+    return df
+#----------------------------------------------------------------------------
+
+def create_basin_xrr(basin_id, basin_name, df, colnme, attrs):
+    """
+    Creates an xarray DataArray representing a time series of raster data for a specific basin.
+
+    Parameters:
+    -----------
+    basin_id : xarray.DataArray
+        A 2D array where each cell contains the ID of the basin it belongs to.
+    basin_name : xarray.DataArray
+        A 2D array where each cell contains the name of the basin it belongs to.
+    df : pandas.DataFrame
+        A DataFrame containing the input data. It must include the following columns:
+        - 'date': Timestamps for each observation.
+        - 'basin_id': IDs of the basins corresponding to the data.
+        - `colnme`: The column name specified by the `colnme` parameter, containing the values to be rasterized.
+    colnme : str
+        The name of the column in `df` that contains the values to be rasterized.
+    attrs : dict
+        A dictionary of attributes to be added to the resulting xarray DataArray.
+
+    Returns:
+    --------
+    xarray.DataArray
+        A 3D DataArray with dimensions ('date', 'y', 'x') representing the rasterized time series.
+        - The 'date' dimension corresponds to the time steps.
+        - The 'y' and 'x' dimensions correspond to the spatial grid.
+        - The DataArray includes the following additional coordinates:
+            - 'basin_id': The basin IDs for each grid cell.
+            - 'basin_name': The basin names for each grid cell.
+        - The DataArray is named 'deltaS_Gt_per_month' and includes the provided attributes.
+
+    Notes:
+    ------
+    - The function assumes that the `paint_by_id` function is available and is used to rasterize the data.
+    - The `df['date']` column is expected to contain unique timestamps for each observation.
+    - The resulting DataArray is concatenated along the 'date' dimension.
+
+    Example:
+    --------
+    >>> dS_raster = create_basin_xrr(basin_id, basin_name, df, 'value_column', {'unit': 'Gt/month'})
+    >>> print(dS_raster)
+    """
+    dates = np.sort(df['date'].unique())
+    frames = []
+    for t in dates:
+        slic = df.loc[df['date'] == t, ['basin_id', colnme]]
+        values = dict(zip(slic['basin_id'].astype(int), slic[colnme].astype(float)))
+        raster_t = paint_by_id(basin_id, values)
+        raster_t = raster_t.assign_coords(date=np.datetime64(t)).expand_dims('date')
+        frames.append(raster_t)
+
+    dS_raster = xr.concat(frames, dim='date')
+    dS_raster.name = 'deltaS_Gt_per_month'
+    dS_raster.attrs.update(attrs)
+
+# (Optional) carry through your basin metadata alongside
+    dS_raster = dS_raster.assign_coords(
+    basin_id=(('y','x'), basin_id.values),
+    basin_name=(('y','x'), basin_name.values))
+    return dS_raster
+#----------------------------------------------------------------------------
+

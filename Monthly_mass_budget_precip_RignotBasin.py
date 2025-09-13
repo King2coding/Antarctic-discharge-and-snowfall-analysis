@@ -218,59 +218,11 @@ basin_name = basin_name.where(basin_name != 'NA')
 # If you want to exclude islands up front:
 basin_id = basin_id.where(basin_id != 1)
 basin_name = basin_name.where(basin_id.notnull())
-
-# Build a robust ID↔name mapping from the grid itself (use most frequent name per ID)
-
-
-def generate_basin_id_mapping(basin_id, basin_name, input_df):
-    ids = np.sort(np.unique(basin_id.values[~np.isnan(basin_id.values)])).astype(int)
-    id_to_name = {}
-    for bid in ids:
-        mask = (basin_id == bid)
-        names_here = basin_name.where(mask).values
-        names_here = [n for n in names_here.ravel() if isinstance(n, str) and n != 'NA']
-        if len(names_here):
-        # modal name in the basin
-            modal = Counter(names_here).most_common(1)[0][0]
-            id_to_name[bid] = modal
-
-# Also keep a normalized dictionary for matching to David’s column labels
-    id_to_name_norm = {bid: norm_name(nm) for bid, nm in id_to_name.items() if nm is not None}
-    name_to_id_norm = {nm: bid for bid, nm in id_to_name_norm.items()}
-
-# Normalize basin names in David’s table and attach basin_id
-    df = input_df.copy()
-    df['basin_norm'] = df['basin'].map(norm_name)
-    df['basin_id'] = df['basin_norm'].map(name_to_id_norm)
-
-# Drop rows we can’t map, and Islands (ID==1) just in case
-    df = df.dropna(subset=['basin_id']).copy()
-    df['basin_id'] = df['basin_id'].astype(int)
-    df = df[df['basin_id'] != 1]
-    return df
-
+# Carry the basin_id and basin_name into the dataframe for mapping
 dS_long_df = generate_basin_id_mapping(basin_id, basin_name, dS_long)
 
 # Build the time-by-space raster
-def create_basin_xrr(basin_id, basin_name, df, colnme, attrs):
-    dates = np.sort(df['date'].unique())
-    frames = []
-    for t in dates:
-        slic = df.loc[df['date'] == t, ['basin_id', colnme]]
-        values = dict(zip(slic['basin_id'].astype(int), slic[colnme].astype(float)))
-        raster_t = paint_by_id(basin_id, values)
-        raster_t = raster_t.assign_coords(date=np.datetime64(t)).expand_dims('date')
-        frames.append(raster_t)
 
-    dS_raster = xr.concat(frames, dim='date')
-    dS_raster.name = 'deltaS_Gt_per_month'
-    dS_raster.attrs.update(attrs)
-
-# (Optional) carry through your basin metadata alongside
-    dS_raster = dS_raster.assign_coords(
-    basin_id=(('y','x'), basin_id.values),
-    basin_name=(('y','x'), basin_name.values))
-    return dS_raster
 attributes = {
     'description': 'Monthly basin-total ΔS painted to all pixels of each basin (not areal density). ',
     'long_name': 'Monthly basin mass anomaly change',
@@ -280,6 +232,7 @@ attributes = {
 }
 
 dS_raster = create_basin_xrr(basin_id, basin_name, dS_long_df, 'dS_Gt', attributes)
+
 # save to disk
 # out_flnme = os.path.join(basin_path, 'rignot_deltaS_monthly_2019_2020.nc')
 # dS_raster.to_netcdf(out_flnme)
