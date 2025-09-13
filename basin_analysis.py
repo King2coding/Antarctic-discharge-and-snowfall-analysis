@@ -74,7 +74,7 @@ ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
 # Plot the data
 p = imbie_data.plot(
     ax=ax,
-    transform=ccrs.SouthPolarStereo(),
+    transform=proj,
     cmap=cmap,
     norm=norm,
     add_colorbar=False

@@ -32,9 +32,31 @@ from program_utils import *
 # define paths
 basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
 racmo_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/RACMO2pt4p1'
+path_to_plots = r'/home/kkumah/Projects/Antarctic_discharge_work/plots'
 
 #%%
 # floating variables
+id2name = {
+    2: "A-Ap",
+    3: "Ap-B",
+    4: "B-C",
+    5: "C-Cp",
+    6: "Cp-D",
+    7: "D-Dp",
+    8: "Dp-E",
+    9: "E-Ep",
+    10: "Ep-F",
+    11: "F-G",
+    12: "G-H",
+    13: "H-Hp",
+    14: "Hp-I",
+    15: "I-Ipp",
+    16: "Ipp-J",
+    17: "J-Jpp",
+    18: "Jpp-K",
+    19: "K-A"
+}
+
 basin_fle = os.path.join(basin_path, 'bedmap3_basins.nc')
 bedmap3_basins = xr.open_dataset(basin_fle)
 basins_imbie = bedmap3_basins['imbie'].copy()
@@ -45,36 +67,61 @@ xmin, ymax = basin_transform.c, basin_transform.f
 xres, yres = basin_transform.a, -basin_transform.e
 xmax = xmin + width * xres
 ymin = ymax - height * yres
+print(f"Basin grid: width={width}, height={height}, xres={xres}, yres={yres}")
+basin_bounds = (xmin, xmax, ymin, ymax)  # (minx, maxx, miny, maxy)
+print(f"Basin bounds: {basin_bounds}")
+# # Print the bounds for verification
+# print(f"Basin bounds: x_min={xmin}, x_max={xmax}, y_min={ymin}, y_max={ymax}")
 
-# Print the bounds for verification
-print(f"Basin bounds: x_min={xmin}, x_max={xmax}, y_min={ymin}, y_max={ymax}")
+# # remap basin grid to a 0.1 deg (10km) grid
 
-# remap basin grid to a 0.1 deg (10km) grid
-
-# If the mask is a subdataset, point to it explicitly, e.g.:
-src = f'NETCDF:"{basin_fle}":imbie'
-# src = basin_nc  # if gdalwarp sees the first variable as the raster; else use the NETCDF:"...":imbie form
+# # If the mask is a subdataset, point to it explicitly, e.g.:
+# src = f'NETCDF:"{basin_fle}":imbie'
+# # src = basin_nc  # if gdalwarp sees the first variable as the raster; else use the NETCDF:"...":imbie form
 
 dst = os.path.join(basin_path, 'bedmap3_basins_0.1deg.tif')
 
 # Antarctica 0.1° lat/lon template: lon [-180,180], lat [-90,-60]
-cmd = [
-    "gdalwarp",
-    "-s_srs", crs_stereo, #'+proj=stere +lat_0=-90 +lat_ts=-71 +lon_0=0 +datum=WGS84',
-    "-t_srs", crs_stereo, #"EPSG:4326",
-    "-te",  str(xmin), str(ymin), str(xmax), str(ymax),      # extent: lon min, lat min, lon max, lat max
-    "-tr",  "10000", "10000",                    # 0.1° grid (# 10 km pixels (meters))
-    "-r", "near",                            # preserve integer IDs
-    "-ot", "Int16",
-    "-co", "COMPRESS=DEFLATE", "-co", "PREDICTOR=2", "-co", "TILED=YES",
-    "-dstnodata", "0",
-    src, dst
-]
-subprocess.run(cmd, check=True)
+# cmd = [
+#     "gdalwarp",
+#     "-s_srs", crs_stereo, #'+proj=stere +lat_0=-90 +lat_ts=-71 +lon_0=0 +datum=WGS84',
+#     "-t_srs", crs_stereo, #"EPSG:4326",
+#     "-te",  str(xmin), str(ymin), str(xmax), str(ymax),      # extent: lon min, lat min, lon max, lat max
+#     "-tr",  "10000", "10000",                    # 0.1° grid (# 10 km pixels (meters))
+#     "-r", "near",                            # preserve integer IDs
+#     "-ot", "Int16",
+#     "-co", "COMPRESS=DEFLATE", "-co", "PREDICTOR=2", "-co", "TILED=YES",
+#     "-dstnodata", "0",
+#     src, dst
+# ]
+# subprocess.run(cmd, check=True)
 
+# Read the remapped file
+basins_imbie = xr.open_dataarray(dst)
 basins_imbie = basins_imbie.where((basins_imbie > 1) & (basins_imbie.notnull()))
 
-# - - - - - - - - - - Plot basins - - - - - - - - - - - - - - - - - - - - - - - 
+# --- Helper: carry mapping in DataArray coords (nice for groupby) ---
+
+# Create a labelled copy where 'basin_name' is a coordinate matching each pixel
+name_lookup = xr.DataArray(
+    np.vectorize(lambda v: id2name.get(int(v), "NA") if np.isfinite(v) else "NA")(basins_imbie.values),
+    coords=basins_imbie.coords, dims=basins_imbie.dims
+)
+name_lookup.name = "basin_name"
+basin_imbie_with_name_map = xr.Dataset(dict(basin_id=basins_imbie, basin_name=name_lookup))
+
+# 0) Squeeze band, mask invalid, and (optionally) drop Islands (ID==1)
+basin_id = basin_imbie_with_name_map['basin_id'].squeeze('band', drop=True)
+basin_name = basin_imbie_with_name_map['basin_name'].squeeze('band', drop=True)
+
+# - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
+
+rignot_deltaS_err = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='1-sigma_Error(Gt)')
+
+# - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
+# Year window
+YEARS = [2019, 2020]
+#%% - - - - - - - - - - Plot basins - - - - - - - - - - - - - - - - - - - - - - - 
 
 # Set up colormap and norm for 27 discrete basins
 colors = plt.cm.gist_ncar(np.linspace(0, 1, 19))
@@ -88,41 +135,28 @@ norm = mcolors.BoundaryNorm(levels, cmap.N)
 
 # Plot
 proj = ccrs.SouthPolarStereo()
-fig, ax = plt.subplots(figsize=(12, 8), dpi=300, subplot_kw={'projection': proj})
 
-# Set extent for Antarctica
+# --- Pretty plot to sanity-check labels on the map ---
+fig, ax = plt.subplots(figsize=(9,10), subplot_kw={'projection': proj}, dpi=200)
 ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
-
-# Plot the data
-p = basins_imbie.plot(
-    ax=ax,
-    transform=ccrs.SouthPolarStereo(),
-    cmap=cmap,
-    norm=norm,
-    add_colorbar=False
-)
-
+im = basins_imbie.plot(ax=ax, transform=proj, cmap='gist_ncar', add_colorbar=False)
 # Add white background
 ax.set_facecolor('white')
+ax.coastlines(resolution = '110m', color="k", linewidth=0.6)
 
-# Annotate each basin with its ID
-for basin_id in range(1, 20):
-    # Create a mask for the current basin
-    basin_mask = basins_imbie == basin_id
-
-    # Get the centroid of the basin
-    y, x = np.where(basin_mask)
-    if len(x) > 0 and len(y) > 0:
-        centroid_x = basins_imbie['x'].values[x].mean()
-        centroid_y = basins_imbie['y'].values[y].mean()
-        ax.text(
-            centroid_x, centroid_y, str(basin_id),
-            color='black', fontsize=15, ha='center', va='center', zorder=5,
-            transform=ccrs.SouthPolarStereo()
-        )
-
-# Add coastlines
-ax.coastlines(resolution='110m', color='black', linewidth=0.5)
+# annotate using pixel centroids
+ids = sorted(id2name.keys())
+for bid in ids:
+    mask = (basins_imbie == bid)
+    if mask.any():
+        yy, xx = np.where(mask[0].values)
+        if len(xx) == 0: 
+            continue
+        cx = float(basins_imbie['x'].values[xx].mean())
+        cy = float(basins_imbie['y'].values[yy].mean())
+        ax.text(cx, cy, id2name[bid], fontsize=12, ha='center', va='center',
+                transform=proj, color='k', bbox=dict(boxstyle="round,pad=0.2",
+                fc="white", ec="none", alpha=0.6))
 
 # Remove axis
 ax.axis('off')
@@ -131,13 +165,11 @@ ax.axis('off')
 ax.set_title("IMBIE Basins with IDs ", fontsize=18)
 plt.tight_layout()
 
-# - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
+# Save the imbie basin plot
+output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
 
-rignot_deltaS_err = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='1-sigma_Error(Gt)')
 
-# - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
-# Year window
-YEARS = [2019, 2020]
 #%% 1) Read David's Excel and compute ΔS (Gt/month) for 2019–2020
 rignot_deltaS = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='Basin_Timeseries (Gt)')
 
@@ -175,6 +207,83 @@ dS_long = dS_long.dropna(subset=["dS_Gt"]).reset_index(drop=True)
 
 print(f"[David] ΔS computed for months {dS_long['date'].min().date()} to {dS_long['date'].max().date()}")
 
+# create an xarray data based on the df above mapping basin mae to the GT values
+# ds_long_xr = dS_long.set_index(["date", "basin"]).to_xarray()
+
+
+# Mask out non-basin pixels
+basin_id = basin_id.where(np.isfinite(basin_id))
+basin_name = basin_name.where(basin_name != 'NA')
+
+# If you want to exclude islands up front:
+basin_id = basin_id.where(basin_id != 1)
+basin_name = basin_name.where(basin_id.notnull())
+
+# Build a robust ID↔name mapping from the grid itself (use most frequent name per ID)
+
+
+def generate_basin_id_mapping(basin_id, basin_name, input_df):
+    ids = np.sort(np.unique(basin_id.values[~np.isnan(basin_id.values)])).astype(int)
+    id_to_name = {}
+    for bid in ids:
+        mask = (basin_id == bid)
+        names_here = basin_name.where(mask).values
+        names_here = [n for n in names_here.ravel() if isinstance(n, str) and n != 'NA']
+        if len(names_here):
+        # modal name in the basin
+            modal = Counter(names_here).most_common(1)[0][0]
+            id_to_name[bid] = modal
+
+# Also keep a normalized dictionary for matching to David’s column labels
+    id_to_name_norm = {bid: norm_name(nm) for bid, nm in id_to_name.items() if nm is not None}
+    name_to_id_norm = {nm: bid for bid, nm in id_to_name_norm.items()}
+
+# Normalize basin names in David’s table and attach basin_id
+    df = input_df.copy()
+    df['basin_norm'] = df['basin'].map(norm_name)
+    df['basin_id'] = df['basin_norm'].map(name_to_id_norm)
+
+# Drop rows we can’t map, and Islands (ID==1) just in case
+    df = df.dropna(subset=['basin_id']).copy()
+    df['basin_id'] = df['basin_id'].astype(int)
+    df = df[df['basin_id'] != 1]
+    return df
+
+dS_long_df = generate_basin_id_mapping(basin_id, basin_name, dS_long)
+
+# Build the time-by-space raster
+def create_basin_xrr(basin_id, basin_name, df, colnme, attrs):
+    dates = np.sort(df['date'].unique())
+    frames = []
+    for t in dates:
+        slic = df.loc[df['date'] == t, ['basin_id', colnme]]
+        values = dict(zip(slic['basin_id'].astype(int), slic[colnme].astype(float)))
+        raster_t = paint_by_id(basin_id, values)
+        raster_t = raster_t.assign_coords(date=np.datetime64(t)).expand_dims('date')
+        frames.append(raster_t)
+
+    dS_raster = xr.concat(frames, dim='date')
+    dS_raster.name = 'deltaS_Gt_per_month'
+    dS_raster.attrs.update(attrs)
+
+# (Optional) carry through your basin metadata alongside
+    dS_raster = dS_raster.assign_coords(
+    basin_id=(('y','x'), basin_id.values),
+    basin_name=(('y','x'), basin_name.values))
+    return dS_raster
+attributes = {
+    'description': 'Monthly basin-total ΔS painted to all pixels of each basin (not areal density). ',
+    'long_name': 'Monthly basin mass anomaly change',
+    'units': 'Gt/month',
+    'source': 'Computed from David Rignot basin Excel (DataCombo_RignotBasins.xlsx)',
+    'note': 'Islands (ID=1) excluded; names matched via modal name per ID from the basin grid.'
+}
+
+dS_raster = create_basin_xrr(basin_id, basin_name, dS_long_df, 'dS_Gt', attributes)
+# save to disk
+# out_flnme = os.path.join(basin_path, 'rignot_deltaS_monthly_2019_2020.nc')
+# dS_raster.to_netcdf(out_flnme)
+# print(f"[David] ΔS raster saved to {out_flnme}")
 #%% 2) Read Chad's discharge & basal melt (annual Gt/yr) and spread to months
 discharge_data = pd.read_excel(os.path.join(basin_path, 'antarctic_discharge_2013-2022_imbie.xlsx'), sheet_name=['Discharge (Gt yr^-1)', 'Summary'])
 basin_discharge = discharge_data['Discharge (Gt yr^-1)']
@@ -190,6 +299,7 @@ basal_melt = basal_melt.loc[basal_melt['IMBIE basin'].isin(basin_cols_), ['IMBIE
 
 # Convert annual (Gt/yr) → monthly (Gt/mo), then expand to months
 D_month = annual_to_monthly_long(basin_discharge,YEARS, "discharge_Gt")
+D_month_df = generate_basin_id_mapping(basin_id, basin_name, D_month)
 
 # Convert annual to monthly
 basal_melt["basal_Gt_per_month"] = basal_melt["Basal melt total Gt/yr"] / 12.0
@@ -205,9 +315,42 @@ for _, row in basal_melt.iterrows():
                 "basal_Gt": row["basal_Gt_per_month"]
             })
 B_month = pd.DataFrame(rows)
+B_month_df = generate_basin_id_mapping(basin_id, basin_name, B_month)
 
 Q_month = D_month.merge(B_month, on=["date","basin"], how="outer")
 print(f"[Chad] Qnet monthly rows: {len(Q_month)}")
+
+# create x array for discharge and basal melt separately
+attributes = {
+    'description': 'Monthly basin-total discharge + basal melt painted to all pixels of each basin (not areal density). ',
+    'long_name': 'Monthly basin discharge ',
+    'units': 'Gt/month ',
+    'source': 'Computed from Chad’s discharge Excel (antarctic_discharge_2013-2022_imbie.xlsx)',
+    'note': 'Islands (ID=1) excluded; names matched via modal name per ID from the basin grid.'
+}
+discharge_raster = create_basin_xrr(basin_id, basin_name, D_month_df, 'discharge_Gt', attributes)
+
+attributes = {
+    'description': 'Monthly basin-total basal melt painted to all pixels of each basin (not areal density). ',
+    'long_name': 'Monthly basin basal melt ',
+    'units': 'Gt/month ',
+    'source': 'Computed from Chad’s discharge Excel (antarctic_discharge_2013-2022_imbie.xlsx)',
+    'note': 'Islands (ID=1) excluded; names matched via modal name per ID from the basin grid.'
+}
+basal_melt_raster = create_basin_xrr(basin_id, basin_name, B_month_df, 'basal_Gt', attributes)
+
+# --- Provisional ID -> Name mapping by sorted unique IDs (excluding Islands) ---
+# def make_id_name_map_from_excel_order(basin_da, names):
+#     uniq_ids = np.sort(np.unique(basin_da.values[~np.isnan(basin_da.values)]).astype(int))
+#     uniq_ids = [i for i in uniq_ids if i != 1]  # drop Islands if present
+#     if len(uniq_ids) != len(names):
+#         raise ValueError(f"Found {len(uniq_ids)} non-island IDs but have {len(names)} names. "
+#                          "Please check inputs or mask.")
+#     return dict(zip(uniq_ids, names))
+
+# id2name = make_id_name_map_from_excel_order(basins_imbie, basin_cols_)
+
+
 
 #%% 3) RACMO: integrate subltot (mm/month) to basin Gt/month
 racmo_sublim_file = os.path.join(racmo_path, 'subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_197901_202312.nc')

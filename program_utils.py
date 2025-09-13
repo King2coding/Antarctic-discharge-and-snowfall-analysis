@@ -13,6 +13,8 @@ import datetime
 from datetime import datetime, timedelta
 from scipy.stats import linregress
 import math
+from collections import Counter
+
 
 import matplotlib.pyplot as plt
 
@@ -791,3 +793,37 @@ def annual_to_monthly_long(df_years, YEARS, value_name):
     longy[value_name] = longy[value_name] / 12.0
     return longy[["date","basin", value_name]]
 
+#-----------------------------------------------------------------------------
+def paint_by_id(basin_id_da: xr.DataArray, values_by_id: dict) -> xr.DataArray:
+    # Build a small lookup table for vectorized indexing
+    max_id = int(np.nanmax(basin_id_da.values))
+    lut = np.full(max_id + 1, np.nan, dtype='float64')
+    for k, v in values_by_id.items():
+        if k is not None and k >= 0 and k <= max_id:
+            lut[int(k)] = float(v)
+
+    # Vectorized index, preserving NaNs
+    def _map_ids(arr):
+        out = np.full(arr.shape, np.nan, dtype='float64')
+        valid = np.isfinite(arr)
+        out[valid] = lut[arr[valid].astype(int)]
+        return out
+
+    mapped = xr.apply_ufunc(
+        _map_ids,
+        basin_id_da,
+        input_core_dims=[['y','x']],
+        output_core_dims=[['y','x']],
+        dask='parallelized',
+        output_dtypes=[float],
+    )
+    mapped.attrs['units'] = 'Gt month-1'
+    return mapped
+#----------------------------------------------------------------------------
+def norm_name(s):
+    if s is None:
+        return None
+    return (str(s)
+            .replace('–','-').replace('—','-')  # dash variants
+            .replace(' ', '')                   # remove spaces
+            .upper())
