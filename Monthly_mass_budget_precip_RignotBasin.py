@@ -245,6 +245,9 @@ attributes = {
 dS_raster = create_basin_xrr(basin_id[0], basin_name[0], dS_long_df, 
                              'dS_Gt', attributes, "deltaS_Gt_per_month")
 
+vals = dS_raster['basin_name'].values.ravel()
+non_nan = vals[pd.notna(vals)]
+np.unique(non_nan)
 # save to disk
 # out_flnme = os.path.join(basin_path, 'rignot_deltaS_monthly_2019_2020.nc')
 # dS_raster.to_netcdf(out_flnme)
@@ -458,108 +461,6 @@ out_nc = os.path.join(racmo_path, "subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2019_2
 racmo_on_imbie = xr.open_dataarray(out_nc)
 
 #%%
-
-# --- helpers ---------------------------------------------------------------
-
-def _stack_space(da):
-    if "stacked_y_x" in da.dims:
-        return da.rename({"stacked_y_x": "space"})
-    return da.stack(space=("y", "x"))
-
-def _basin_labels_from(da):
-    lbl = da["basin_id"]
-    if "stacked_y_x" in lbl.dims:
-        lbl = lbl.rename({"stacked_y_x":"space"})
-    else:
-        lbl = lbl.stack(space=("y","x"))
-    return lbl
-
-def painted_to_basin_series(da):
-    """
-    da holds basin totals painted to pixels (units already Gt/month).
-    Return (date, basin_id) by taking spatial mean within each basin.
-    """
-    data   = _stack_space(da)
-    labels = _basin_labels_from(da)
-    valid  = np.isfinite(labels)
-    data   = data.where(valid)
-    labels = labels.where(valid)
-    out = data.groupby(labels).mean(dim="space", skipna=True)
-    return out.transpose("date", "basin_id")
-
-def areal_to_basin_series(da, *, pixel_area_m2, units="mm_we_per_month"):
-    """
-    da is an areal field over (date, y, x) (e.g., sublimation).
-    Convert to Gt/month by summing over pixels within each basin.
-    units: "mm_we_per_month" | "m_we_per_month" | "kg_m2_s"
-    """
-    data   = _stack_space(da)
-    labels = _basin_labels_from(da)
-    valid  = np.isfinite(labels)
-    data   = data.where(valid)
-    labels = labels.where(valid)
-
-    if units == "mm_we_per_month":     # mm water equivalent accumulated per month
-        kg_per_m2 = (data / 1000.0) * 1000.0     # mm -> m, then * rho_w
-    elif units == "m_we_per_month":    # m w.e. accumulated per month
-        kg_per_m2 = data * 1000.0
-    elif units == "kg_m2_s":           # flux kg m^-2 s^-1 -> accumulate over month
-        secs = xr.DataArray(da["date"].dt.days_in_month * 86400,
-                            coords={"date": da["date"]}, dims=("date",))
-        kg_per_m2 = data * secs
-    elif units in ("kg_m2_per_month", "kg m-2"):
-        kg_per_m2 = data
-    else:
-        raise ValueError("Unsupported units for sublimation")
-
-    kg = kg_per_m2 * pixel_area_m2
-    Gt = kg.groupby(labels).sum(dim="space", skipna=True) / 1e12
-    return Gt.transpose("date", "basin_id")
-
-def paint_basin_series_to_grid(series, template_with_basin_id):
-    """
-    series: DataArray (date, basin_id)
-    template_with_basin_id: DataArray with coords basin_id(y,x) (and maybe basin_name)
-    returns: DataArray (date, y, x)
-    """
-    labels = template_with_basin_id["basin_id"]
-    if "stacked_y_x" in labels.dims:
-        labels = labels.rename({"stacked_y_x": "space"})
-    else:
-        labels = labels.stack(space=("y", "x"))
-
-    series_ids = series["basin_id"].values
-    exist = xr.apply_ufunc(np.isin, labels, series_ids)
-
-    dummy_id = series_ids[0]
-    safe_labels = labels.where(exist).astype(series["basin_id"].dtype)
-    safe_labels = safe_labels.fillna(dummy_id)
-
-    painted = series.sel(basin_id=safe_labels)  # (date, space)
-    painted = painted.where(exist)
-    out = painted.unstack("space")
-
-    coords_to_add = {"basin_id": template_with_basin_id["basin_id"]}
-    if "basin_name" in template_with_basin_id.coords:
-        coords_to_add["basin_name"] = template_with_basin_id.coords["basin_name"]
-    out = out.assign_coords(**coords_to_add)
-    return out
-
-
-def mask_to_basins(da, basin_labels_like):
-    """
-    Keep values only where basin_labels_like is finite.
-    Also carry basin_id / basin_name coords forward so later
-    groupby(label) works without surprises.
-    """
-    mask = np.isfinite(basin_labels_like)
-    out = da.where(mask)
-    # attach the labels so they travel with the DataArray
-    coords = {"basin_id": basin_labels_like}
-    if "basin_name" in basin_labels_like.coords:
-        coords["basin_name"] = basin_labels_like.coords["basin_name"]
-    return out.assign_coords(**coords)
-
 # --- compute basin series for each component -------------------------------
 
 # 1) Time align
@@ -641,22 +542,70 @@ Precip_map_mm.attrs.update({
 
 
 #%%
+# 0) Short alias
+Pmm = Precip_map_mm  # (date, y, x), mm/month, constant within each basin_id
 
+# 1) Basin-time series (mm/month) by taking spatial mean inside basins
 
-basin_labels = D["basin_id"]                       # (y,x) float32 with NaNs outside basins
-cell_area = xr.full_like(basin_labels, 10000.0**2) # m² per pixel
-cell_area = cell_area.where(np.isfinite(basin_labels))
+Pmm = Precip_map_mm.where(np.isfinite(Precip_map_mm["basin_id"]))
+Pmm_basin = (
+    _stack_space(Pmm)                                   # (date, space)
+    .groupby(_basin_labels_from(Pmm))                   # group by basin_id labels
+    .mean("space", skipna=True)                         # (date, basin_id)
+    .transpose("date", "basin_id")
+)
+# 2) Annual accumulation (sum over months) → mm/year
+Pmm_basin_ann = (
+    Pmm_basin
+    .groupby("date.year")
+    .sum("date")                         # sum of 12 months
+    .rename(year="year")
+    .sel(year=[2019, 2020])              # pick the two years you want
+)
 
-# area per basin_id (m²); result dims: ('basin_id',)
-basin_area_m2 = cell_area.groupby(basin_labels.rename("basin_id")).sum()
+# 3) Paint the annual basin values back to (y, x) maps
+template = xr.Dataset(dict(basin_id=basin_id[0], basin_name=basin_name[0]))
+Pmm_ann_maps = paint_basin_series_to_grid(Pmm_basin_ann, template)  # (year, y, x)
+Pmm_ann_maps.attrs.update(dict(units="mm/year", description="Annual mass-budget precipitation"))
 
+# 4) (optional) Save & quick plots
+Pmm_ann_maps.to_netcdf(os.path.join(path_to_plots, "Pmb_annual_2019_2020_mm.nc"))
 
-# Each becomes (date, basin_id)
-D_basin   = D.groupby(D["basin_id"]).mean(dim=("y","x"))
-BM_basin  = BM.groupby(BM["basin_id"]).mean(dim=("y","x"))
-DS_basin  = SUB_Gt_like  # if you did the same “painted total” for ΔS, use the same approach:
-# DS_basin = DS.groupby(DS["basin_id"]).mean(dim=("y","x"))
+for yr in [2019, 2020]:
+    Pmm_ann_maps.sel(year=yr).plot(
+        vmin=0, vmax=300,
+        cmap="jet",  # or any diverging you like
+        robust=True,
+        cbar_kwargs={"label": "Mass-budget precipitation (mm/year)"}
+    )
+    plt.title(f"P_MB annual accumulation — {yr}")
+    plt.show()
 
-# If sublimation started as areal (mm/month), you can skip a Gt route and keep in mm/month.
-# If you already converted sublimation to Gt/month (SUB_basin_Gt), keep that here:
-# SUB_basin_Gt = SUB_Gt.groupby(SUB_Gt["basin_id"]).mean(dim=("y","x"))
+Pmm_basin_ann_arrs = [(f'P_MB annual accumulation — {yr}',Pmm_ann_maps.sel(year=yr)) for yr in [2019, 2020]]
+compare_mean_precp_plot(Pmm_basin_ann_arrs, 
+                        vmin=0, vmax=300, 
+                        cbar_tcks=[0,  50, 100, 150, 200, 250, 300])
+
+# - -- - - - - - - -  include seasonal and climatological plots - - - - 
+# Add a 'season' coordinate
+# seaons
+Pmm_season = Pmm.groupby('date.season').mean(dim="date")
+Pmm_season = Pmm_season.assign_coords(season=["DJF", "MAM", "JJA", "SON"])
+
+# make array for plot
+Pmm_season_arrs = [(f'P_MB seasonal mean — {s}', Pmm_season.sel(season=s)) for s in ["DJF", "MAM", "JJA", "SON"]]
+compare_mean_precp_plot(Pmm_season_arrs, 
+                        vmin=0, vmax=30, 
+                        cbar_tcks=[0, 2.5, 5, 7.5,10, 15, 20, 25, 30])
+gc.collect()
+
+# climatological
+Pmm_clim = Pmm.groupby('date.month').mean(dim="date")
+Pmm_clim = Pmm_clim.assign_coords(month=np.arange(1,13))
+# make array for plot
+month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+Pmm_clim_arrs = [(f'P_MB climatological mean — {month_names[m-1]}', Pmm_clim.sel(month=m)) for m in np.arange(1,13)]
+compare_mean_precp_plot(Pmm_clim_arrs, 
+                        vmin=0, vmax=30, 
+                        cbar_tcks=[0, 2.5, 5, 7.5,10, 15, 20, 25, 30])
+gc.collect()

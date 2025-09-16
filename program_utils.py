@@ -41,6 +41,7 @@ import matplotlib.gridspec as gridspec
 import cartopy.feature as cfeature
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib import cm
+import matplotlib as mpl
 
 
 #%%
@@ -51,6 +52,18 @@ crs = "+proj=longlat +datum=WGS84 +no_defs"
 crs_format = 'proj4'
 
 crs_stereo = "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84"
+
+#- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+mpl.rcParams['font.family'] = 'serif'
+mpl.rcParams['font.serif'] = ['DejaVu Serif', 'Times', 'serif']
+mpl.rcParams['font.weight'] = 'bold'
+mpl.rcParams['axes.labelweight'] = 'bold'
+mpl.rcParams['axes.titleweight'] = 'bold'
+mpl.rcParams['xtick.labelsize'] = 18
+mpl.rcParams['ytick.labelsize'] = 18
+#- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 #%%
 # fucntions
 # function to read and process ERA5 precip file
@@ -681,7 +694,7 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
 
     # Determine the number of rows and columns for the grid
     n_products = len(arr_lst_mean)
-    ncols = 3  # Number of columns
+    ncols = 4  # Number of columns
     nrows = (n_products + ncols - 1) // ncols  # Calculate rows needed
 
     # Create a GridSpec with precise control over spacing
@@ -693,7 +706,8 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
     for i, (product_name, data) in enumerate(arr_lst_mean):
         ax = fig.add_subplot(gs[i], projection=proj)
         ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
-        ax.coastlines(lw=0.25, resolution="110m", zorder=2)
+        # ax.coastlines(lw=0.25, resolution="110m")
+        ax.coastlines(resolution = '110m', color="k", linewidth=0.6)
 
         # Plot the data
         data.plot(
@@ -952,3 +966,104 @@ def create_basin_xrr(basin_id, basin_name, df, colnme, attrs, var_name):
     return dS_raster
 #----------------------------------------------------------------------------
 
+# --- helpers ---------------------------------------------------------------
+
+def _stack_space(da):
+    if "stacked_y_x" in da.dims:
+        return da.rename({"stacked_y_x": "space"})
+    return da.stack(space=("y", "x"))
+
+def _basin_labels_from(da):
+    lbl = da["basin_id"]
+    if "stacked_y_x" in lbl.dims:
+        lbl = lbl.rename({"stacked_y_x":"space"})
+    else:
+        lbl = lbl.stack(space=("y","x"))
+    return lbl
+
+def painted_to_basin_series(da):
+    """
+    da holds basin totals painted to pixels (units already Gt/month).
+    Return (date, basin_id) by taking spatial mean within each basin.
+    """
+    data   = _stack_space(da)
+    labels = _basin_labels_from(da)
+    valid  = np.isfinite(labels)
+    data   = data.where(valid)
+    labels = labels.where(valid)
+    out = data.groupby(labels).mean(dim="space", skipna=True)
+    return out.transpose("date", "basin_id")
+
+def areal_to_basin_series(da, *, pixel_area_m2, units="mm_we_per_month"):
+    """
+    da is an areal field over (date, y, x) (e.g., sublimation).
+    Convert to Gt/month by summing over pixels within each basin.
+    units: "mm_we_per_month" | "m_we_per_month" | "kg_m2_s"
+    """
+    data   = _stack_space(da)
+    labels = _basin_labels_from(da)
+    valid  = np.isfinite(labels)
+    data   = data.where(valid)
+    labels = labels.where(valid)
+
+    if units == "mm_we_per_month":     # mm water equivalent accumulated per month
+        kg_per_m2 = (data / 1000.0) * 1000.0     # mm -> m, then * rho_w
+    elif units == "m_we_per_month":    # m w.e. accumulated per month
+        kg_per_m2 = data * 1000.0
+    elif units == "kg_m2_s":           # flux kg m^-2 s^-1 -> accumulate over month
+        secs = xr.DataArray(da["date"].dt.days_in_month * 86400,
+                            coords={"date": da["date"]}, dims=("date",))
+        kg_per_m2 = data * secs
+    elif units in ("kg_m2_per_month", "kg m-2"):
+        kg_per_m2 = data
+    else:
+        raise ValueError("Unsupported units for sublimation")
+
+    kg = kg_per_m2 * pixel_area_m2
+    Gt = kg.groupby(labels).sum(dim="space", skipna=True) / 1e12
+    return Gt.transpose("date", "basin_id")
+
+def paint_basin_series_to_grid(series, template_with_basin_id):
+    """
+    series: DataArray (date, basin_id)
+    template_with_basin_id: DataArray with coords basin_id(y,x) (and maybe basin_name)
+    returns: DataArray (date, y, x)
+    """
+    labels = template_with_basin_id["basin_id"]
+    if "stacked_y_x" in labels.dims:
+        labels = labels.rename({"stacked_y_x": "space"})
+    else:
+        labels = labels.stack(space=("y", "x"))
+
+    series_ids = series["basin_id"].values
+    exist = xr.apply_ufunc(np.isin, labels, series_ids)
+
+    dummy_id = series_ids[0]
+    safe_labels = labels.where(exist).astype(series["basin_id"].dtype)
+    safe_labels = safe_labels.fillna(dummy_id)
+
+    painted = series.sel(basin_id=safe_labels)  # (date, space)
+    painted = painted.where(exist)
+    out = painted.unstack("space")
+
+    coords_to_add = {"basin_id": template_with_basin_id["basin_id"]}
+    if "basin_name" in template_with_basin_id.coords:
+        coords_to_add["basin_name"] = template_with_basin_id.coords["basin_name"]
+    out = out.assign_coords(**coords_to_add)
+    return out
+
+
+def mask_to_basins(da, basin_labels_like):
+    """
+    Keep values only where basin_labels_like is finite.
+    Also carry basin_id / basin_name coords forward so later
+    groupby(label) works without surprises.
+    """
+    mask = np.isfinite(basin_labels_like)
+    out = da.where(mask)
+    # attach the labels so they travel with the DataArray
+    coords = {"basin_id": basin_labels_like}
+    if "basin_name" in basin_labels_like.coords:
+        coords["basin_name"] = basin_labels_like.coords["basin_name"]
+    return out.assign_coords(**coords)
+#-----------------------------------------------------------------------------
