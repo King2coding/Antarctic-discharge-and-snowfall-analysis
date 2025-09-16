@@ -57,19 +57,19 @@ id2name = {
     19: "K-A"
 }
 
-basin_fle = os.path.join(basin_path, 'bedmap3_basins.nc')
-bedmap3_basins = xr.open_dataset(basin_fle)
-basins_imbie = bedmap3_basins['imbie'].copy()
-# Specs from the basin grid
-basin_transform = basins_imbie.rio.transform()
-height, width = basins_imbie.shape
-xmin, ymax = basin_transform.c, basin_transform.f
-xres, yres = basin_transform.a, -basin_transform.e
-xmax = xmin + width * xres
-ymin = ymax - height * yres
-print(f"Basin grid: width={width}, height={height}, xres={xres}, yres={yres}")
-basin_bounds = (xmin, xmax, ymin, ymax)  # (minx, maxx, miny, maxy)
-print(f"Basin bounds: {basin_bounds}")
+# basin_fle = os.path.join(basin_path, 'bedmap3_basins.nc')
+# bedmap3_basins = xr.open_dataset(basin_fle)
+# basins_imbie = bedmap3_basins['imbie'].copy()
+# # Specs from the basin grid
+# basin_transform = basins_imbie.rio.transform()
+# height, width = basins_imbie.shape
+# xmin, ymax = basin_transform.c, basin_transform.f
+# xres, yres = basin_transform.a, -basin_transform.e
+# xmax = xmin + width * xres
+# ymin = ymax - height * yres
+# print(f"Basin grid: width={width}, height={height}, xres={xres}, yres={yres}")
+# basin_bounds = (xmin, xmax, ymin, ymax)  # (minx, maxx, miny, maxy)
+# print(f"Basin bounds: {basin_bounds}")
 # # Print the bounds for verification
 # print(f"Basin bounds: x_min={xmin}, x_max={xmax}, y_min={ymin}, y_max={ymax}")
 
@@ -98,6 +98,17 @@ dst = os.path.join(basin_path, 'bedmap3_basins_0.1deg.tif')
 
 # Read the remapped file
 basins_imbie = xr.open_dataarray(dst)
+if not basins_imbie.rio.crs:
+    basins_imbie = basins_imbie.rio.write_crs(CRS.from_proj4(crs_stereo))
+basin_transform = basins_imbie.rio.transform()
+height, width = basins_imbie.shape[1:]
+xmin, ymax = basin_transform.c, basin_transform.f
+xres, yres = basin_transform.a, -basin_transform.e
+xmax = xmin + width * xres
+ymin = ymax - height * yres
+print(f"Basin grid: width={width}, height={height}, xres={xres}, yres={yres}")
+basin_bounds = (xmin, xmax, ymin, ymax)  # (minx, maxx, miny, maxy)
+print(f"Basin bounds: {basin_bounds}")
 basins_imbie = basins_imbie.where((basins_imbie > 1) & (basins_imbie.notnull()))
 
 # --- Helper: carry mapping in DataArray coords (nice for groupby) ---
@@ -111,8 +122,8 @@ name_lookup.name = "basin_name"
 basin_imbie_with_name_map = xr.Dataset(dict(basin_id=basins_imbie, basin_name=name_lookup))
 
 # 0) Squeeze band, mask invalid, and (optionally) drop Islands (ID==1)
-basin_id = basin_imbie_with_name_map['basin_id'].squeeze('band', drop=True)
-basin_name = basin_imbie_with_name_map['basin_name'].squeeze('band', drop=True)
+basin_id = basin_imbie_with_name_map['basin_id']
+basin_name = basin_imbie_with_name_map['basin_name']
 
 # - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
 
@@ -231,7 +242,8 @@ attributes = {
     'note': 'Islands (ID=1) excluded; names matched via modal name per ID from the basin grid.'
 }
 
-dS_raster = create_basin_xrr(basin_id, basin_name, dS_long_df, 'dS_Gt', attributes)
+dS_raster = create_basin_xrr(basin_id[0], basin_name[0], dS_long_df, 
+                             'dS_Gt', attributes, "deltaS_Gt_per_month")
 
 # save to disk
 # out_flnme = os.path.join(basin_path, 'rignot_deltaS_monthly_2019_2020.nc')
@@ -281,7 +293,9 @@ attributes = {
     'source': 'Computed from Chad’s discharge Excel (antarctic_discharge_2013-2022_imbie.xlsx)',
     'note': 'Islands (ID=1) excluded; names matched via modal name per ID from the basin grid.'
 }
-discharge_raster = create_basin_xrr(basin_id, basin_name, D_month_df, 'discharge_Gt', attributes)
+discharge_raster = create_basin_xrr(basin_id[0], basin_name[0], 
+                                    D_month_df, 'discharge_Gt', 
+                                    attributes, "discharge_Gt_per_month")
 
 attributes = {
     'description': 'Monthly basin-total basal melt painted to all pixels of each basin (not areal density). ',
@@ -290,7 +304,8 @@ attributes = {
     'source': 'Computed from Chad’s discharge Excel (antarctic_discharge_2013-2022_imbie.xlsx)',
     'note': 'Islands (ID=1) excluded; names matched via modal name per ID from the basin grid.'
 }
-basal_melt_raster = create_basin_xrr(basin_id, basin_name, B_month_df, 'basal_Gt', attributes)
+basal_melt_raster = create_basin_xrr(basin_id[0], basin_name[0], B_month_df, 
+                                     'basal_Gt', attributes, "basal_Gt_per_month")
 
 # --- Provisional ID -> Name mapping by sorted unique IDs (excluding Islands) ---
 # def make_id_name_map_from_excel_order(basin_da, names):
@@ -306,80 +321,342 @@ basal_melt_raster = create_basin_xrr(basin_id, basin_name, B_month_df, 'basal_Gt
 
 
 #%% 3) RACMO: integrate subltot (mm/month) to basin Gt/month
-racmo_sublim_file = os.path.join(racmo_path, 'subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_197901_202312.nc')
+# racmo_sublim_file = os.path.join(racmo_path, 'subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_197901_202312.nc')
+# # --- open & subset RACMO to 2019–2020 ---
+# # --- 1) open & subset RACMO on its native curvilinear grid ---
+# # 1) Open and subset RACMO to 2019–2020
+# da_src = xr.open_dataset(racmo_sublim_file)['subltot'].sel(time=slice('2019-01-01', '2020-12-31'))
 
-# 2) Build gdalwarp call
-src = f'NETCDF:"{racmo_sublim_file}":subltot'  # select the variable
-dst = os.path.join(misc_out, "racmo_subl_on_basins.tif")
+# # Pull 2-D lon/lat (RACMO supplies these on the curvilinear grid)
+# lon2d = da_src['lon'].values
+# lat2d = da_src['lat'].values
 
-stereo = '+proj=stere +lat_0=-90 +lat_ts=-71 +lon_0=0 +datum=WGS84'
-src = f'NETCDF:"{racmo_sublim_file}":subltot'
-dst = os.path.join(misc_out, "racmo_subl_on_basins.tif")
+# # Safety: mask impossible lon/lat
+# bad = ~np.isfinite(lon2d) | ~np.isfinite(lat2d)
+# if bad.any():
+#     lon2d = lon2d.copy()
+#     lat2d = lat2d.copy()
+#     lon2d[bad] = np.nan
+#     lat2d[bad] = np.nan
 
-cmd = [
-    "gdalwarp",
-    "-s_srs", "EPSG:4326",
-    "-t_srs", stereo,
-    "-te", str(xmin), str(ymin), str(xmax), str(ymax),
-    "-ts", str(width), str(height),
-    "-r", "bilinear",
-    "-multi", "-wo", "NUM_THREADS=ALL_CPUS",
-    "-srcnodata", "nan", "-dstnodata", "nan",
-    "-of", "GTiff",
-    src, dst
-]
+# # 2) Build target x/y coordinates (pixel centers) from your transform/shape
+# #    (x = xmin + (j + 0.5)*xres, y = ymax - (i + 0.5)*|yres|)
+# # height, width = basins_imbie.shape
 
-subprocess.run(cmd, check=True) 
+# jj = np.arange(width)
+# ii = np.arange(height)
+# x_target = xmin + (jj + 0.5) * xres
+# y_target = ymax - (ii + 0.5) * abs(yres)
 
-racmo_sublim_data = xr.open_dataset(racmo_sublim_file)
-racmo_sublim_data = racmo_sublim_data['subltot'].sel(time=slice(f"{YEARS[0]}-01-01", f"{YEARS[-1]}-12-31"))
-racmo_ant_msk = xr.open_dataset(os.path.join(racmo_path, 'ANT11_masks.nc'))
+# X, Y = np.meshgrid(x_target, y_target)  # shape (height, width)
 
-# plt.imshow(racmo_sublim_data['lat'])
-# plt.colorbar(label='Latitude (degrees)')
+# # 3) Convert target X/Y (stereo) -> lon/lat for interpolation
+# crs_out = CRS.from_proj4(crs_stereo)
+# transform_to_geo = Transformer.from_crs(crs_out, CRS.from_epsg(4326), always_xy=True)
+# lon_tgt, lat_tgt = transform_to_geo.transform(X, Y)  # each (height, width)
 
-# plt.imshow(racmo_sublim_data['lon'])
-# plt.colorbar(label='Longitude (degrees)')
+# # 4) Prepare source points and target points for griddata
+# #    Flatten source and target; drop any NaN lon/lat in the source
+# pts_src = np.column_stack([lon2d.ravel(), lat2d.ravel()])
+# mask_src = np.isfinite(pts_src).all(axis=1)
+# pts_src = pts_src[mask_src]
 
-# plt.imshow(np.diff(racmo_sublim_data['lat'].values), cmap='jet')
-# plt.colorbar(label='Latitude difference (degrees)')
+# # To save RAM, we’ll pre-allocate the output and loop over time
+# out = np.full((da_src.sizes['time'], height, width), np.nan, dtype=np.float32)
+
+# # 5) Fast pre-check to avoid "all-NaN" surprises: ensure target overlaps source bbox
+# src_lon_min, src_lon_max = np.nanmin(lon2d), np.nanmax(lon2d)
+# src_lat_min, src_lat_max = np.nanmin(lat2d), np.nanmax(lat2d)
+# tgt_lon_min, tgt_lon_max = np.nanmin(lon_tgt), np.nanmax(lon_tgt)
+# tgt_lat_min, tgt_lat_max = np.nanmin(lat_tgt), np.nanmax(lat_tgt)
+
+# overlap_lon = (tgt_lon_min <= src_lon_max) and (tgt_lon_max >= src_lon_min)
+# overlap_lat = (tgt_lat_min <= src_lat_max) and (tgt_lat_max >= src_lat_min)
+# if not (overlap_lon and overlap_lat):
+#     print("WARNING: target grid is outside the RACMO domain in lon/lat — interpolation would be all NaN.")
+
+# # 6) Interpolate each time slice with bilinear (griddata 'linear'); fall back to nearest for edge holes
+# tgt_points = np.column_stack([lon_tgt.ravel(), lat_tgt.ravel()])  # (height*width, 2)
+
+# for tt in range(da_src.sizes['time']):
+#     v = da_src.isel(time=tt).values.astype(np.float64)  # (rlat, rlon)
+#     v_flat = v.ravel()[mask_src]
+
+#     # linear interpolation
+#     interp_lin = griddata(pts_src, v_flat, tgt_points, method='linear')
+
+#     # nearest-neighbor fill for anything linear missed (edges/outside convex hull)
+#     nan_mask = ~np.isfinite(interp_lin)
+#     if nan_mask.any():
+#         interp_nn = griddata(pts_src, v_flat, tgt_points[nan_mask], method='nearest')
+#         interp_lin[nan_mask] = interp_nn
+
+#     out[tt, :, :] = interp_lin.reshape(height, width).astype(np.float32)
+
+# # 7) Wrap into an xarray.DataArray on the IMBIE grid, stamp georeferencing
+# racmo_on_imbie = xr.DataArray(
+#     out,
+#     name='subltot',
+#     dims=('time', 'y', 'x'),
+#     coords={
+#         'time': da_src['time'].values,
+#         'x': x_target,  # meters, polar stereo
+#         'y': y_target,  # meters, polar stereo
+#     },
+#     attrs=da_src.attrs,  # keep units/long_name
+# )
+
+# # Attach CRS/transform so it plays nicely with rioxarray
+# racmo_on_imbie = racmo_on_imbie.rio.write_crs(CRS.from_proj4(crs_stereo).to_wkt(), inplace=False)
+# racmo_on_imbie = racmo_on_imbie.rio.write_transform(basin_transform, inplace=False)
+
+# # print(racmo_on_imbie)
+# # sve to disk
+# # start from the reprojected DataArray you showed
+# # start from your DataArray
+# da = racmo_on_imbie
+
+# # (1) Make a copy so we can mutate safely
+# da = da.copy()
+
+# # (2) Strip problematic CF-encoding attrs on the data variable
+# for key in ("_FillValue", "grid_mapping", "scale_factor", "add_offset"):
+#     if key in da.attrs:
+#         da.attrs.pop(key)
+
+# # (3) Also remove those from coords if any lib snuck them in
+# for c in list(da.coords):
+#     for key in ("_FillValue", "grid_mapping", "scale_factor", "add_offset"):
+#         if key in da[c].attrs:
+#             da[c].attrs.pop(key)
+
+# # (4) Drop the unused scalar coord that can confuse CF writing
+# if "rotated_pole" in da.coords and da["rotated_pole"].ndim == 0:
+#     da = da.drop_vars("rotated_pole")
+
+# # (5) Ensure a consistent dtype and NaN fill
+# da = da.astype("float32")
+
+# # (6) Build encoding ONLY on the data variable (not coords)
+# var_name = da.name or "subltot"
+# encoding = {
+#     var_name: {
+#         "zlib": True,
+#         "complevel": 4,
+#         "_FillValue": np.float32(np.nan),
+#         # optional but often nice:
+#         "dtype": "float32",
+#         "chunksizes": None,  # let engine choose; omit if you want specific chunking
+#     }
+# }
+
+# (7) Write to netCDF
+out_nc = os.path.join(racmo_path, "subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2019_2020.nc")
+# da.to_netcdf(out_nc, encoding=encoding)
+# print("wrote:", out_nc)
+
+racmo_on_imbie = xr.open_dataarray(out_nc)
+
+#%%
+
+# --- helpers ---------------------------------------------------------------
+
+def _stack_space(da):
+    if "stacked_y_x" in da.dims:
+        return da.rename({"stacked_y_x": "space"})
+    return da.stack(space=("y", "x"))
+
+def _basin_labels_from(da):
+    lbl = da["basin_id"]
+    if "stacked_y_x" in lbl.dims:
+        lbl = lbl.rename({"stacked_y_x":"space"})
+    else:
+        lbl = lbl.stack(space=("y","x"))
+    return lbl
+
+def painted_to_basin_series(da):
+    """
+    da holds basin totals painted to pixels (units already Gt/month).
+    Return (date, basin_id) by taking spatial mean within each basin.
+    """
+    data   = _stack_space(da)
+    labels = _basin_labels_from(da)
+    valid  = np.isfinite(labels)
+    data   = data.where(valid)
+    labels = labels.where(valid)
+    out = data.groupby(labels).mean(dim="space", skipna=True)
+    return out.transpose("date", "basin_id")
+
+def areal_to_basin_series(da, *, pixel_area_m2, units="mm_we_per_month"):
+    """
+    da is an areal field over (date, y, x) (e.g., sublimation).
+    Convert to Gt/month by summing over pixels within each basin.
+    units: "mm_we_per_month" | "m_we_per_month" | "kg_m2_s"
+    """
+    data   = _stack_space(da)
+    labels = _basin_labels_from(da)
+    valid  = np.isfinite(labels)
+    data   = data.where(valid)
+    labels = labels.where(valid)
+
+    if units == "mm_we_per_month":     # mm water equivalent accumulated per month
+        kg_per_m2 = (data / 1000.0) * 1000.0     # mm -> m, then * rho_w
+    elif units == "m_we_per_month":    # m w.e. accumulated per month
+        kg_per_m2 = data * 1000.0
+    elif units == "kg_m2_s":           # flux kg m^-2 s^-1 -> accumulate over month
+        secs = xr.DataArray(da["date"].dt.days_in_month * 86400,
+                            coords={"date": da["date"]}, dims=("date",))
+        kg_per_m2 = data * secs
+    elif units in ("kg_m2_per_month", "kg m-2"):
+        kg_per_m2 = data
+    else:
+        raise ValueError("Unsupported units for sublimation")
+
+    kg = kg_per_m2 * pixel_area_m2
+    Gt = kg.groupby(labels).sum(dim="space", skipna=True) / 1e12
+    return Gt.transpose("date", "basin_id")
+
+def paint_basin_series_to_grid(series, template_with_basin_id):
+    """
+    series: DataArray (date, basin_id)
+    template_with_basin_id: DataArray with coords basin_id(y,x) (and maybe basin_name)
+    returns: DataArray (date, y, x)
+    """
+    labels = template_with_basin_id["basin_id"]
+    if "stacked_y_x" in labels.dims:
+        labels = labels.rename({"stacked_y_x": "space"})
+    else:
+        labels = labels.stack(space=("y", "x"))
+
+    series_ids = series["basin_id"].values
+    exist = xr.apply_ufunc(np.isin, labels, series_ids)
+
+    dummy_id = series_ids[0]
+    safe_labels = labels.where(exist).astype(series["basin_id"].dtype)
+    safe_labels = safe_labels.fillna(dummy_id)
+
+    painted = series.sel(basin_id=safe_labels)  # (date, space)
+    painted = painted.where(exist)
+    out = painted.unstack("space")
+
+    coords_to_add = {"basin_id": template_with_basin_id["basin_id"]}
+    if "basin_name" in template_with_basin_id.coords:
+        coords_to_add["basin_name"] = template_with_basin_id.coords["basin_name"]
+    out = out.assign_coords(**coords_to_add)
+    return out
 
 
-transfm = racmo_sublim_data.rio.transform()
-minx = racmo_sublim_data['lon'].min().item()
-maxy = racmo_sublim_data['lat'].max().item()
-px_sz = round(racmo_sublim_data['lon'].diff('lon').mean().item(), 2)
+def mask_to_basins(da, basin_labels_like):
+    """
+    Keep values only where basin_labels_like is finite.
+    Also carry basin_id / basin_name coords forward so later
+    groupby(label) works without surprises.
+    """
+    mask = np.isfinite(basin_labels_like)
+    out = da.where(mask)
+    # attach the labels so they travel with the DataArray
+    coords = {"basin_id": basin_labels_like}
+    if "basin_name" in basin_labels_like.coords:
+        coords["basin_name"] = basin_labels_like.coords["basin_name"]
+    return out.assign_coords(**coords)
 
-# Reproject RACMO sublimation data to the basin grid
-racmo_sublim_data = racmo_sublim_data.rio.write_crs(crs, inplace=True)
-yshp, xshp = racmo_sublim_data.shape[2:4]
+# --- compute basin series for each component -------------------------------
 
-dest_flnme = os.path.join(misc_out, 'subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2019_2020.tif')
+# 1) Time align
+subl = racmo_on_imbie.rename(time="date")
+subl = subl.assign_coords(date=pd.DatetimeIndex(subl.date.values).to_period("M").to_timestamp(how="start"))
 
-gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, 
-                              crs, crs_format, racmo_sublim_data.data)
+common_dates = np.intersect1d(discharge_raster.date, np.intersect1d(basal_melt_raster.date, subl.date))
+D  = discharge_raster.sel(date=common_dates)
+BM = basal_melt_raster.sel(date=common_dates)
+SUB = subl.sel(date=common_dates)
 
-output_file_stereo = os.path.join(misc_out, 'subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2019_2020_stere.tif')
+# start from the same (y,x) grid as your discharge raster (or any template with basin_id)
+basin_labels = D["basin_id"]                     # (y,x) float32 with NaNs outside basins
 
-gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
+# 1) Mask SUB to basin interiors (for plotting and for the budget)
+SUBm = mask_to_basins(SUB, basin_labels)
 
-subprocess.run(gdalwarp_command, shell=True)
+# (optional) If RACMO’s convention makes sublimation negative (loss),
+# flip to a positive loss so your P=D+BM+ΔS+SUB uses magnitudes.
+if float(SUBm.mean()) < 0:
+    SUBm = -SUBm
 
-# Read the stereographic projection file
-racmo_stereo = xr.open_dataset(output_file_stereo)['band_data']
 
-os.remove(dest_flnme)
-os.remove(output_file_stereo)
+# quick sanity prints
+print("finite basin pixels (mask):", int(np.isfinite(basin_labels).sum()))
+print("finite SUB pixels after mask (first month):", int(np.isfinite(SUBm.isel(date=0)).sum()))
 
-# Clip the data to the bounds of the basin dataset using the queried basin bounds
-racmo_stereo_clip = racmo_stereo.sel(x=slice(basin_bounds[0], basin_bounds[1]), 
-                                     y=slice(basin_bounds[3], basin_bounds[2]))
-# Explicitly set the CRS before reprojecting
-racmo_stereo_clip.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
+cell_area    = xr.full_like(basin_labels, 10000.0**2)  # m² per pixel (10 km × 10 km)
+cell_area    = cell_area.where(np.isfinite(basin_labels))
 
-racmo_stereo_clip_res = racmo_stereo_clip.rio.reproject(
-    racmo_stereo_clip.rio.crs,
-    shape=basins_imbie.shape,  # set the shape as the basin data shape
-    resampling=Resampling.nearest,
-    transform=basins_imbie.rio.transform()
+# area per basin_id (m²); result dims: ('basin_id',)
+basin_area_m2 = cell_area.groupby(basin_labels.rename("basin_id")).sum()
+
+# 2) Ensure sublimation has basin_id
+if "basin_id" not in SUB.coords:
+    SUB = SUB.assign_coords(basin_id=D["basin_id"])
+
+# 3) Basin series
+D_basin   = painted_to_basin_series(D)            # Gt/month
+BM_basin  = painted_to_basin_series(BM)           # Gt/month
+dS_basin  = painted_to_basin_series(dS_raster)    # Gt/month  (← use your raster)
+SUB_basin = areal_to_basin_series(
+    SUBm, pixel_area_m2=10000.0 * 10000.0, units="kg m-2"
 )
+SUB_basin.name = "subl_Gt_per_month"
+# (optional) Plot a masked frame to confirm
+SUBm.isel(date=0).plot(
+    cmap="RdBu_r",
+    vmin=0, vmax=15,  # adjust to your range
+    cbar_kwargs={"label": "Snowdrift Sublimation [kg m⁻2]"},
+)
+
+# 4) Sum to precipitation in Gt/month
+D_basin, BM_basin, dS_basin, SUB_basin = xr.align(D_basin, BM_basin, dS_basin, SUB_basin, join="outer")
+Precip_basin = (D_basin.fillna(0) + BM_basin.fillna(0) + dS_basin.fillna(0) + SUB_basin.fillna(0))
+Precip_basin.name = "precip_Gt_per_month"
+
+# 5) Convert to mm/month per basin using basin areas
+#    mm = (Gt * 1e12 kg/Gt) / (rho_w * area[m²]) * 1000 mm/m, with rho_w=1000 → mm = Gt * 1e12 / area_m2
+Precip_basin_mm = Precip_basin * 1e12 / basin_area_m2
+Precip_basin_mm.name = "precip_mm_per_month"
+
+# 6) Paint back to maps
+template = xr.Dataset(dict(basin_id=basin_id[0], basin_name=basin_name[0]))
+
+Precip_map_Gt = paint_basin_series_to_grid(Precip_basin,    template)
+Precip_map_mm = paint_basin_series_to_grid(Precip_basin_mm, template)
+
+Precip_map_Gt.attrs.update({
+    "units": "Gt/month",
+    "description": "Monthly accumulated precipitation per basin, painted to pixels.",
+    "note": "Computed as Discharge + Basal melt + ΔS + Sublimation; D/BM/ΔS treated as basin totals, Sublimation as areal."
+})
+Precip_map_mm.attrs.update({
+    "units": "mm/month",
+    "description": "Monthly accumulated precipitation per basin in water-equivalent height, painted to pixels.",
+    "note": "Same as Gt/month result but divided by basin area (ρ=1000 kg/m³)."
+})
+
+
+#%%
+
+
+basin_labels = D["basin_id"]                       # (y,x) float32 with NaNs outside basins
+cell_area = xr.full_like(basin_labels, 10000.0**2) # m² per pixel
+cell_area = cell_area.where(np.isfinite(basin_labels))
+
+# area per basin_id (m²); result dims: ('basin_id',)
+basin_area_m2 = cell_area.groupby(basin_labels.rename("basin_id")).sum()
+
+
+# Each becomes (date, basin_id)
+D_basin   = D.groupby(D["basin_id"]).mean(dim=("y","x"))
+BM_basin  = BM.groupby(BM["basin_id"]).mean(dim=("y","x"))
+DS_basin  = SUB_Gt_like  # if you did the same “painted total” for ΔS, use the same approach:
+# DS_basin = DS.groupby(DS["basin_id"]).mean(dim=("y","x"))
+
+# If sublimation started as areal (mm/month), you can skip a Gt route and keep in mm/month.
+# If you already converted sublimation to Gt/month (SUB_basin_Gt), keep that here:
+# SUB_basin_Gt = SUB_Gt.groupby(SUB_Gt["basin_id"]).mean(dim=("y","x"))

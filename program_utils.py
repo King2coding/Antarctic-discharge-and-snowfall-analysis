@@ -18,11 +18,11 @@ from collections import Counter
 import matplotlib.pyplot as plt
 
 import subprocess
-
+from scipy.interpolate import griddata
 import xarray as xr
-
+# import xesmf as xe
 from rasterio.warp import Resampling
-from pyproj import CRS
+from pyproj import CRS, Transformer
 
 from osgeo import gdal, osr
 
@@ -890,7 +890,7 @@ def generate_basin_id_mapping(basin_id, basin_name, input_df):
     return df
 #----------------------------------------------------------------------------
 
-def create_basin_xrr(basin_id, basin_name, df, colnme, attrs):
+def create_basin_xrr(basin_id, basin_name, df, colnme, attrs, var_name):
     """
     Creates an xarray DataArray representing a time series of raster data for a specific basin.
 
@@ -942,7 +942,7 @@ def create_basin_xrr(basin_id, basin_name, df, colnme, attrs):
         frames.append(raster_t)
 
     dS_raster = xr.concat(frames, dim='date')
-    dS_raster.name = 'deltaS_Gt_per_month'
+    dS_raster.name = var_name
     dS_raster.attrs.update(attrs)
 
 # (Optional) carry through your basin metadata alongside
