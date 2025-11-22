@@ -245,6 +245,11 @@ attributes = {
 dS_raster = create_basin_xrr(basin_id[0], basin_name[0], dS_long_df, 
                              'dS_Gt', attributes, "deltaS_Gt_per_month")
 
+# plot one of the time stamps
+tms_plt = dS_raster['date'][0]
+dS_raster.isel(date=0).plot(cmap='jet',vmin=-10,vmax=10, cbar_kwargs={'label': 'ΔS [Gt/month]'})
+plt.title(f"ΔS for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
+
 vals = dS_raster['basin_name'].values.ravel()
 non_nan = vals[pd.notna(vals)]
 np.unique(non_nan)
@@ -300,6 +305,8 @@ discharge_raster = create_basin_xrr(basin_id[0], basin_name[0],
                                     D_month_df, 'discharge_Gt', 
                                     attributes, "discharge_Gt_per_month")
 
+
+
 attributes = {
     'description': 'Monthly basin-total basal melt painted to all pixels of each basin (not areal density). ',
     'long_name': 'Monthly basin basal melt ',
@@ -307,8 +314,15 @@ attributes = {
     'source': 'Computed from Chad’s discharge Excel (antarctic_discharge_2013-2022_imbie.xlsx)',
     'note': 'Islands (ID=1) excluded; names matched via modal name per ID from the basin grid.'
 }
+# plot one of the time stamps
+discharge_raster.isel(date=0).plot(cmap='jet',vmin=0,vmax=30, cbar_kwargs={'label': 'Discharge [Gt/month]'})
+plt.title(f"Discharge for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
+
 basal_melt_raster = create_basin_xrr(basin_id[0], basin_name[0], B_month_df, 
                                      'basal_Gt', attributes, "basal_Gt_per_month")
+# plot one of the time stamps
+basal_melt_raster.isel(date=0).plot(cmap='jet', vmin=0, vmax=0.5, cbar_kwargs={'label': 'Basal melt [Gt/month]'})
+plt.title(f"Basal Melt for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
 
 # --- Provisional ID -> Name mapping by sorted unique IDs (excluding Islands) ---
 # def make_id_name_map_from_excel_order(basin_da, names):
@@ -460,6 +474,10 @@ out_nc = os.path.join(racmo_path, "subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2019_2
 
 racmo_on_imbie = xr.open_dataarray(out_nc)
 
+# plot one of the time stamps
+tms_plt = racmo_on_imbie['time'][0]
+racmo_on_imbie.isel(time=0).plot(cmap='jet', vmin=-10, vmax=10, cbar_kwargs={'label': 'Sublimation [mm/month]'})
+plt.title(f"Sublimation for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
 #%%
 # --- compute basin series for each component -------------------------------
 
@@ -477,11 +495,14 @@ basin_labels = D["basin_id"]                     # (y,x) float32 with NaNs outsi
 
 # 1) Mask SUB to basin interiors (for plotting and for the budget)
 SUBm = mask_to_basins(SUB, basin_labels)
+tms_plt = SUBm['time'][0]
+SUBm.isel(date=0).plot(cmap='jet', vmin=-10, vmax=5, cbar_kwargs={'label': 'Sublimation [mm/month]'})
+plt.title(f"Sublimation for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
 
 # (optional) If RACMO’s convention makes sublimation negative (loss),
 # flip to a positive loss so your P=D+BM+ΔS+SUB uses magnitudes.
-if float(SUBm.mean()) < 0:
-    SUBm = -SUBm
+# if float(SUBm.mean()) < 0:
+#     SUBm = -SUBm
 
 
 # quick sanity prints
@@ -506,6 +527,8 @@ SUB_basin = areal_to_basin_series(
     SUBm, pixel_area_m2=10000.0 * 10000.0, units="kg m-2"
 )
 SUB_basin.name = "subl_Gt_per_month"
+SUB_basin.isel(date=0).plot(cmap='jet', vmin=-10, vmax=10, cbar_kwargs={'label': 'Sublimation [mm/month]'})
+plt.title(f"Sublimation for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
 # (optional) Plot a masked frame to confirm
 SUBm.isel(date=0).plot(
     cmap="RdBu_r",
@@ -549,8 +572,8 @@ Pmm = Precip_map_mm  # (date, y, x), mm/month, constant within each basin_id
 
 Pmm = Precip_map_mm.where(np.isfinite(Precip_map_mm["basin_id"]))
 Pmm_basin = (
-    _stack_space(Pmm)                                   # (date, space)
-    .groupby(_basin_labels_from(Pmm))                   # group by basin_id labels
+    stack_space(Pmm)                                   # (date, space)
+    .groupby(basin_labels_from(Pmm))                   # group by basin_id labels
     .mean("space", skipna=True)                         # (date, basin_id)
     .transpose("date", "basin_id")
 )
@@ -569,17 +592,17 @@ Pmm_ann_maps = paint_basin_series_to_grid(Pmm_basin_ann, template)  # (year, y, 
 Pmm_ann_maps.attrs.update(dict(units="mm/year", description="Annual mass-budget precipitation"))
 
 # 4) (optional) Save & quick plots
-Pmm_ann_maps.to_netcdf(os.path.join(path_to_plots, "Pmb_annual_2019_2020_mm.nc"))
+# Pmm_ann_maps.to_netcdf(os.path.join(basin_path, "Pmb_annual_2019_2020_mm.nc"))
 
-for yr in [2019, 2020]:
-    Pmm_ann_maps.sel(year=yr).plot(
-        vmin=0, vmax=300,
-        cmap="jet",  # or any diverging you like
-        robust=True,
-        cbar_kwargs={"label": "Mass-budget precipitation (mm/year)"}
-    )
-    plt.title(f"P_MB annual accumulation — {yr}")
-    plt.show()
+# for yr in [2019, 2020]:
+#     Pmm_ann_maps.sel(year=yr).plot(
+#         vmin=0, vmax=300,
+#         cmap="jet",  # or any diverging you like
+#         robust=True,
+#         cbar_kwargs={"label": "Mass-budget precipitation (mm/year)"}
+#     )
+#     plt.title(f"P_MB annual accumulation — {yr}")
+#     plt.show()
 
 Pmm_basin_ann_arrs = [(f'P_MB annual accumulation — {yr}',Pmm_ann_maps.sel(year=yr)) for yr in [2019, 2020]]
 compare_mean_precp_plot(Pmm_basin_ann_arrs, 
@@ -592,11 +615,14 @@ compare_mean_precp_plot(Pmm_basin_ann_arrs,
 Pmm_season = Pmm.groupby('date.season').mean(dim="date")
 Pmm_season = Pmm_season.assign_coords(season=["DJF", "MAM", "JJA", "SON"])
 
+# save to disk
+# Pmm_season.to_netcdf(os.path.join(basin_path, "Pmb_seasonal_mm_2019_2020.nc"))
+
 # make array for plot
 Pmm_season_arrs = [(f'P_MB seasonal mean — {s}', Pmm_season.sel(season=s)) for s in ["DJF", "MAM", "JJA", "SON"]]
 compare_mean_precp_plot(Pmm_season_arrs, 
                         vmin=0, vmax=30, 
-                        cbar_tcks=[0, 2.5, 5, 7.5,10, 15, 20, 25, 30])
+                        cbar_tcks=[0,  5, 10, 15, 20, 25, 30])
 gc.collect()
 
 # climatological

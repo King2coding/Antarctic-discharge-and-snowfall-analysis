@@ -16,6 +16,8 @@ import math
 from collections import Counter
 
 import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 
 import subprocess
 from scipy.interpolate import griddata
@@ -66,224 +68,296 @@ mpl.rcParams['ytick.labelsize'] = 18
 
 #%%
 # fucntions
+def ds_swaplon(ds):
+    """
+    Swap longitude coordinates from [0, 360] to [-180, 180] and sort.
+    Handles both 'lon' and 'longitude' coordinate names.
+    """
+    var = 'lon' if 'lon' in ds.coords else 'longitude' if 'longitude' in ds.coords else None
+    if var is None:
+        raise ValueError("No longitude coordinate found in dataset (expected 'lon' or 'longitude').")
+    new_lon = (((ds[var] + 180) % 360) - 180)
+    ds = ds.assign_coords({var: new_lon})
+    ds = ds.sortby(var)
+    return ds
+#----------------------------------------------------------------------------
 # function to read and process ERA5 precip file
 def process_era5_file_to_basin(era5_xr_data, er_tme, basin, fle_svnme):
 
-        er_time = pd.to_datetime(er_tme).strftime('%Y%m%d')
+    basin_transform = basin.rio.transform()
+    height, width = basin.data.shape[1:]
+    xmin, ymax = basin_transform.c, basin_transform.f
+    xres, yres = basin_transform.a, -basin_transform.e
+    xmax = xmin + width * xres
+    ymin = ymax - height * yres
 
-        er_precip_dat = era5_xr_data.sel(time=er_tme).sel(lat=slice(-55, -90))
+    er_time = pd.to_datetime(er_tme).strftime('%Y%m%d')
 
-        yshp, xshp = er_precip_dat.shape
+    er_precip_dat = era5_xr_data.sel(time=er_tme).sel(lat=slice(-55, -90))
 
-        minx = er_precip_dat['lon'].min().item()
-        maxy = er_precip_dat['lat'].max().item()
-        px_sz = round(er_precip_dat['lon'].diff('lon').mean().item(), 2)
+    yshp, xshp = er_precip_dat.shape
 
-        dest_flnme = os.path.join(misc_out, os.path.basename(fle_svnme).replace('.nc', '_sh.nc'))
+    minx = er_precip_dat['lon'].min().item()
+    maxy = er_precip_dat['lat'].max().item()
+    px_sz = round(er_precip_dat['lon'].diff('lon').mean().item(), 2)
 
-        gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, er_precip_dat.data)
+    dest_flnme = os.path.join(misc_out, os.path.basename(fle_svnme).replace('.nc', '_sh.nc'))
 
-        output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.nc', '_sh_stere.nc'))
+    gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, er_precip_dat.data)
 
-        gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
+    output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.nc', '_sh_stere.nc'))
 
-        subprocess.run(gdalwarp_command, shell=True)
+    gdalwarp_command = [
+        'gdalwarp',
+        '-t_srs', '+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84',
+        '-r', 'near',
+        dest_flnme,
+        output_file_stereo
+    ]
 
-        # Read the stereographic projection file
-        er_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
-
-        os.remove(dest_flnme)
-        os.remove(output_file_stereo)
-
-        # Clip the data to the bounds of the basin dataset
-        er_xrr_clip = er_xrr_sh_stereo.sel(
-            x=slice(-3333250, 3333250),
-            y=slice(-3333250, 3333250)
-        ).squeeze()
-
-        ccrs = CRS.from_proj4('+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84')
-
-        # Explicitly set the CRS before reprojecting
-        er_xrr_clip.rio.write_crs(ccrs.to_string(), inplace=True)
-
-        er_xrr_clip_res = er_xrr_clip.rio.reproject(
-            er_xrr_clip.rio.crs,
-            shape=basin.shape,  # set the shape as the basin data shape
-            resampling=Resampling.nearest,
-            transform=basin.rio.transform()
-        )
-
-        # Add the time coordinate to the reprojected DataArray
-        er_xrr_clip_res_arr = er_xrr_clip_res['Band1'].values
-        er_xrr_clip_res_arr = np.where(basin.values > 0, er_xrr_clip_res_arr, np.nan)
-        er_xrr_clip_res = xr.DataArray(
-            np.expand_dims(er_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
-            dims=['time', 'y', 'x'],
-            coords={'time': [np.datetime64(pd.to_datetime(er_time, format='%Y%m%d'), 'D')], 
-                    'y': er_xrr_clip_res.coords['y'], 
-                    'x': er_xrr_clip_res.coords['x']},
-            name='precipitation'  # Change the variable name to 'precipitation'
-        )
-
-        return er_xrr_clip_res
-#----------------------------------------------------------------------------
-# function to read and process AIRS precip file
-def process_airs_file_to_basin(airs_xrr_data, ai_tme, basin, fle_svnme):
-        
-        airs_time = pd.to_datetime(ai_tme).strftime('%Y%m%d')
-
-        airs_precip_dat = airs_xrr_data.sel(time=ai_tme).sel(lat=slice(-55, -90))
-
-
-        yshp, xshp = airs_precip_dat.shape
-
-        minx = airs_precip_dat['lon'].min().item()
-        maxy = airs_precip_dat['lat'].max().item()
-        px_sz = round(airs_precip_dat['lon'].diff('lon').mean().item(), 2)
-
-        dest_flnme = os.path.join(misc_out, os.path.basename(fle_svnme).replace('.nc', '_sh.nc'))
-
-        gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, airs_precip_dat.data)
-
-        output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.nc', '_sh_stere.nc'))
-
-        gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
-
-        subprocess.run(gdalwarp_command, shell=True)
-
-        # Read the stereographic projection file
-        ai_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
-
-        os.remove(dest_flnme)
-        os.remove(output_file_stereo)
-
-        # Clip the data to the bounds of the basin dataset
-        ai_xrr_clip = ai_xrr_sh_stereo.sel(
-            x=slice(-3333250, 3333250),
-            y=slice(-3333250, 3333250)
-        ).squeeze()
-
-        ccrs = CRS.from_proj4('+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84')
-
-        # Explicitly set the CRS before reprojecting
-        ai_xrr_clip.rio.write_crs(ccrs.to_string(), inplace=True)
-        ai_xrr_clip_res = ai_xrr_clip.rio.reproject(
-            ai_xrr_clip.rio.crs,
-            shape=basin.shape,  # set the shape as the basin data shape
-            resampling=Resampling.nearest,
-            transform=basin.rio.transform()
-        )
-
-        # Add the time coordinate to the reprojected DataArray
-        ai_xrr_clip_res_arr = ai_xrr_clip_res['Band1'].values
-        ai_xrr_clip_res_arr = np.where(basin.values > 0, ai_xrr_clip_res_arr, np.nan)
-        ai_xrr_clip_res = xr.DataArray(
-            np.expand_dims(ai_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
-            dims=['time', 'y', 'x'],
-            coords={'time': [np.datetime64(pd.to_datetime(airs_time, format='%Y%m%d'), 'D')], 'y': ai_xrr_clip_res.coords['y'], 'x': ai_xrr_clip_res.coords['x']},
-            name='precipitation'  # Change the variable name to 'precipitation'
-        )
-
-        return ai_xrr_clip_res
-#----------------------------------------------------------------------------
-def process_ssmis_file_to_basin(ss, basin):
-
-        ss_time = os.path.basename(ss).split('.')[4].split('-')[0]
-
-        ssmi_precip = xr.open_dataarray(ss)
-        ssmi_precip = ssmi_precip * 24  # Multiply the "precipitation" data by 24
-
-        ss_xrr_sh = ssmi_precip.sel(lat=slice(-55, -90)).squeeze()
-        yshp, xshp = ss_xrr_sh.shape
-
-        minx = ss_xrr_sh['lon'].min().item()
-        maxy = ss_xrr_sh['lat'].max().item()
-        px_sz = round(ss_xrr_sh['lon'].diff('lon').mean().item(), 2)
-
-        dest_flnme = os.path.join(misc_out, os.path.basename(ss).replace('.nc', '_sh.nc'))
-
-        gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, ss_xrr_sh.data)
-
-        output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.nc', '_sh_stere.nc'))
-
-        gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
-
-        subprocess.run(gdalwarp_command, shell=True)
-
-        # Read the stereographic projection file
-        ss_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
-
-        os.remove(dest_flnme)
-        os.remove(output_file_stereo)
-
-        # Clip the data to the bounds of the basin dataset
-        ss_xrr_clip = ss_xrr_sh_stereo.sel(
-            x=slice(-3333250, 3333250),
-            y=slice(-3333250, 3333250)
-        ).squeeze()
-
-        ccrs = CRS.from_proj4('+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84')
-
-        # Explicitly set the CRS before reprojecting
-        ss_xrr_clip.rio.write_crs(ccrs.to_string(), inplace=True)
-        ss_xrr_clip_res = ss_xrr_clip.rio.reproject(
-            ss_xrr_clip.rio.crs,
-            shape=basin.shape,  # set the shape as the basin data shape
-            resampling=Resampling.nearest,
-            transform=basin.rio.transform()
-        )
-
-        # Add the time coordinate to the reprojected DataArray
-        ss_xrr_clip_res_arr = ss_xrr_clip_res['Band1'].values
-        ss_xrr_clip_res_arr = np.where(basin.values > 0, ss_xrr_clip_res_arr, np.nan)
-        ss_xrr_clip_res = xr.DataArray(
-            np.expand_dims(ss_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
-            dims=['time', 'y', 'x'],
-            coords={'time': [ss_time], 'y': ss_xrr_clip_res.coords['y'], 'x': ss_xrr_clip_res.coords['x']},
-            name='precipitation'  # Change the variable name to 'precipitation'
-        )
-
-        return ss_xrr_clip_res
-#----------------------------------------------------------------------------
-def process_avhrr_file_to_basin(file,yr,basin):
-    av_x, av_y = return_sim_cords(file)
-    av_arr, av_time = read_tif_sim_file(file,yr)
-
-    av_arr = np.expand_dims(av_arr, axis=0) if av_arr.ndim == 2 else av_arr  # Ensure img_arr has 3 dimensions
-    av_xrr = xr.DataArray(av_arr, dims=['time', 'lat', 'lon'], coords={'time': [av_time], 'lat': av_y, 'lon': av_x})
-    av_xrr_sh = av_xrr.sel(lat=slice(-55, -90)).squeeze()
-    yshp, xshp = av_xrr_sh.shape
-
-    minx = av_xrr_sh['lon'].min().item()
-    maxy = av_xrr_sh['lat'].max().item()
-    px_sz = round(av_xrr_sh['lon'].diff('lon').mean().item(), 2)
-
-    dest_flnme = os.path.join(misc_out, os.path.basename(file).replace('.tif', '_sh.tif'))
-
-    gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, av_xrr_sh.data)
-
-    output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.tif', '_sh_stere.tif'))
-
-    gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
-
-    subprocess.run(gdalwarp_command, shell=True)
+    subprocess.run(gdalwarp_command, 
+                   shell=False, check=True,
+                   stdout=subprocess.DEVNULL, 
+                   stderr=subprocess.DEVNULL)
 
     # Read the stereographic projection file
-    av_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
+    er_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
 
     os.remove(dest_flnme)
     os.remove(output_file_stereo)
 
     # Clip the data to the bounds of the basin dataset
-    av_xrr_clip = av_xrr_sh_stereo.sel(
-        x=slice(-3333250, 3333250),
-        y=slice(3333250, -3333250)
+    er_xrr_clip = er_xrr_sh_stereo.sel(
+        x=slice(xmin, xmax),
+        y=slice(ymin, ymax)
     ).squeeze()
 
+    ccrs = CRS.from_proj4('+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84')
+
+    # Explicitly set the CRS before reprojecting
+    er_xrr_clip.rio.write_crs(ccrs.to_string(), inplace=True)
+
+    er_xrr_clip_res = er_xrr_clip.rio.reproject(
+        er_xrr_clip.rio.crs,
+        shape=(height, width),  # set the shape as the basin data shape
+        resampling=Resampling.bilinear,
+        transform=basin.rio.transform()
+    )
+
+    # Add the time coordinate to the reprojected DataArray
+    er_xrr_clip_res_arr = er_xrr_clip_res['Band1'].values
+    er_xrr_clip_res_arr = np.where(basin.values > 0, er_xrr_clip_res_arr, np.nan)
+    er_xrr_clip_res = xr.DataArray(
+        np.expand_dims(er_xrr_clip_res_arr[0], axis=0),  # Expand dimensions to match ['time', 'y', 'x']
+        dims=['time', 'y', 'x'],
+        coords={'time': [np.datetime64(pd.to_datetime(er_time, format='%Y%m%d'), 'D')], 
+                'y': er_xrr_clip_res.coords['y'], 
+                'x': er_xrr_clip_res.coords['x']},
+        name='precipitation'  # Change the variable name to 'precipitation'
+    )
+
+    return er_xrr_clip_res
+#----------------------------------------------------------------------------
+# function to read and process AIRS precip file
+def process_airs_file_to_basin(airs_xrr_data, ai_tme, basin, fle_svnme):
+
+    basin_transform = basin.rio.transform()
+    height, width = basin.data.shape[1:]
+    xmin, ymax = basin_transform.c, basin_transform.f
+    xres, yres = basin_transform.a, -basin_transform.e
+    xmax = xmin + width * xres
+    ymin = ymax - height * yres
+        
+    airs_time = pd.to_datetime(ai_tme).strftime('%Y%m%d')
+
+    airs_precip_dat = airs_xrr_data.sel(time=ai_tme).sel(lat=slice(-55, -90))
+
+
+    yshp, xshp = airs_precip_dat.shape
+
+    minx = airs_precip_dat['lon'].min().item()
+    maxy = airs_precip_dat['lat'].max().item()
+    px_sz = round(airs_precip_dat['lon'].diff('lon').mean().item(), 2)
+
+    dest_flnme = os.path.join(misc_out, os.path.basename(fle_svnme).replace('.nc', '_sh.nc'))
+
+    gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, airs_precip_dat.data)
+
+    output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.nc', '_sh_stere.nc'))
+
+    gdalwarp_command = [
+        'gdalwarp',
+        '-t_srs', '+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84',
+        '-r', 'near',
+        dest_flnme,
+        output_file_stereo
+    ]
+
+    subprocess.run(gdalwarp_command, 
+                   shell=False, check=True,
+                   stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+
+    # Read the stereographic projection file
+    ai_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
+
+    os.remove(dest_flnme)
+    os.remove(output_file_stereo)
+
+    # Clip the data to the bounds of the basin dataset
+    ai_xrr_clip = ai_xrr_sh_stereo.sel(
+        x=slice(xmin, xmax),
+        y=slice(ymax, ymin)
+    ).squeeze()
+
+    ccrs = CRS.from_proj4('+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84')
+
+    # Explicitly set the CRS before reprojecting
+    ai_xrr_clip.rio.write_crs(ccrs.to_string(), inplace=True)
+    ai_xrr_clip_res = ai_xrr_clip.rio.reproject(
+        ai_xrr_clip.rio.crs,
+        shape=(height, width),  # set the shape as the basin data shape
+        resampling=Resampling.bilinear,
+        transform=basin.rio.transform()
+    )
+
+    # Add the time coordinate to the reprojected DataArray
+    ai_xrr_clip_res_arr = ai_xrr_clip_res['Band1'].values
+    ai_xrr_clip_res_arr = np.where(basin.values > 0, ai_xrr_clip_res_arr, np.nan)
+    ai_xrr_clip_res = xr.DataArray(
+        np.expand_dims(ai_xrr_clip_res_arr[0], axis=0),  # Expand dimensions to match ['time', 'y', 'x']
+        dims=['time', 'y', 'x'],
+        coords={'time': [np.datetime64(pd.to_datetime(airs_time, format='%Y%m%d'), 'D')], 'y': ai_xrr_clip_res.coords['y'], 'x': ai_xrr_clip_res.coords['x']},
+        name='precipitation'  # Change the variable name to 'precipitation'
+    )
+
+    return ai_xrr_clip_res
+#----------------------------------------------------------------------------
+def process_ssmis_file_to_basin(ss, basin):
+       
+    basin_transform = basin.rio.transform()
+    height, width = basin.data.shape[1:]
+    xmin, ymax = basin_transform.c, basin_transform.f
+    xres, yres = basin_transform.a, -basin_transform.e
+    xmax = xmin + width * xres
+    ymin = ymax - height * yres
+
+    ss_time = os.path.basename(ss).split('.')[4].split('-')[0]
+
+    ssmi_precip = xr.open_dataarray(ss)
+    ssmi_precip = ssmi_precip * 24  # Multiply the "precipitation" data by 24
+
+    ss_xrr_sh = ssmi_precip.sel(lat=slice(-55, -90)).squeeze()
+    yshp, xshp = ss_xrr_sh.shape
+
+    minx = ss_xrr_sh['lon'].min().item()
+    maxy = ss_xrr_sh['lat'].max().item()
+    px_sz = round(ss_xrr_sh['lon'].diff('lon').mean().item(), 2)
+
+    dest_flnme = os.path.join(misc_out, os.path.basename(ss).replace('.nc', '_sh.nc'))
+
+    gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, ss_xrr_sh.data)
+
+    output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.nc', '_sh_stere.nc'))
+
+    gdalwarp_command = [
+        'gdalwarp',
+        '-t_srs', '+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84',
+        '-r', 'near',
+        dest_flnme,
+        output_file_stereo
+    ]
+    subprocess.run(gdalwarp_command, 
+                   shell=False, check=True,
+                   stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+
+    # Read the stereographic projection file
+    ss_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
+
+    os.remove(dest_flnme)
+    os.remove(output_file_stereo)
+
+    # Clip the data to the bounds of the basin dataset
+    ss_xrr_clip = ss_xrr_sh_stereo.sel(
+        x=slice(xmin, xmax),
+        y=slice(ymax, ymin)
+    ).squeeze()
+
+    ccrs = CRS.from_proj4('+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84')
+
+    # Explicitly set the CRS before reprojecting
+    ss_xrr_clip.rio.write_crs(ccrs.to_string(), inplace=True)
+    ss_xrr_clip_res = ss_xrr_clip.rio.reproject(
+        ss_xrr_clip.rio.crs,
+        shape=(height, width),  # set the shape as the basin data shape
+        resampling=Resampling.bilinear,
+        transform=basin.rio.transform()
+    )
+
+    # Add the time coordinate to the reprojected DataArray
+    ss_xrr_clip_res_arr = ss_xrr_clip_res['Band1'].values
+    ss_xrr_clip_res_arr = np.where(basin.values > 0, ss_xrr_clip_res_arr, np.nan)
+    ss_xrr_clip_res = xr.DataArray(
+        np.expand_dims(ss_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
+        dims=['time', 'y', 'x'],
+        coords={'time': [ss_time], 'y': ss_xrr_clip_res.coords['y'], 'x': ss_xrr_clip_res.coords['x']},
+        name='precipitation'  # Change the variable name to 'precipitation'
+    )
+
+    return ss_xrr_clip_res
+#----------------------------------------------------------------------------
+def process_avhrr_file_to_basin(file, yr, basin):
+
+    # Extract basin shape and transformation details
+    basin_transform = basin.rio.transform()
+    height, width = basin.data.shape[1:]
+    xmin, ymax = basin_transform.c, basin_transform.f
+    xres, yres = basin_transform.a, -basin_transform.e
+    xmax = xmin + width * xres
+    ymin = ymax - height * yres
+
+    # Read AVHRR file and extract coordinates and data
+    av_x, av_y = return_sim_cords(file)
+    av_arr, av_time = read_tif_sim_file(file, yr)
+
+    av_arr = np.expand_dims(av_arr, axis=0) if av_arr.ndim == 2 else av_arr  # Ensure av_arr has 3 dimensions
+    av_xrr = xr.DataArray(av_arr, dims=['time', 'lat', 'lon'], coords={'time': [av_time], 'lat': av_y, 'lon': av_x})
+    av_xrr_sh = av_xrr.sel(lat=slice(-55, -90)).squeeze()
+    yshp, xshp = av_xrr_sh.shape
+
+    # Define spatial extent and pixel size
+    minx = av_xrr_sh['lon'].min().item()
+    maxy = av_xrr_sh['lat'].max().item()
+    px_sz = round(av_xrr_sh['lon'].diff('lon').mean().item(), 2)
+
+    # Save the data to disk using GDAL
+    dest_flnme = os.path.join(misc_out, os.path.basename(file).replace('.tif', '_sh.tif'))
+    gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, av_xrr_sh.data)
+
+    # Reproject the data to stereographic projection
+    output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.tif', '_sh_stere.tif'))
+    gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
+    subprocess.run(gdalwarp_command, shell=True)
+
+    # Read the stereographic projection file
+    av_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
+
+    # Remove intermediate files
+    os.remove(dest_flnme)
+    os.remove(output_file_stereo)
+
+    # Clip the data to the bounds of the basin dataset
+    av_xrr_clip = av_xrr_sh_stereo.sel(
+        x=slice(xmin, xmax),
+        y=slice(ymax, ymin)
+    ).squeeze()
+
+    # Reproject the clipped data to match the basin shape
     av_xrr_clip_res = av_xrr_clip.rio.reproject(
         av_xrr_clip.rio.crs,
-        shape=basin.shape,  # set the shape as the basin data shape
-        resampling=Resampling.nearest,
+        shape=(height, width),  # Set the shape as the basin data shape
+        resampling=Resampling.bilinear,
         transform=basin.rio.transform()
     )
 
@@ -296,12 +370,18 @@ def process_avhrr_file_to_basin(file,yr,basin):
         coords={'time': [av_time], 'y': av_xrr_clip_res.coords['y'], 'x': av_xrr_clip_res.coords['x']},
         name='precipitation'  # Change the variable name to 'precipitation'
     )
-    # av_xrr_clip_res = av_xrr_clip_res.rename({'band_data': 'precipitation'})
 
     return av_xrr_clip_res
 #----------------------------------------------------------------------------
 # function to process IMERG file to basin
 def process_imerg_file_to_basin(im, misc_out, basin):
+    basin_transform = basin.rio.transform()
+    height, width = basin.data.shape[1:]
+    xmin, ymax = basin_transform.c, basin_transform.f
+    xres, yres = basin_transform.a, -basin_transform.e
+    xmax = xmin + width * xres
+    ymin = ymax - height * yres
+
     img_x, img_y = return_imerg_cords(im)
     img_arr, img_time = read_nc_imger_file(im, 'imerg_fn')
 
@@ -321,8 +401,17 @@ def process_imerg_file_to_basin(im, misc_out, basin):
     gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, img_xrr_sh.data)
 
     output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('.tif', '_sh_stere.tif'))
-    gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
-    subprocess.run(gdalwarp_command, shell=True)
+    gdalwarp_command = [
+        'gdalwarp',
+        '-t_srs', '+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84',
+        '-r', 'near',
+        dest_flnme,
+        output_file_stereo
+    ]
+    subprocess.run(gdalwarp_command, 
+                   shell=False, check=True,
+                   stdout=subprocess.DEVNULL, 
+                   stderr=subprocess.DEVNULL)
 
     # Read the stereographic projection file
     img_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
@@ -330,29 +419,120 @@ def process_imerg_file_to_basin(im, misc_out, basin):
     os.remove(dest_flnme)
     os.remove(output_file_stereo)
 
-    # Clip the data to the bounds of the second dataset
+    # Clip the data to the bounds of the basin dataset
     img_xrr_clip = img_xrr_sh_stereo.sel(
-        x=slice(-3333250, 3333250),
-        y=slice(3333250, -3333250)
+        x=slice(xmin, xmax),
+        y=slice(ymax, ymin)
     ).squeeze()
 
+    # Reproject the clipped data to match the basin shape
     img_xrr_clip_res = img_xrr_clip.rio.reproject(
         img_xrr_clip.rio.crs,
-        shape=basin.shape,  # set the shape as the autosnow data shape (1800, 3600)
-        resampling=Resampling.nearest,
+        shape=(height, width),  # Use the basin's height and width
+        resampling=Resampling.bilinear,
         transform=basin.rio.transform()
     )
     # Add the time coordinate to the reprojected DataArray
     img_xrr_clip_res_arr = img_xrr_clip_res['band_data'].values
     img_xrr_clip_res_arr = np.where(basin.values > 0, img_xrr_clip_res_arr, np.nan)
     img_xrr_clip_res = xr.DataArray(
-        np.expand_dims(img_xrr_clip_res_arr, axis=0),  # Expand dimensions to match ['time', 'y', 'x']
+        np.expand_dims(img_xrr_clip_res_arr[0], axis=0),  # Expand dimensions to match ['time', 'y', 'x']
         dims=['time', 'y', 'x'],
         coords={'time': [img_time], 'y': img_xrr_clip_res.coords['y'], 'x': img_xrr_clip_res.coords['x']},
         name='precipitation'  # Change the variable name to 'precipitation'
     )       
 
     return img_xrr_clip_res
+
+#----------------------------------------------------------------------------
+def process_gpcp_file_to_basin(gp, basin):
+    basin_transform = basin.rio.transform()
+    height, width = basin.data.shape[1:]
+    xmin, ymax = basin_transform.c, basin_transform.f
+    xres, yres = basin_transform.a, -basin_transform.e
+    xmax = xmin + width * xres
+    ymin = ymax - height * yres
+
+    with xr.open_dataset(gp) as ds:
+        ds = ds_swaplon(ds)
+
+        # Extract precipitation data
+        gp_arr = ds['precip']
+        
+        gp_time = ds['time'].values[0]
+
+        gp_x, gp_y = ds['lon'].values, ds['lat'].values
+
+        # gp_arr = np.expand_dims(gp_arr, axis=0) if gp_arr.ndim == 2 else gp_arr  # Ensure gp_arr has 3 dimensions
+        # gp_xrr = xr.DataArray(gp_arr, dims=['time', 'lat', 'lon'], coords={'time': [gp_time], 'lat': gp_y, 'lon': gp_x})
+
+        gp_xrr_sh = gp_arr.sel(lat=slice(-55, -90)).squeeze()
+        yshp, xshp = gp_xrr_sh.shape
+
+        # plot_data_on_antarctica(gp_xrr_sh, 
+        #                         title=f'GPCP v3.3 Precipitation on {pd.to_datetime(gp_time).strftime("%Y-%m-%d")}', 
+        #                         cmap='jet', vmax=10)
+
+        minx = gp_xrr_sh['lon'].min().item()
+        maxy = gp_xrr_sh['lat'].max().item()
+
+        px_sz = round(gp_xrr_sh['lon'].diff('lon').mean().item(), 2)
+
+        dest_flnme = os.path.join(misc_out, os.path.basename(gp).replace('.nc4', '.tif'))
+
+        gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, gp_xrr_sh.data)
+
+        output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('.tif', '_sh_stere.tif'))
+        gdalwarp_command = [
+        'gdalwarp',
+        '-t_srs', '+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84',
+        '-r', 'near',
+        dest_flnme,
+        output_file_stereo
+        ]
+        subprocess.run(gdalwarp_command, 
+                       shell=False, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # Read the stereographic projection file
+        gp_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
+
+        os.remove(dest_flnme)
+        os.remove(output_file_stereo)
+
+        # Clip the data to the bounds of the basin dataset
+        gp_xrr_clip = gp_xrr_sh_stereo.sel(
+            x=slice(xmin, xmax),
+            y=slice(ymax, ymin)
+        ).squeeze()
+
+        # Reproject the clipped data to match the basin shape
+        gp_xrr_clip_res = gp_xrr_clip.rio.reproject(
+            gp_xrr_clip.rio.crs,
+            shape=(height, width),  # Use the basin's height and width
+            resampling=Resampling.bilinear,
+            transform=basin_transform
+        )
+        # Add the time coordinate to the reprojected DataArray
+        # Extract the 'band_data' variable from the dataset
+        gp_xrr_clip_res_arr = gp_xrr_clip_res['band_data'].values
+
+        # Mask the array using the basin values
+        gp_xrr_clip_res_arr = np.where(basin.values > 0, gp_xrr_clip_res_arr, np.nan)
+
+        # Create a new DataArray with the correct dimensions and coordinates
+        gp_xrr_clip_res = xr.DataArray(
+            np.expand_dims(gp_xrr_clip_res_arr[0], axis=0),  # Add a time dimension
+            dims=['time', 'y', 'x'],
+            coords={
+            'time': [gp_time],
+            'y': gp_xrr_clip_res.coords['y'],
+            'x': gp_xrr_clip_res.coords['x']
+            },
+            name='precipitation'  # Use the original variable name
+        )   
+
+    return gp_xrr_clip_res
 
 #----------------------------------------------------------------------------
 # function to save 2d arrays to disk using gdal
@@ -564,7 +744,8 @@ def run_batched_processing(batches, basin):
         precip_xrr_basin_mapped = xr.full_like(basin, np.nan, dtype=float)
 
         # Loop through each basin ID (Zwally basins are numbered from 1 to 27)
-        for basin_id in range(1, 20):
+        bsn_ids = np.unique(basin.data[~np.isnan(basin.data)])
+        for basin_id in bsn_ids:
             # Create a mask for the current basin
             basin_mask = basin == basin_id
 
@@ -699,7 +880,7 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
 
     # Create a GridSpec with precise control over spacing
     fig = plt.figure(figsize=(28, 10 * nrows))
-    gs = gridspec.GridSpec(nrows, ncols, wspace=0.025, hspace=0.15)
+    gs = gridspec.GridSpec(nrows, ncols, wspace=0.1, hspace=0.15)
 
     # Loop through each dataset to create the plots
     axes = []
@@ -742,7 +923,7 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
         ScalarMappable(norm=norm, cmap=cmap),
         ax=axes,  # Attach the colorbar to all axes for better placement
         orientation="horizontal",
-        fraction=0.04,  # Fraction of the original axes height
+        fraction=0.07,  # Fraction of the original axes height
         pad=0.15,  # Distance from the bottom of the subplots
         extend="max"
     )
@@ -752,6 +933,282 @@ def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
 
     # Show the plot
     plt.tight_layout()
+
+#-----------------------------------------------------------------------------
+
+import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib.colors import BoundaryNorm
+from matplotlib.cm import ScalarMappable
+from matplotlib.ticker import FixedLocator
+
+# ---------- IMPROVED LAT-LON LABEL FUNCTION ----------
+def add_polar_latlon_labels(ax,
+                            lat_rings=(-65, -70, -75, -80), # 
+                            lon_spokes=np.arange(-180, 180, 30),
+                            label_size=12):
+    """
+    Adds readable latitude/longitude labels close to their rings/spokes,
+    avoiding overlap. Designed for South Polar Stereographic projection.
+    """
+
+    # ---- Latitude labels (place at 2° outside the ring) ----
+    for lat in lat_rings[1:]:
+        ax.text(182, lat, f"{abs(lat)}°S",
+        transform=ccrs.PlateCarree(),
+        fontsize=label_size,
+        va="center", ha="left")
+
+
+    # ---- Longitude labels (place near outermost latitude ring) ----
+    outer_lat = lat_rings[0] + 1.5   # e.g., around -63.5°
+
+    for lon in lon_spokes:
+        # Compute label
+        if lon == 0:
+            lab = "0°"
+        elif lon < 0:
+            lab = f"{abs(lon)}°W"
+        else:
+            lab = f"{abs(lon)}°E"
+
+        ax.text(lon, outer_lat,
+                lab,
+                transform=ccrs.PlateCarree(),
+                fontsize=label_size,
+                ha="center", va="bottom",
+                color="black")
+        
+
+# ---------- MAIN UPDATED FUNCTION ----------
+def compare_mean_precip_2x2(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
+
+    if len(arr_lst_mean) != 4:
+        raise ValueError("compare_mean_precip_2x2 expects exactly 4 datasets.")
+
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet
+    levels = np.linspace(vmin, vmax, 20)
+    norm = BoundaryNorm(levels, cmap.N)
+
+    lat_rings = (-65, -70, -75, -80)
+    lon_spokes = np.arange(-180, 180, 30)
+
+    fig, axes = plt.subplots(
+        2, 2, subplot_kw={"projection": proj}, 
+        figsize=(14, 14)
+    )
+    axes = axes.ravel()
+
+    fig.subplots_adjust(wspace=0.05, hspace=0.2, bottom=0.20)
+
+    for ax, (product_name, data) in zip(axes, arr_lst_mean):
+
+        # remove bounding box around each subplot
+        ax.set_frame_on(False)
+
+        ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+        ax.text(
+            0.15, 1.05,              # x<0.5 moves left of center
+            product_name,
+            transform=ax.transAxes,
+            fontsize=16,
+            fontweight="bold",
+            ha="center",
+            va="bottom"
+        )
+
+        # ax.coastlines(resolution="110m", color="k", linewidth=0.55)
+
+        # plot
+        data.plot(
+            ax=ax,
+            transform=ccrs.SouthPolarStereo(),
+            cmap=cmap,
+            norm=norm,
+            add_colorbar=False,
+            add_labels=False, 
+        )
+
+        # ax.add_feature(
+        #     cfeature.OCEAN,
+        #     zorder=1, edgecolor=None, lw=0,
+        #     color=None, alpha=0.5
+        # )
+
+        # ax.set_title(product_name, fontsize=17, fontweight="bold")
+
+        # gridlines without labels
+        gl = ax.gridlines(
+            crs=ccrs.PlateCarree(),
+            draw_labels=False,
+            linewidth=0.55,
+            color="gray",
+            alpha=0.8,
+            linestyle="--",
+        )
+        gl.ylocator = FixedLocator(lat_rings)
+        gl.xlocator = FixedLocator(lon_spokes)
+
+        # improved lat/lon labels
+        add_polar_latlon_labels(ax, lat_rings=lat_rings,
+                                lon_spokes=lon_spokes,
+                                label_size=11)
+        
+    all_levels = levels  # same 'levels' you used for BoundaryNorm
+
+    sm = ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])  
+
+    # # shared colorbar
+    # cb = fig.colorbar(
+    #     sm,#ScalarMappable(norm=norm, cmap=cmap),
+    #     ax=axes.tolist(),
+    #     orientation="horizontal",
+    #     fraction=0.045,
+    #     pad=0.08,
+    #     extend="max",
+    #     boundaries=all_levels,   # ensure discrete patches
+    #     ticks=all_levels         # tick for every color step
+    # )
+
+    # # Now: only label the ticks that are in cbar_tcks; others get ""
+    # if cbar_tcks is not None:
+    #     labels = []
+    #     for val in all_levels:
+    #         if any(np.isclose(val, lab) for lab in cbar_tcks):
+    #             labels.append(f"{val:.0f}")
+    #         else:
+    #             labels.append("")   # show tick, no label
+    #     cb.set_ticklabels(labels)
+
+    # Create a colorbar at the bottom spanning all subplots
+    cb = fig.colorbar(
+        ScalarMappable(norm=norm, cmap=cmap),
+        ax=axes,  # Attach the colorbar to all axes for better placement
+        orientation="horizontal",
+        fraction=0.07,  # Fraction of the original axes height
+        pad=0.15,  # Distance from the bottom of the subplots
+        extend="max"
+    )
+    cb.set_ticks(cbar_tcks)  # Set integer ticks
+
+    cb.ax.tick_params(labelsize=12)
+    cb.ax.minorticks_off()
+    cb.set_label("Precipitation [mm/year]", fontsize=14)
+
+    return fig, axes
+#----------------------------------------------------------------------------
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.colors import BoundaryNorm
+from matplotlib.cm import ScalarMappable
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib.ticker import MaxNLocator
+import numpy as np
+
+def plot_seasonal_precip_maps(products_for_year,
+                              seasons=("DJF", "MAM", "JJA", "SON"),
+                              vmin=0, vmax=30,
+                              cbar_ticks=None):
+    """
+    Plot seasonal precipitation maps: seasons in rows, products in columns.
+
+    Parameters
+    ----------
+    products_for_year : list of (str, xarray.DataArray)
+        Each DataArray must have a 'season' dimension that includes all `seasons`.
+    seasons : sequence of str
+        Order of seasons to plot as rows (e.g., ("DJF", "MAM", "JJA", "SON")).
+    vmin, vmax : float
+        Range for the color scale.
+    cbar_ticks : list of float, optional
+        Tick locations for the colorbar.
+    """
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet
+    levels = np.linspace(vmin, vmax, 20)
+    norm = BoundaryNorm(levels, cmap.N)
+
+    nrows = len(seasons)              # seasons = rows
+    ncols = len(products_for_year)    # products = columns
+
+    fig = plt.figure(figsize=(5.5 * ncols, 4.8 * nrows))
+    gs = gridspec.GridSpec(nrows, ncols, wspace=0.05, hspace=0.10)
+
+    axes = []
+    for r, season in enumerate(seasons):
+        for c, (prod_name, da) in enumerate(products_for_year):
+            idx = r * ncols + c
+            ax = fig.add_subplot(gs[idx], projection=proj)
+
+            ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+            ax.coastlines(resolution="110m", color="k", linewidth=0.6)
+
+            # Select that season
+            field = da.sel(season=season)
+
+            field.plot(
+                ax=ax,
+                transform=ccrs.SouthPolarStereo(),
+                cmap=cmap,
+                norm=norm,
+                add_colorbar=False
+            )
+
+            ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None,
+                           lw=0, color="silver", alpha=0.5)
+
+            # Column titles = product names (top row only)
+            if r == 0:
+                ax.set_title(prod_name, fontsize=20, pad=8)
+            else:
+                ax.set_title("")
+
+            # Row labels = season names (first column only)
+            if c == 0:
+                ax.text(-0.10, 0.5, season,
+                        transform=ax.transAxes,
+                        rotation=90,
+                        va="center", ha="right",
+                        fontsize=20, fontweight="bold")
+
+            # Gridlines with cleaner labels
+            gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
+                              linestyle="--", color="k", linewidth=0.6)
+            gl.xlocator = MaxNLocator(nbins=4)
+            gl.ylocator = MaxNLocator(nbins=4)
+            gl.xlabel_style = {"size": 14, "color": "k"}
+            gl.ylabel_style = {"size": 14, "color": "k"}
+
+            # Only show bottom labels on last row, left labels on first column
+            gl.top_labels = False
+            gl.right_labels = False
+            gl.bottom_labels = (r == nrows - 1)
+            gl.left_labels = (c == 0)
+
+            axes.append(ax)
+
+    # Shared colorbar at bottom
+    cbar = fig.colorbar(
+        ScalarMappable(norm=norm, cmap=cmap),
+        ax=axes,
+        orientation="horizontal",
+        fraction=0.035,
+        pad=0.06,
+        extend="max"
+    )
+
+    if cbar_ticks is not None:
+        cbar.set_ticks(cbar_ticks)
+    cbar.ax.tick_params(labelsize=18)
+    cbar.set_label("Precipitation [mm/season]", fontsize=20)
+
+    plt.tight_layout(rect=[0.02, 0.05, 0.98, 0.97])
+    return fig, axes
 
 #-----------------------------------------------------------------------------
 # single plot fucntion
@@ -968,12 +1425,12 @@ def create_basin_xrr(basin_id, basin_name, df, colnme, attrs, var_name):
 
 # --- helpers ---------------------------------------------------------------
 
-def _stack_space(da):
+def stack_space(da):
     if "stacked_y_x" in da.dims:
         return da.rename({"stacked_y_x": "space"})
     return da.stack(space=("y", "x"))
 
-def _basin_labels_from(da):
+def basin_labels_from(da):
     lbl = da["basin_id"]
     if "stacked_y_x" in lbl.dims:
         lbl = lbl.rename({"stacked_y_x":"space"})
@@ -986,8 +1443,8 @@ def painted_to_basin_series(da):
     da holds basin totals painted to pixels (units already Gt/month).
     Return (date, basin_id) by taking spatial mean within each basin.
     """
-    data   = _stack_space(da)
-    labels = _basin_labels_from(da)
+    data   = stack_space(da)
+    labels = basin_labels_from(da)
     valid  = np.isfinite(labels)
     data   = data.where(valid)
     labels = labels.where(valid)
@@ -1000,8 +1457,8 @@ def areal_to_basin_series(da, *, pixel_area_m2, units="mm_we_per_month"):
     Convert to Gt/month by summing over pixels within each basin.
     units: "mm_we_per_month" | "m_we_per_month" | "kg_m2_s"
     """
-    data   = _stack_space(da)
-    labels = _basin_labels_from(da)
+    data   = stack_space(da)
+    labels = basin_labels_from(da)
     valid  = np.isfinite(labels)
     data   = data.where(valid)
     labels = labels.where(valid)
@@ -1067,3 +1524,143 @@ def mask_to_basins(da, basin_labels_like):
         coords["basin_name"] = basin_labels_like.coords["basin_name"]
     return out.assign_coords(**coords)
 #-----------------------------------------------------------------------------
+# def plot_data_on_antarctica(data, title="Data on Antarctica", cmap='jet', vmax=None):
+#     """
+#     Plot xarray data on a polar stereographic projection focusing on Antarctica.
+
+#     Parameters:
+#     data (xarray.DataArray): The data to be plotted. It should have latitude and longitude coordinates.
+#     title (str): Title of the plot.
+#     cmap (str): Colormap to use for the plot.
+#     vmax (float): Maximum value for the color scale. If None, it will be determined automatically.
+
+#     Returns:
+#     None
+#     """   
+
+#     # Plot the data on a polar stereographic projection
+#     fig, ax = plt.subplots(subplot_kw={'projection': ccrs.SouthPolarStereo()}, 
+#                            figsize=(10, 10))
+#     data.plot(ax=ax, transform=ccrs.PlateCarree(), 
+#               cmap=cmap, vmax=vmax)
+
+#     # Add features to the map
+#     ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+#     ax.add_feature(cfeature.BORDERS, linestyle=':')
+#     ax.gridlines(dms=True, x_inline=False, y_inline=False)  # Removed draw_labels=True for performance
+
+#     # Set the extent to focus on Antarctica
+#     ax.set_extent([-180, 180, -90, -60], crs=ccrs.PlateCarree())
+
+#     plt.title(title)
+#     plt.show(block=False)  # Ensure the plot does not block further execution
+#-----------------------------------------------------------------------------
+# helper to map back with a dummy '0' basin so NaNs don't crash .sel
+def process_precipitation_data(
+    source,                      # list/str of files OR xr.DataArray / xr.Dataset
+    basins,
+    variable_name="precipitation",
+    is_accumulated=False,        # True for RACMO monthly totals (kg m-2 per month)
+    seasonal_resample="QS-DEC",  # seasons starting Dec (DJF, MAM, JJA, SON)
+    compute=False,               # set True if you want concrete arrays at the end
+):
+    """
+    Returns:
+      annual_map:   (year, y, x)
+      seasonal_map: (season, y, x)
+    """
+
+    # ---- 0) Load precip into P: (time, y, x) ----
+    if isinstance(source, xr.DataArray):
+        P = source
+    elif isinstance(source, xr.Dataset):
+        P = source[variable_name]
+    else:
+        # assume file path or list of paths
+        ds = xr.open_mfdataset(source, combine="by_coords")
+        P = ds[variable_name].compute()
+        ds.close()
+
+    # squeeze away any singleton dims (e.g., RACMO had band=1)
+    for d in list(P.dims):
+        if P.sizes[d] == 1 and d not in ("time", "y", "x"):
+            P = P.squeeze(d, drop=True)
+
+    # make sure we have the grid dims
+    for need in ("y", "x"):
+        if need not in P.dims:
+            raise ValueError(f"Expected '{need}' in precip dims, found {P.dims}")
+    if "time" in P.dims:
+        P = P.transpose("time", "y", "x", ...)
+
+    # ---- 1) Clean basin labels ----
+    labels   = basins.squeeze(drop=True).where(lambda a: a.notnull() & (a > 1))
+    valid    = labels.notnull()
+    labels_i = labels.fillna(0).astype("int32")  # 0 = background
+    basin_ids = np.sort(np.unique(labels_i.values[valid.values])).astype("int32")
+
+    # ---- 2) Basin means (time, basin) ----
+    P_st   = P.stack(stacked_y_x=("y", "x"))
+    lab_st = labels_i.stack(stacked_y_x=("y", "x")).rename("basin")
+    P_basin = (P_st.groupby(lab_st)
+                  .mean("stacked_y_x", skipna=True)
+                  .sel(basin=basin_ids))
+
+    # ---- 3) Annual stats ----
+    if is_accumulated:
+        P_basin_annual = P_basin.groupby("time.year").sum("time")
+        annual_units = "kg m-2 yr-1"
+    else:
+        P_basin_annual = P_basin.groupby("time.year").mean("time")
+        annual_units = P.attrs.get("units", "")
+
+    # ---- 4) Seasonal climatology ----
+    if is_accumulated:
+        P_season_blocks = P_basin.resample(time=seasonal_resample).mean()
+    else:
+        P_season_blocks = P_basin.resample(time=seasonal_resample).mean()
+
+    P_season_blocks = P_season_blocks.assign_coords(
+        season=("time", P_season_blocks["time.season"].values)
+    )
+    P_basin_seasonal = P_season_blocks.groupby("season").mean("time")
+    seasonal_units = "kg m-2 per season" if is_accumulated else P.attrs.get("units", "")
+
+    # ---- 5) Map back to (y, x) ----
+    def map_back(field_basin, indexer_ij, valid_mask):
+        fb = field_basin.assign_coords(basin=field_basin.basin.astype("int32"))
+        if 0 not in fb.basin.values:
+            fb = fb.reindex(basin=np.r_[0, fb.basin.values])
+            fb.loc[dict(basin=0)] = np.nan
+        mapped = fb.sel(basin=indexer_ij)
+        return mapped.where(valid_mask)
+
+    annual_map   = map_back(P_basin_annual,  labels_i, valid)
+    seasonal_map = map_back(P_basin_seasonal, labels_i, valid)
+
+    annual_map.name = f"{variable_name}_annual"
+    annual_map.attrs["units"] = annual_units
+    seasonal_map.name = f"{variable_name}_season_clim"
+    seasonal_map.attrs["units"] = seasonal_units
+
+    if compute:
+        annual_map   = annual_map.compute()
+        seasonal_map = seasonal_map.compute()
+
+    return annual_map, seasonal_map
+
+#----------------------------------------------------------------------------
+def ensure_season_index(da,SEAS):
+    # make sure we actually have the dim
+    if "season" not in da.dims:
+        raise ValueError(f"array {da.name!r} lacks a 'season' dim; dims={da.dims}")
+    # promote to an index if it's only a coord
+    if "season" not in getattr(da, "indexes", {}):
+        da = da.assign_coords(season=pd.Index(da["season"].values, name="season"))
+    # put seasons in canonical order (keeps only what exists, preserves NaN if missing)
+    return da.reindex(season=SEAS)
+#----------------------------------------------------------------------------
+
+def pick_year(da, year):
+    return da.sel(year=year) if "year" in da.dims else da
+#----------------------------------------------------------------------------

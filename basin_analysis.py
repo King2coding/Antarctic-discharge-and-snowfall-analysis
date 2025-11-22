@@ -17,17 +17,18 @@ from datetime import date
 
 #%%
 # file paths
-basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins/bedmap3_basins.nc'
-grace_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/grace/GRCTellus.JPL.200204_202501.GLO.RL06.3M.MSCNv04.nc'
+basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
+# grace_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/grace/GRCTellus.JPL.200204_202501.GLO.RL06.3M.MSCNv04.nc'
 
 # paths to put satellite precip over basins data
 imerg_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/imerg_precip'
-avhrr_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/avhrr_precip'
-ssmis_17_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/ssmis_17_precip'
-airs_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/airs_precip'
+# avhrr_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/avhrr_precip'
+# ssmis_17_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/ssmis_17_precip'
+# airs_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/airs_precip'
 era5_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/era5_precip'
-
+gpcpv3pt3_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpcpv3pt3'
 # paths to put satellite precip over basins data
+
 annual_precip_in_basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/precip_in_basins/annual'
 seasonal_precip_in_basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/precip_in_basins/seasonal'
 
@@ -46,10 +47,10 @@ cde_run_dte = str(date.today().strftime('%Y%m%d'))
 
 #----------------------------------------------------------------------------------
 
-basins  = xr.open_dataset(basins_path)
-basins_zwally = basins['zwally']
+basins  = xr.open_dataset(os.path.join(basins_path,'bedmap3_basins_0.1deg.tif'))
+# basins_zwally = basins['zwally']
 
-basins_imbie = basins['imbie']
+# basins_imbie = basins['imbie']
 
 # Set up colormap and norm for 27 discrete basins
 colors = plt.cm.gist_ncar(np.linspace(0, 1, 19))
@@ -62,8 +63,20 @@ levels = np.linspace(vmin, vmax, vmax - vmin + 2)  # 27 basins + 1 for boundarie
 norm = mcolors.BoundaryNorm(levels, cmap.N)
 
 # Mask out invalid values (0 or NaN)
-zwally_data = basins_zwally.where((basins_zwally > 0) & (basins_zwally.notnull()))
-imbie_data = basins_imbie.where((basins_imbie > 0) & (basins_imbie.notnull()))
+# zwally_data = basins_zwally.where((basins_zwally > 0) & (basins_zwally.notnull()))
+basins = basins.where((basins > 0) & (basins.notnull()))
+if not basins.rio.crs:
+    basins = basins.rio.write_crs(CRS.from_proj4(crs_stereo))
+basin_transform = basins.rio.transform()
+height, width = basins.data.shape[1:]
+xmin, ymax = basin_transform.c, basin_transform.f
+xres, yres = basin_transform.a, -basin_transform.e
+xmax = xmin + width * xres
+ymin = ymax - height * yres
+print(f"Basin grid: width={width}, height={height}, xres={xres}, yres={yres}")
+basin_bounds = (xmin, xmax, ymin, ymax)  # (minx, maxx, miny, maxy)
+print(f"Basin bounds: {basin_bounds}")
+
 # Plot
 proj = ccrs.SouthPolarStereo()
 fig, ax = plt.subplots(figsize=(12, 8), dpi=300, subplot_kw={'projection': proj})
@@ -72,7 +85,7 @@ fig, ax = plt.subplots(figsize=(12, 8), dpi=300, subplot_kw={'projection': proj}
 ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
 
 # Plot the data
-p = imbie_data.plot(
+p = basins.plot(
     ax=ax,
     transform=proj,
     cmap=cmap,
@@ -86,13 +99,13 @@ ax.set_facecolor('white')
 # Annotate each basin with its ID
 for basin_id in range(1, 20):
     # Create a mask for the current basin
-    basin_mask = basins_imbie == basin_id
+    basin_mask = basins == basin_id
 
     # Get the centroid of the basin
     y, x = np.where(basin_mask)
     if len(x) > 0 and len(y) > 0:
-        centroid_x = basins_imbie['x'].values[x].mean()
-        centroid_y = basins_imbie['y'].values[y].mean()
+        centroid_x = basins['x'].values[x].mean()
+        centroid_y = basins['y'].values[y].mean()
         ax.text(
             centroid_x, centroid_y, str(basin_id),
             color='black', fontsize=15, ha='center', va='center', zorder=5,
@@ -113,42 +126,34 @@ plt.tight_layout()
 output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
 plt.savefig(output_path, dpi=300, bbox_inches='tight')
 
-# Extract the bounds of the Zwally basins data
-x_min, x_max = basins_imbie['x'].values.min(), basins_imbie['x'].values.max()
-y_min, y_max = basins_imbie['y'].values.min(), basins_imbie['y'].values.max()
-basin_bounds = (x_min, x_max, y_min, y_max)
-
-# Print the bounds for verification
-print(f"Basin bounds: x_min={x_min}, x_max={x_max}, y_min={y_min}, y_max={y_max}")
-
 # we may resample the precip data to course resolution for plotting
-new_resolution = 5000  # meters
-new_transform = Affine(
-    new_resolution, 0.0, -3333500.0,
-    0.0, -new_resolution, 3333500.0
-)
+# new_resolution = 5000  # meters
+# new_transform = Affine(
+#     new_resolution, 0.0, -3333500.0,
+#     0.0, -new_resolution, 3333500.0
+# )
 
-new_shpe = (
-    int((y_max - y_min) / new_resolution),
-    int((x_max - x_min) / new_resolution)
-)
+# new_shape = (
+#     int((ymax - ymin) / new_resolution),
+#     int((xmax - xmin) / new_resolution)
+# )
 
 # Load the GRACE dataset
-grace = xr.open_dataset(grace_path)
+# grace = xr.open_dataset(grace_path)
 
 img_fle_lst = [os.path.join(imerg_basin_path, x) for x in os.listdir(imerg_basin_path) if 'imbie_basin' in x]
-avhrr_fle_lst = [os.path.join(avhrr_basin_path, x) for x in os.listdir(avhrr_basin_path) if 'imbie_basin' in x]
-ssmis_17_fle_lst = [os.path.join(ssmis_17_basin_path, x) for x in os.listdir(ssmis_17_basin_path) if 'imbie_basin' in x]
-airs_fle_lst = [os.path.join(airs_basin_path, x) for x in os.listdir(airs_basin_path) if 'imbie_basin' in x]
+# avhrr_fle_lst = [os.path.join(avhrr_basin_path, x) for x in os.listdir(avhrr_basin_path) if 'imbie_basin' in x]
+# ssmis_17_fle_lst = [os.path.join(ssmis_17_basin_path, x) for x in os.listdir(ssmis_17_basin_path) if 'imbie_basin' in x]
+# airs_fle_lst = [os.path.join(airs_basin_path, x) for x in os.listdir(airs_basin_path) if 'imbie_basin' in x]
 era5_fle_lst = [os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_path) if 'imbie_basin' in x]
-
+gpcpv3pt3_fle_lst = [os.path.join(gpcpv3pt3_basin_path, x) for x in os.listdir(gpcpv3pt3_basin_path) if 'imbie_basin' in x]
 #%%
 # read and process satellite precipitation data
 # Split the file list into batches of 10
 print('Processing IMERG data')
 batches = [img_fle_lst[i:i + batch_size] for i in range(0, len(img_fle_lst), batch_size)]
 
-img_batch_results = run_batched_processing(batches, basins_imbie)
+img_batch_results = run_batched_processing(batches, basins)
 
 # Calculate the final mean across all batches
 img_final_result = xr.concat(img_batch_results, dim='batch').mean(dim='batch', skipna=True)
@@ -182,7 +187,7 @@ print('Processing ERA5 data')
 
 batches = [era5_fle_lst[i:i + batch_size] for i in range(0, len(era5_fle_lst), batch_size)]
 
-era5_batch_results = run_batched_processing(batches, basins_imbie)
+era5_batch_results = run_batched_processing(batches, basins)
 
 # Calculate the final mean across all batches
 era5_final_result = xr.concat(era5_batch_results, dim='batch').mean(dim='batch', skipna=True)
@@ -212,25 +217,25 @@ gc.collect()
 #----------------------------------------------------------------------------------
 
 # read and process avhrr data
-print('Processing AVHRR data')
+# print('Processing AVHRR data')
 
-batches = [avhrr_fle_lst[i:i + batch_size] for i in range(0, len(avhrr_fle_lst), batch_size)]
+# batches = [avhrr_fle_lst[i:i + batch_size] for i in range(0, len(avhrr_fle_lst), batch_size)]
 
-avhrr_batch_results = run_batched_processing(batches, basins_imbie)
+# avhrr_batch_results = run_batched_processing(batches, basins)
 
-# Calculate the final mean across all batches
-avhrr_final_result = xr.concat(avhrr_batch_results, dim='batch').mean(dim='batch', skipna=True)
+# # Calculate the final mean across all batches
+# avhrr_final_result = xr.concat(avhrr_batch_results, dim='batch').mean(dim='batch', skipna=True)
 
-stereo_avhrr_xrr_basin_mm_per_year = avhrr_final_result * 365
+# stereo_avhrr_xrr_basin_mm_per_year = avhrr_final_result * 365
 
-fle_svnme = os.path.join(annual_precip_in_basins_path, 'AVHRR_2010_imbie_basin_annual_precip.nc')
-encoding = {stereo_avhrr_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
-stereo_avhrr_xrr_basin_mm_per_year.to_netcdf(os.path.join(avhrr_basin_path, fle_svnme), 
-                                             mode='w', format='NETCDF4', encoding=encoding)
+# fle_svnme = os.path.join(annual_precip_in_basins_path, 'AVHRR_2010_imbie_basin_annual_precip.nc')
+# encoding = {stereo_avhrr_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
+# stereo_avhrr_xrr_basin_mm_per_year.to_netcdf(os.path.join(avhrr_basin_path, fle_svnme), 
+#                                              mode='w', format='NETCDF4', encoding=encoding)
 
-# resample the data to the new resolution
-stereo_avhrr_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-                                                              'AVHRR_2010_imbie_basin_annual_precip.nc')) 
+# # resample the data to the new resolution
+# stereo_avhrr_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+#                                                               'AVHRR_2010_imbie_basin_annual_precip.nc')) 
 
 # # Explicitly set the CRS before reprojecting
 
@@ -249,23 +254,23 @@ gc.collect()
 # read and process ssmi_17 data
 print('Processing SSMI_17 data')
 
-batches = [ssmis_17_fle_lst[i:i + batch_size] for i in range(0, len(ssmis_17_fle_lst), batch_size)]
+# batches = [ssmis_17_fle_lst[i:i + batch_size] for i in range(0, len(ssmis_17_fle_lst), batch_size)]
 
-ssmis_batch_results = run_batched_processing(batches, basins_imbie)
+# ssmis_batch_results = run_batched_processing(batches, basins)
 
-# Calculate the final mean across all batches
-ssmis_final_result = xr.concat(ssmis_batch_results, dim='batch').mean(dim='batch', skipna=True)
+# # Calculate the final mean across all batches
+# ssmis_final_result = xr.concat(ssmis_batch_results, dim='batch').mean(dim='batch', skipna=True)
 
-stereo_ssmi_17_xrr_basin_mm_per_year = ssmis_final_result * 365
+# stereo_ssmi_17_xrr_basin_mm_per_year = ssmis_final_result * 365
 
-fle_svnme = os.path.join(annual_precip_in_basins_path, 'SSMIS_17_2010_imbie_basin_annual_precip.nc')
-encoding = {stereo_ssmi_17_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
-stereo_ssmi_17_xrr_basin_mm_per_year.to_netcdf(os.path.join(ssmis_17_basin_path, fle_svnme), 
-                                               mode='w', format='NETCDF4', encoding=encoding)
+# fle_svnme = os.path.join(annual_precip_in_basins_path, 'SSMIS_17_2010_imbie_basin_annual_precip.nc')
+# encoding = {stereo_ssmi_17_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
+# stereo_ssmi_17_xrr_basin_mm_per_year.to_netcdf(os.path.join(ssmis_17_basin_path, fle_svnme), 
+#                                                mode='w', format='NETCDF4', encoding=encoding)
 
-# resample the data to the new resolution
-stereo_ssmi_17_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-                                                              'SSMIS_17_2010_imbie_basin_annual_precip.nc')) 
+# # resample the data to the new resolution
+# stereo_ssmi_17_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+#                                                               'SSMIS_17_2010_imbie_basin_annual_precip.nc')) 
 
 # # Explicitly set the CRS before reprojecting
 
@@ -284,23 +289,23 @@ gc.collect()
 # read and process airs data
 print('Processing AIRS data')
 
-batches = [airs_fle_lst[i:i + batch_size] for i in range(0, len(airs_fle_lst), batch_size)]
+# batches = [airs_fle_lst[i:i + batch_size] for i in range(0, len(airs_fle_lst), batch_size)]
 
-airs_batch_results = run_batched_processing(batches, basins_imbie)
+# airs_batch_results = run_batched_processing(batches, basins)
 
-# Calculate the final mean across all batches
-airs_final_result = xr.concat(airs_batch_results, dim='batch').mean(dim='batch', skipna=True)
+# # Calculate the final mean across all batches
+# airs_final_result = xr.concat(airs_batch_results, dim='batch').mean(dim='batch', skipna=True)
 
-stereo_airs_xrr_basin_mm_per_year = airs_final_result * 365
+# stereo_airs_xrr_basin_mm_per_year = airs_final_result * 365
 
-fle_svnme = os.path.join(annual_precip_in_basins_path, 'AIRS_2010_imbie_basin_annual_precip.nc')
-encoding = {stereo_airs_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
-stereo_airs_xrr_basin_mm_per_year.to_netcdf(os.path.join(airs_basin_path, fle_svnme), 
-                                            mode='w', format='NETCDF4', encoding=encoding)
+# fle_svnme = os.path.join(annual_precip_in_basins_path, 'AIRS_2010_imbie_basin_annual_precip.nc')
+# encoding = {stereo_airs_xrr_basin_mm_per_year.name:{"zlib": True, "complevel": 9}}
+# stereo_airs_xrr_basin_mm_per_year.to_netcdf(os.path.join(airs_basin_path, fle_svnme), 
+#                                             mode='w', format='NETCDF4', encoding=encoding)
 
-# resample the data to the new resolution
-stereo_airs_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
-                                                              'AIRS_2010_imbie_basin_annual_precip.nc')) 
+# # resample the data to the new resolution
+# stereo_airs_xrr_basin_mm_per_year = xr.open_dataset(os.path.join(annual_precip_in_basins_path,
+#                                                               'AIRS_2010_imbie_basin_annual_precip.nc')) 
 
 # # Explicitly set the CRS before reprojecting
 
@@ -397,13 +402,13 @@ cs_ant_xrr_clip.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=Tr
 
 cs_ant_xrr_clip_res = cs_ant_xrr_clip.rio.reproject(
     cs_ant_xrr_clip.rio.crs,
-    shape=basins_imbie.shape,  # set the shape as the basin data shape
+    shape=basins.shape,  # set the shape as the basin data shape
     resampling=Resampling.nearest,
-    transform=basins_imbie.rio.transform()
+    transform=basins.rio.transform()
 )
 
 cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res.values
-cs_ant_xrr_clip_res_arr = np.where(basins_imbie.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
+cs_ant_xrr_clip_res_arr = np.where(basins.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
 cs_ant_xrr_clip_res = xr.DataArray(
     cs_ant_xrr_clip_res_arr,  # Use the 2D numpy array directly
     dims=['y', 'x'],  # Define dimensions
@@ -413,13 +418,13 @@ cs_ant_xrr_clip_res = xr.DataArray(
 )
 
 # Create an empty DataArray to store mean precipitation mapped to basins
-cs_ant_precip_xrr_basin_mapped = xr.full_like(basins_imbie, np.nan, dtype=float)
+cs_ant_precip_xrr_basin_mapped = xr.full_like(basins, np.nan, dtype=float)
 
 # Loop through each basin ID (Zwally basins are numbered from 1 to 27)
 for basin_id in range(1, 20):
     # print(f"Processing basin {basin_id}")
     # Create a mask for the current basin
-    basin_mask = basins_imbie == basin_id
+    basin_mask = basins == basin_id
 
     # Mask the precipitation data for the current basin
     basin_precip = cs_ant_xrr_clip_res.where(basin_mask.data)
