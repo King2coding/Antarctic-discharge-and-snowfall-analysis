@@ -16,6 +16,15 @@ import math
 from collections import Counter
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import BoundaryNorm
+from matplotlib.cm import ScalarMappable
+from matplotlib.ticker import FixedLocator
+from matplotlib.colors import LogNorm, Normalize
+from matplotlib.ticker import MaxNLocator, FuncFormatter
+from matplotlib.cm import get_cmap
+import matplotlib.colors as mcolors
+import matplotlib.patheffects as pe
+import matplotlib.ticker as mticker
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
@@ -32,10 +41,6 @@ import h5py
 
 import cartopy.crs as ccrs
 import cartopy.crs as ccrs
-
-from matplotlib.colors import LogNorm, Normalize
-from matplotlib.ticker import MaxNLocator, FuncFormatter
-from matplotlib.cm import ScalarMappable
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -69,6 +74,38 @@ mpl.rcParams['axes.titleweight'] = 'bold'
 mpl.rcParams['xtick.labelsize'] = 18
 mpl.rcParams['ytick.labelsize'] = 18
 #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+# floating variables
+id2name = {
+    2: "A-Ap",
+    3: "Ap-B",
+    4: "B-C",
+    5: "C-Cp",
+    6: "Cp-D",
+    7: "D-Dp",
+    8: "Dp-E",
+    9: "E-Ep",
+    10: "Ep-F",
+    11: "F-G",
+    12: "G-H",
+    13: "H-Hp",
+    14: "Hp-I",
+    15: "I-Ipp",
+    16: "Ipp-J",
+    17: "J-Jpp",
+    18: "Jpp-K",
+    19: "K-A"
+}
+
+#----------------------------------------------------------------------------
+
+MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun",
+                "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+# ---------------------- Stable basin palette (IDs 2..19) ----------------------
+BASIN_IDS = np.arange(2, 20)  # [2, 3, ..., 19]
+PALETTE   = plt.cm.gist_ncar(np.linspace(0, 1, len(BASIN_IDS)))
+ID2COLOR  = dict(zip(BASIN_IDS, PALETTE))
 
 #%%
 # fucntions
@@ -858,296 +895,9 @@ def annual_slopes_with_se(df_year, cols):
             }
     return results
 
-#%%
-# plot
-
-def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
-    """
-    Plots a multi-row grid of mean precipitation for different products over 27 basins.
-
-    Parameters:
-    arr_lst_mean (list of tuples): List of tuples with product names and their mean precipitation data.
-    vmin (float): Minimum value for colorbar.
-    vmax (float): Maximum value for colorbar.
-    """
-    proj = ccrs.SouthPolarStereo()
-
-    # Use the 'jet' colormap
-    cmap = plt.cm.jet
-    levels = np.linspace(vmin, vmax, 20)  # 27 basins + 1 for boundaries
-    norm = BoundaryNorm(levels, cmap.N)
-
-    # Determine the number of rows and columns for the grid
-    n_products = len(arr_lst_mean)
-    ncols = 4  # Number of columns
-    nrows = (n_products + ncols - 1) // ncols  # Calculate rows needed
-
-    # Create a GridSpec with precise control over spacing
-    fig = plt.figure(figsize=(28, 10 * nrows))
-    gs = gridspec.GridSpec(nrows, ncols, wspace=0.1, hspace=0.15)
-
-    # Loop through each dataset to create the plots
-    axes = []
-    for i, (product_name, data) in enumerate(arr_lst_mean):
-        ax = fig.add_subplot(gs[i], projection=proj)
-        ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
-        # ax.coastlines(lw=0.25, resolution="110m")
-        ax.coastlines(resolution = '110m', color="k", linewidth=0.6)
-
-        # Plot the data
-        data.plot(
-            ax=ax,
-            transform=ccrs.SouthPolarStereo(),
-            cmap=cmap,
-            norm=norm,
-            add_colorbar=False
-        )
-
-        ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
-        ax.set_title(product_name, fontsize=20)
-
-        # Add gridlines
-        gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
-                          linestyle='--', color='k', linewidth=0.75)
-        gl.xlocator = MaxNLocator(nbins=5)
-        gl.ylocator = MaxNLocator(nbins=5)
-        gl.xlabel_style = {'size': 20, 'color': 'k'}
-        gl.ylabel_style = {'size': 20, 'color': 'k'}
-
-        # Only show specific labels
-        gl.top_labels = False
-        gl.bottom_labels = i >= n_products - ncols  # Bottom labels only for the last row
-        gl.left_labels = i % ncols == 0  # Left labels for the first column
-        gl.right_labels = i % ncols == ncols - 1  # Right labels for the last column
-
-        axes.append(ax)
-
-    # Create a colorbar at the bottom spanning all subplots
-    cb = fig.colorbar(
-        ScalarMappable(norm=norm, cmap=cmap),
-        ax=axes,  # Attach the colorbar to all axes for better placement
-        orientation="horizontal",
-        fraction=0.07,  # Fraction of the original axes height
-        pad=0.15,  # Distance from the bottom of the subplots
-        extend="max"
-    )
-    cb.set_ticks(cbar_tcks)  # Set integer ticks
-    cb.ax.tick_params(labelsize=20)
-    cb.set_label("Precipitation [mm/year]", fontsize=20)
-
-    # Show the plot
-    plt.tight_layout()
-
-#-----------------------------------------------------------------------------
-
-import numpy as np
-import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-from matplotlib.colors import BoundaryNorm
-from matplotlib.cm import ScalarMappable
-from matplotlib.ticker import FixedLocator
-
-# ---------- IMPROVED LAT-LON LABEL FUNCTION ----------
-def add_polar_latlon_labels(ax,
-                            lat_rings=(-65, -70, -75, -80), # 
-                            lon_spokes=np.arange(-180, 180, 30),
-                            label_size=12):
-    """
-    Adds readable latitude/longitude labels close to their rings/spokes,
-    avoiding overlap. Designed for South Polar Stereographic projection.
-    """
-
-    # ---- Latitude labels (place at 2° outside the ring) ----
-    for lat in lat_rings[1:]:
-        ax.text(182, lat, f"{abs(lat)}°S",
-        transform=ccrs.PlateCarree(),
-        fontsize=label_size,
-        va="center", ha="left")
 
 
-    # ---- Longitude labels (place near outermost latitude ring) ----
-    outer_lat = lat_rings[0] + 1.5   # e.g., around -63.5°
-
-    for lon in lon_spokes:
-        # Compute label
-        if lon == 0:
-            lab = "0°"
-        elif lon < 0:
-            lab = f"{abs(lon)}°W"
-        else:
-            lab = f"{abs(lon)}°E"
-
-        ax.text(lon, outer_lat,
-                lab,
-                transform=ccrs.PlateCarree(),
-                fontsize=label_size,
-                ha="center", va="bottom",
-                color="black")
-        
-
-# ---------- MAIN UPDATED FUNCTION ----------
-def compare_mean_precip_2x2(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
-
-    if len(arr_lst_mean) != 4:
-        raise ValueError("compare_mean_precip_2x2 expects exactly 4 datasets.")
-
-    proj = ccrs.SouthPolarStereo()
-    cmap = plt.cm.jet
-    levels = np.linspace(vmin, vmax, 20)
-    norm = BoundaryNorm(levels, cmap.N)
-
-    lat_rings = (-65, -70, -75, -80)
-    lon_spokes = np.arange(-180, 180, 30)
-
-    fig, axes = plt.subplots(
-        2, 2, subplot_kw={"projection": proj}, 
-        figsize=(12, 12)
-    )
-    axes = axes.ravel()
-
-    fig.subplots_adjust(wspace=0.05, hspace=0.25, bottom=0.20)
-
-    for ax, (product_name, data) in zip(axes, arr_lst_mean):
-
-        # remove bounding box around each subplot
-        ax.set_frame_on(False)
-
-        ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
-        ax.text(
-            0.15, 1.05,              # x<0.5 moves left of center
-            product_name,
-            transform=ax.transAxes,
-            fontsize=16,
-            fontweight="bold",
-            ha="center",
-            va="bottom"
-        )
-
-        # ax.coastlines(resolution="110m", color="k", linewidth=0.55)
-
-        # plot
-        data.plot(
-            ax=ax,
-            transform=ccrs.SouthPolarStereo(),
-            cmap=cmap,
-            norm=norm,
-            add_colorbar=False,
-            add_labels=False, 
-        )
-
-        # ---------- IMBIE basin boundaries (bold coast, thin internals) ----------
-        # pick the basin-ID DataArray from coords
-        if "basin_id" in data.coords:
-            basin_da = data["basin_id"]
-        elif "basin" in data.coords:
-            basin_da = data["basin"]
-        else:
-            basin_da = None
-
-        if basin_da is not None:
-            # ensure 2D (y,x); some variants could carry an extra dim
-            if "band" in basin_da.dims:
-                basin_da = basin_da.isel(band=0)
-
-            # fill NaNs with 0 so we get a 0–1 boundary at the grounded-coast
-            da_for_contour = xr.where(np.isnan(basin_da), 0, basin_da)
-
-            # thin internal basin boundaries
-            internal_levels = np.arange(1.5, 19.5, 1.0)
-            ax.contour(
-                da_for_contour["x"],
-                da_for_contour["y"],
-                da_for_contour.values,
-                levels=internal_levels,
-                colors="k",
-                linewidths=0.6,
-                transform=proj,
-                zorder=5,
-            )
-
-            # bold coastline (0 vs 1)
-            ax.contour(
-                da_for_contour["x"],
-                da_for_contour["y"],
-                da_for_contour.values,
-                levels=[0.5],
-                colors="k",
-                linewidths=1.2,
-                transform=proj,
-                zorder=6,
-            )
-
-        # ax.add_feature(
-        #     cfeature.OCEAN,
-        #     zorder=1, edgecolor=None, lw=0,
-        #     color=None, alpha=0.5
-        # )
-
-        # ax.set_title(product_name, fontsize=17, fontweight="bold")
-
-        # gridlines without labels
-        gl = ax.gridlines(
-            crs=ccrs.PlateCarree(),
-            draw_labels=False,
-            linewidth=0.55,
-            color="gray",
-            alpha=0.8,
-            linestyle="--",
-        )
-        gl.ylocator = FixedLocator(lat_rings)
-        gl.xlocator = FixedLocator(lon_spokes)
-
-        # improved lat/lon labels
-        add_polar_latlon_labels(ax, lat_rings=lat_rings,
-                                lon_spokes=lon_spokes,
-                                label_size=11)
-        
-    all_levels = levels  # same 'levels' you used for BoundaryNorm
-
-    sm = ScalarMappable(norm=norm, cmap=cmap)
-    sm.set_array([])  
-
-    # # shared colorbar
-    # cb = fig.colorbar(
-    #     sm,#ScalarMappable(norm=norm, cmap=cmap),
-    #     ax=axes.tolist(),
-    #     orientation="horizontal",
-    #     fraction=0.045,
-    #     pad=0.08,
-    #     extend="max",
-    #     boundaries=all_levels,   # ensure discrete patches
-    #     ticks=all_levels         # tick for every color step
-    # )
-
-    # # Now: only label the ticks that are in cbar_tcks; others get ""
-    # if cbar_tcks is not None:
-    #     labels = []
-    #     for val in all_levels:
-    #         if any(np.isclose(val, lab) for lab in cbar_tcks):
-    #             labels.append(f"{val:.0f}")
-    #         else:
-    #             labels.append("")   # show tick, no label
-    #     cb.set_ticklabels(labels)
-
-    # Create a colorbar at the bottom spanning all subplots
-    cb = fig.colorbar(
-        ScalarMappable(norm=norm, cmap=cmap),
-        ax=axes,  # Attach the colorbar to all axes for better placement
-        orientation="horizontal",
-        fraction=0.03,  # Fraction of the original axes height
-        pad=0.1,  # Distance from the bottom of the subplots
-        extend="max"
-    )
-    cb.set_ticks(cbar_tcks)  # Set integer ticks
-
-    cb.ax.tick_params(labelsize=12)
-    cb.ax.minorticks_off()
-    cb.set_label("Precipitation [mm/year]", fontsize=14)
-
-    return fig, axes
-
-#----------------------------------------------------------------------------
+#
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.colors import BoundaryNorm
@@ -1859,6 +1609,314 @@ def da_season_to_basin_df(da, basin_name="basin"):
     return df_mean_seas_acc
 
 #----------------------------------------------------------------------------
+
+#---------------------------------------------------------------------------
+
+def to_df(da):
+    """
+    Flatten a (year, basin) DataArray into a DataFrame with columns:
+    year, basin, product_name
+    """
+    
+    # df = da.to_dataframe(name).reset_index()
+    df = da.to_dataframe().reset_index()
+    cols = df.columns.tolist()
+    cols = [c for c in cols if 'precip' in c \
+             or 'pr' in c \
+             or 'basin' in c \
+            or c in ['year', 'basin']]
+    prcp_col = [c for c in cols if 'precip' in c or\
+                'pr' in c][0]
+    bsn_col  = [c for c in cols if 'basin' in c][0]
+    # name = df.columns[-1]  # last column is the data values
+
+    df = df[cols].copy()
+
+    # Drop dummy basin IDs (0 or NaN) and NaN values
+    df = df.dropna(subset=[prcp_col])
+    df = df[df[bsn_col] > 1]
+    df_grp = df.groupby(["year", bsn_col]).mean().reset_index()
+    return df_grp
+
+
+#%%
+# PLOTTING HELPERS
+def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
+    """
+    Plots a multi-row grid of mean precipitation for different products over 27 basins.
+
+    Parameters:
+    arr_lst_mean (list of tuples): List of tuples with product names and their mean precipitation data.
+    vmin (float): Minimum value for colorbar.
+    vmax (float): Maximum value for colorbar.
+    """
+    proj = ccrs.SouthPolarStereo()
+
+    # Use the 'jet' colormap
+    cmap = plt.cm.jet
+    levels = np.linspace(vmin, vmax, 20)  # 27 basins + 1 for boundaries
+    norm = BoundaryNorm(levels, cmap.N)
+
+    # Determine the number of rows and columns for the grid
+    n_products = len(arr_lst_mean)
+    ncols = 4  # Number of columns
+    nrows = (n_products + ncols - 1) // ncols  # Calculate rows needed
+
+    # Create a GridSpec with precise control over spacing
+    fig = plt.figure(figsize=(28, 10 * nrows))
+    gs = gridspec.GridSpec(nrows, ncols, wspace=0.1, hspace=0.15)
+
+    # Loop through each dataset to create the plots
+    axes = []
+    for i, (product_name, data) in enumerate(arr_lst_mean):
+        ax = fig.add_subplot(gs[i], projection=proj)
+        ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+        # ax.coastlines(lw=0.25, resolution="110m")
+        ax.coastlines(resolution = '110m', color="k", linewidth=0.6)
+
+        # Plot the data
+        data.plot(
+            ax=ax,
+            transform=ccrs.SouthPolarStereo(),
+            cmap=cmap,
+            norm=norm,
+            add_colorbar=False
+        )
+
+        ax.add_feature(cfeature.OCEAN, zorder=1, edgecolor=None, lw=0, color="silver", alpha=0.5)
+        ax.set_title(product_name, fontsize=20)
+
+        # Add gridlines
+        gl = ax.gridlines(draw_labels=True, x_inline=False, y_inline=False,
+                          linestyle='--', color='k', linewidth=0.75)
+        gl.xlocator = MaxNLocator(nbins=5)
+        gl.ylocator = MaxNLocator(nbins=5)
+        gl.xlabel_style = {'size': 20, 'color': 'k'}
+        gl.ylabel_style = {'size': 20, 'color': 'k'}
+
+        # Only show specific labels
+        gl.top_labels = False
+        gl.bottom_labels = i >= n_products - ncols  # Bottom labels only for the last row
+        gl.left_labels = i % ncols == 0  # Left labels for the first column
+        gl.right_labels = i % ncols == ncols - 1  # Right labels for the last column
+
+        axes.append(ax)
+
+    # Create a colorbar at the bottom spanning all subplots
+    cb = fig.colorbar(
+        ScalarMappable(norm=norm, cmap=cmap),
+        ax=axes,  # Attach the colorbar to all axes for better placement
+        orientation="horizontal",
+        fraction=0.07,  # Fraction of the original axes height
+        pad=0.15,  # Distance from the bottom of the subplots
+        extend="max"
+    )
+    cb.set_ticks(cbar_tcks)  # Set integer ticks
+    cb.ax.tick_params(labelsize=20)
+    cb.set_label("Precipitation [mm/year]", fontsize=20)
+
+    # Show the plot
+    plt.tight_layout()
+
+# ---------- IMPROVED LAT-LON LABEL FUNCTION ----------
+def add_polar_latlon_labels(ax,
+                            lat_rings=(-65, -70, -75, -80), # 
+                            lon_spokes=np.arange(-180, 180, 30),
+                            label_size=12):
+    """
+    Adds readable latitude/longitude labels close to their rings/spokes,
+    avoiding overlap. Designed for South Polar Stereographic projection.
+    """
+
+    # ---- Latitude labels (place at 2° outside the ring) ----
+    for lat in lat_rings[1:]:
+        ax.text(182, lat, f"{abs(lat)}°S",
+        transform=ccrs.PlateCarree(),
+        fontsize=label_size,
+        va="center", ha="left")
+
+
+    # ---- Longitude labels (place near outermost latitude ring) ----
+    outer_lat = lat_rings[0] + 1.5   # e.g., around -63.5°
+
+    for lon in lon_spokes:
+        # Compute label
+        if lon == 0:
+            lab = "0°"
+        elif lon < 0:
+            lab = f"{abs(lon)}°W"
+        else:
+            lab = f"{abs(lon)}°E"
+
+        ax.text(lon, outer_lat,
+                lab,
+                transform=ccrs.PlateCarree(),
+                fontsize=label_size,
+                ha="center", va="bottom",
+                color="black")
+        
+
+# ---------- MAIN UPDATED FUNCTION ----------
+def compare_mean_precip_2x2(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
+
+    if len(arr_lst_mean) != 4:
+        raise ValueError("compare_mean_precip_2x2 expects exactly 4 datasets.")
+
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet
+    levels = np.linspace(vmin, vmax, 20)
+    norm = BoundaryNorm(levels, cmap.N)
+
+    lat_rings = (-65, -70, -75, -80)
+    lon_spokes = np.arange(-180, 180, 30)
+
+    fig, axes = plt.subplots(
+        2, 2, subplot_kw={"projection": proj}, 
+        figsize=(12, 12)
+    )
+    axes = axes.ravel()
+
+    fig.subplots_adjust(wspace=0.05, hspace=0.25, bottom=0.20)
+
+    for ax, (product_name, data) in zip(axes, arr_lst_mean):
+
+        # remove bounding box around each subplot
+        ax.set_frame_on(False)
+
+        ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+        ax.text(
+            0.15, 1.05,              # x<0.5 moves left of center
+            product_name,
+            transform=ax.transAxes,
+            fontsize=16,
+            fontweight="bold",
+            ha="center",
+            va="bottom"
+        )
+
+        # ax.coastlines(resolution="110m", color="k", linewidth=0.55)
+
+        # plot
+        data.plot(
+            ax=ax,
+            transform=ccrs.SouthPolarStereo(),
+            cmap=cmap,
+            norm=norm,
+            add_colorbar=False,
+            add_labels=False, 
+        )
+
+        # ---------- IMBIE basin boundaries (bold coast, thin internals) ----------
+        # pick the basin-ID DataArray from coords
+        if "basin_id" in data.coords:
+            basin_da = data["basin_id"]
+        elif "basin" in data.coords:
+            basin_da = data["basin"]
+        else:
+            basin_da = None
+
+        if basin_da is not None:
+            # ensure 2D (y,x); some variants could carry an extra dim
+            if "band" in basin_da.dims:
+                basin_da = basin_da.isel(band=0)
+
+            # fill NaNs with 0 so we get a 0–1 boundary at the grounded-coast
+            da_for_contour = xr.where(np.isnan(basin_da), 0, basin_da)
+
+            # thin internal basin boundaries
+            internal_levels = np.arange(1.5, 19.5, 1.0)
+            ax.contour(
+                da_for_contour["x"],
+                da_for_contour["y"],
+                da_for_contour.values,
+                levels=internal_levels,
+                colors="k",
+                linewidths=0.6,
+                transform=proj,
+                zorder=5,
+            )
+
+            # bold coastline (0 vs 1)
+            ax.contour(
+                da_for_contour["x"],
+                da_for_contour["y"],
+                da_for_contour.values,
+                levels=[0.5],
+                colors="k",
+                linewidths=1.2,
+                transform=proj,
+                zorder=6,
+            )
+
+        # ax.add_feature(
+        #     cfeature.OCEAN,
+        #     zorder=1, edgecolor=None, lw=0,
+        #     color=None, alpha=0.5
+        # )
+
+        # ax.set_title(product_name, fontsize=17, fontweight="bold")
+
+        # gridlines without labels
+        gl = ax.gridlines(
+            crs=ccrs.PlateCarree(),
+            draw_labels=False,
+            linewidth=0.55,
+            color="gray",
+            alpha=0.8,
+            linestyle="--",
+        )
+        gl.ylocator = FixedLocator(lat_rings)
+        gl.xlocator = FixedLocator(lon_spokes)
+
+        # improved lat/lon labels
+        add_polar_latlon_labels(ax, lat_rings=lat_rings,
+                                lon_spokes=lon_spokes,
+                                label_size=11)
+        
+    all_levels = levels  # same 'levels' you used for BoundaryNorm
+
+    sm = ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])  
+
+    # # shared colorbar
+    # cb = fig.colorbar(
+    #     sm,#ScalarMappable(norm=norm, cmap=cmap),
+    #     ax=axes.tolist(),
+    #     orientation="horizontal",
+    #     fraction=0.045,
+    #     pad=0.08,
+    #     extend="max",
+    #     boundaries=all_levels,   # ensure discrete patches
+    #     ticks=all_levels         # tick for every color step
+    # )
+
+    # # Now: only label the ticks that are in cbar_tcks; others get ""
+    # if cbar_tcks is not None:
+    #     labels = []
+    #     for val in all_levels:
+    #         if any(np.isclose(val, lab) for lab in cbar_tcks):
+    #             labels.append(f"{val:.0f}")
+    #         else:
+    #             labels.append("")   # show tick, no label
+    #     cb.set_ticklabels(labels)
+
+    # Create a colorbar at the bottom spanning all subplots
+    cb = fig.colorbar(
+        ScalarMappable(norm=norm, cmap=cmap),
+        ax=axes,  # Attach the colorbar to all axes for better placement
+        orientation="horizontal",
+        fraction=0.03,  # Fraction of the original axes height
+        pad=0.1,  # Distance from the bottom of the subplots
+        extend="max"
+    )
+    cb.set_ticks(cbar_tcks)  # Set integer ticks
+
+    cb.ax.tick_params(labelsize=12)
+    cb.ax.minorticks_off()
+    cb.set_label("Precipitation [mm/year]", fontsize=14)
+
+    return fig, axes
+#-----------------------------------------------------------------------------
 def plot_seasonal_heatmaps_by_basin_v2(
     plot_dfs,
     vmin=0, vmax=120,
@@ -1930,8 +1988,7 @@ def plot_seasonal_heatmaps_by_basin_v2(
     cbar.ax.tick_params(labelsize=18)
 
     plt.show()
-
-#---------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
 def plot_seasonal_by_season_product(
     plot_dfs,
     basin_order=None,
@@ -2064,3 +2121,212 @@ def plot_seasonal_by_season_product(
     cbar.ax.tick_params(labelsize=18)
 
     plt.show()
+
+#----------------------------------------------------------------------------
+def plot_monthly_cycle_by_basin_products_precomputed(
+    plot_dfs,
+    basin_order=None,
+    figsize=(8, 12),
+    vmin_y=None,
+    vmax_y=None,
+):
+    """
+    plot_dfs : dict of {product_label : df}
+        Each df must already contain monthly-mean-per-basin values.
+        Required columns:
+           - 'month' (1–12)
+           - basin column (detected automatically)
+           - precip column (detected automatically)
+
+    No groupby done in this function.
+    """
+
+    # ---- Collect basin IDs & colors ----
+    all_basins = set()
+    for df in plot_dfs.values():
+        cols = df.columns.tolist()
+        bsn_col = [c for c in cols if "basin" in c][0]
+        all_basins.update(df[bsn_col].unique())
+
+    if basin_order is None:
+        basin_order = sorted(all_basins)
+
+    n_basins = len(basin_order)
+    cmap = get_cmap("tab20", n_basins)
+    basin_to_color = {b: cmap(i) for i, b in enumerate(basin_order)}
+
+    # ---- Determine y limits if not provided ----
+    if vmin_y is None or vmax_y is None:
+        all_vals = []
+        for df in plot_dfs.values():
+            cols = df.columns.tolist()
+            pr_col = [c for c in cols if "precip" in c or "pr" in c][0]
+            all_vals.append(df[pr_col].values)
+        all_vals = np.concatenate(all_vals)
+        if vmin_y is None:
+            vmin_y = np.nanmin(all_vals)
+        if vmax_y is None:
+            vmax_y = np.nanmax(all_vals)
+
+    # ---- Create figure ----
+    n_prod = len(plot_dfs)
+    fig, axes = plt.subplots(n_prod, 1, figsize=figsize, sharex=True,sharey=False)
+    if n_prod == 1:
+        axes = [axes]
+
+    months = np.arange(1, 13)
+
+    # ---- Plot each product ----
+    for ax, (product_label, df) in zip(axes, plot_dfs.items()):
+
+        cols = df.columns.tolist()
+        bsn_col = [c for c in cols if "basin" in c][0]
+        pr_col  = [c for c in cols if "precip" in c or "pr" in c][0]
+
+        # Loop basins (df already contains monthly values)
+        for basin in basin_order:
+            sub = df[df[bsn_col] == basin].sort_values("month")
+            y = sub[pr_col].values
+
+            label = str(basin) if ax is axes[0] else None  # legend only once
+
+            ax.plot(months, y, "-o", lw=1.5, ms=3,
+                    color=basin_to_color[basin],
+                    label=label)
+
+        ax.set_ylim(vmin_y, vmax_y)
+        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.set_ylabel("Precipitation [mm/month]", fontsize=11)
+        ax.set_title(product_label, fontsize=12, fontweight="bold")
+
+    # ---- Month labels ----
+    axes[-1].set_xticks(months)
+    axes[-1].set_xticklabels(MONTH_LABELS, fontsize=11)
+    axes[-1].set_xlabel("Month", fontsize=12)
+
+    # ---- Shared legend ----
+    handles, labels = axes[0].get_legend_handles_labels()
+
+    fig.legend(handles, labels, title="IMBIE Basin ID",
+               loc="lower center", ncol=6,
+               fontsize=9, title_fontsize=10,
+               frameon=True)
+
+    plt.subplots_adjust(left=0.12, right=0.98,
+                        top=0.96, bottom=0.12, hspace=0.25)
+    plt.show()
+
+#----------------------------------------------------------------------------
+def colors_for_basins(basin_array, default=(0.8, 0.8, 0.8, 1.0)):
+    """Return RGBA colors for each basin id using a stable mapping for IDs 2..19."""
+    return np.array([ID2COLOR.get(int(b), default) for b in basin_array])
+
+# ---------------------- Main plotting function ----------------------
+def plot_pmb_scatter(
+    df_mean_yr_acc,
+    ref,
+    products,
+    high_thresh=500.0,
+    scale="linear",         # "linear" or "log"
+    log_min=10,             # lower bound for log plots
+    log_ticks=(10, 50, 100, 200, 500, 1000, 1500, 2000)
+):
+    """
+    Scatter of product vs ref (Pmb) by IMBIE basin with consistent colors (IDs 2..19).
+    scale="linear" keeps your original look; scale="log" switches axes to log with clean ticks.
+    """
+
+    # nice product display names
+    pretty = {"GPCP": "GPCP v3.3", "RACMO": "RACMO v2.4"}
+
+    fig, axes = plt.subplots(1, len(products), figsize=(18, 6), sharey=True)
+    if len(products) == 1:
+        axes = [axes]
+
+    # FIXED max at 2000 for both linear and log
+    global_max = 2000.0
+
+    for ax, prod in zip(axes, products):
+        yname = pretty.get(prod, prod)
+
+        # valid rows and arrays
+        valid = df_mean_yr_acc[[ref, prod, "basin"]].notnull().all(axis=1)
+        sub = df_mean_yr_acc.loc[valid].copy()
+        sub["basin"] = sub["basin"].astype(int)
+
+        x_all = sub[ref].to_numpy()
+        y_all = sub[prod].to_numpy()
+        b_all = sub["basin"].to_numpy()
+
+        # log requires strictly positive values
+        if scale == "log":
+            pos = (x_all > 0) & (y_all > 0)
+        else:
+            pos = np.isfinite(x_all) & np.isfinite(y_all)
+
+        x = x_all[pos]
+        y = y_all[pos]
+        b = b_all[pos]
+
+        # colors by explicit basin mapping
+        cols = colors_for_basins(b)
+
+        # scatter
+        ax.scatter(x, y, c=cols, s=110, alpha=0.85,
+                   edgecolor="k", linewidths=0.6, zorder=2)
+
+        # annotate
+        diff = np.abs(x - y)
+        mask = (diff >= high_thresh) | (((b >= 13) & (b <= 18)) | (x >= 500))
+        for xx, yy, bb in zip(x[mask], y[mask], b[mask]):
+            ax.annotate(f"{int(bb)}", xy=(xx, yy), xycoords="data",
+                        xytext=(0, 6), textcoords="offset points",
+                        ha="center", va="bottom", fontsize=12, color="black",
+                        clip_on=True, path_effects=[pe.withStroke(linewidth=2.2, foreground="white")],
+                        zorder=4)
+
+        # limits, scales, and 1:1 line
+        if scale == "log":
+            lims = (log_min, global_max)
+            ax.set_xscale("log"); ax.set_yscale("log")
+        else:
+            lims = (0.0, global_max)
+
+        ax.set_xlim(lims); ax.set_ylim(lims)
+        ax.plot(lims, lims, "k--", lw=1)
+        ax.set_aspect("equal", adjustable="box")
+
+        # stats
+        in_box = (x >= lims[0]) & (x <= lims[1]) & (y >= lims[0]) & (y <= lims[1])
+        if np.count_nonzero(in_box) >= 2:
+            cc = np.corrcoef(x[in_box], y[in_box])[0, 1]
+            bias = np.nanmean(y[in_box]) / np.nanmean(x[in_box])
+        else:
+            cc, bias = np.nan, np.nan
+
+        ax.text(0.03, 0.97, f"CC={cc:.2f}\nBias={bias:.2f}",
+                transform=ax.transAxes, va="top", ha="left", fontsize=14,
+                bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"))
+
+        # labels
+        ax.set_xlabel(f"{ref} (mm/yr)", fontsize=14)
+        ax.set_ylabel(f"{yname} (mm/yr)", fontsize=14)
+        ax.tick_params(labelsize=12)
+
+        # ticks & grid
+        if scale == "log":
+            ax.set_xticks(log_ticks)
+            ax.set_yticks(log_ticks)
+            ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
+            ax.yaxis.set_major_formatter(mticker.ScalarFormatter())
+            plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+            ax.grid(which="major", linestyle="--", linewidth=0.6, alpha=0.6)
+        else:
+            step = 500.0
+            ax.set_xticks(np.arange(0, global_max + step, step))
+            ax.set_yticks(np.arange(0, global_max + step, step))
+            ax.grid(which="major", linestyle="--", linewidth=0.6, alpha=0.6)
+
+    plt.subplots_adjust(left=0.08, right=0.99, top=0.97, bottom=0.1, wspace=0.15)
+    # plt.show()
+

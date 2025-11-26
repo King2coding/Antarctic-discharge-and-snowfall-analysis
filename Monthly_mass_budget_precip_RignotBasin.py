@@ -35,27 +35,7 @@ racmo_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data
 path_to_plots = r'/home/kkumah/Projects/Antarctic_discharge_work/plots'
 
 #%%
-# floating variables
-id2name = {
-    2: "A-Ap",
-    3: "Ap-B",
-    4: "B-C",
-    5: "C-Cp",
-    6: "Cp-D",
-    7: "D-Dp",
-    8: "Dp-E",
-    9: "E-Ep",
-    10: "Ep-F",
-    11: "F-G",
-    12: "G-H",
-    13: "H-Hp",
-    14: "Hp-I",
-    15: "I-Ipp",
-    16: "Ipp-J",
-    17: "J-Jpp",
-    18: "Jpp-K",
-    19: "K-A"
-}
+
 
 # basin_fle = os.path.join(basin_path, 'bedmap3_basins.nc')
 # bedmap3_basins = xr.open_dataset(basin_fle)
