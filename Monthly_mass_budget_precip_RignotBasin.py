@@ -136,6 +136,10 @@ YEARS = [2019, 2020]
 
 # Set up colormap and norm for 27 discrete basins
 colors = plt.cm.gist_ncar(np.linspace(0, 1, 19))
+
+# Give Basin 19 a unique neutral color not used elsewhere
+colors[-1] = np.array([0.60, 0.60, 0.60, 1.0])   # medium gray
+
 cmap = mcolors.ListedColormap(colors)
 cmap.set_bad(color='white')  # Set background (masked or NaN) to white
 
@@ -144,36 +148,137 @@ vmin, vmax = 1,19 #1, 27
 levels = np.linspace(vmin, vmax, vmax - vmin + 2)  # 27 basins + 1 for boundaries
 norm = mcolors.BoundaryNorm(levels, cmap.N)
 
+da = basins_imbie.isel(band=0)
+
+
 # Plot
 proj = ccrs.SouthPolarStereo()
 
 # --- Pretty plot to sanity-check labels on the map ---
-fig, ax = plt.subplots(figsize=(9,10), subplot_kw={'projection': proj}, dpi=200)
+fig, ax = plt.subplots(figsize=(9, 10), subplot_kw={'projection': proj}, dpi=200)
 ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
-im = basins_imbie.plot(ax=ax, transform=proj, cmap='gist_ncar', add_colorbar=False)
-# Add white background
+
+im = da.plot(
+    ax=ax,
+    transform=proj,   # data are in SouthPolarStereo
+    cmap=cmap,
+    norm=norm,
+    vmin=vmin,
+    vmax=vmax,
+    add_colorbar=False,
+    add_labels=False,
+)
+
 ax.set_facecolor('white')
-ax.coastlines(resolution = '110m', color="k", linewidth=0.6)
 
-# annotate using pixel centroids
-ids = sorted(id2name.keys())
-for bid in ids:
-    mask = (basins_imbie == bid)
-    if mask.any():
-        yy, xx = np.where(mask[0].values)
-        if len(xx) == 0: 
-            continue
-        cx = float(basins_imbie['x'].values[xx].mean())
-        cy = float(basins_imbie['y'].values[yy].mean())
-        ax.text(cx, cy, id2name[bid], fontsize=12, ha='center', va='center',
-                transform=proj, color='k', bbox=dict(boxstyle="round,pad=0.2",
-                fc="white", ec="none", alpha=0.6))
+# --- boundaries: use a copy with ocean=0 instead of NaN ---
+da_for_contour = da.fillna(0)          # 0 outside basins, 1..19 inside
 
+# coastline (0–1) + internal boundaries (1–19)
+boundary_levels = np.arange(0.5, 19.5, 1.0)
+
+ax.contour(
+    da["x"].values,
+    da["y"].values,
+    da_for_contour.values,   # 2D (y, x) with 0/1..19
+    levels=boundary_levels,
+    colors="k",
+    linewidths=0.8,
+    transform=proj,
+    zorder=5,
+)
+
+# ids = sorted(id2name.keys())
+# for bid in ids:
+#     mask = (da == bid)
+#     if mask.any():
+#         yy, xx = np.where(mask.values)
+#         if len(xx) == 0:
+#             continue
+#         cx = float(da['x'].values[xx].mean())
+#         cy = float(da['y'].values[yy].mean())
+#         ax.text(
+#             cx, cy, id2name[bid],
+#             fontsize=12, ha='center', va='center',
+#             transform=proj, color='k',
+#             bbox=dict(boxstyle="round,pad=0.2",
+#                       fc="white", ec="none", alpha=0.6),
+#         )
+
+# --- choose which basins are "small" and need external labels ---
+# adjust ids and offsets after a quick test render
+small_basin_offsets = {
+    11: (-4.0e5, -1.0e5),  # F-G  (example offsets, tweak!)
+    # 12: (-2.0e5,  0.8e5),  # G-H
+    13: (-4.8e5,  1.3e5),  # H-Hp
+    14: (-8.4e5,  1.9e5),  # Hp-I
+    15: (-4.8e5,  2.5e5),  # I-Ipp
+    16: (-0.8e5,  3.7e5),  # Ipp-J
+    17: (-0.5e5,  4.2e5),  # J-Jpp
+    # add / tweak as needed
+}
+
+for bid in sorted(id2name.keys()):
+    mask = (da == bid)
+    if not mask.any():
+        continue
+
+    yy, xx = np.where(mask.values)
+    if len(xx) == 0:
+        continue
+
+    cx = float(da['x'].values[xx].mean())
+    cy = float(da['y'].values[yy].mean())
+    label = id2name[bid]
+
+    if bid in small_basin_offsets:
+        # move label outside & draw leader line
+        dx, dy = small_basin_offsets[bid]
+        lx, ly = cx + dx, cy + dy
+
+        ax.annotate(
+            label,
+            xy=(cx, cy),      # basin centroid (tail of line)
+            xytext=(lx, ly),  # label position
+            textcoords='data',
+            xycoords='data',
+            ha='center',
+            va='center',
+            fontsize=12,
+            transform=proj,
+            arrowprops=dict(
+                arrowstyle="-",   # simple line, no arrow head
+                lw=0.8,
+                color="k"
+            ),
+            bbox=dict(
+                boxstyle="round,pad=0.2",
+                fc="white",
+                ec="none",
+                alpha=0.7
+            ),
+        )
+    else:
+        # regular in-basin label
+        ax.text(
+            cx, cy, label,
+            fontsize=12,
+            ha='center',
+            va='center',
+            transform=proj,
+            color='k',
+            bbox=dict(
+                boxstyle="round,pad=0.2",
+                fc="white",
+                ec="none",
+                alpha=0.6
+            ),
+        )
 # Remove axis
 ax.axis('off')
 
 # Final cleanup
-ax.set_title("IMBIE Basins with IDs ", fontsize=18)
+# ax.set_title("IMBIE Basins with IDs ", fontsize=18)
 plt.tight_layout()
 
 # Save the imbie basin plot
@@ -562,6 +667,12 @@ Precip_map_mm.attrs.update({
     "description": "Monthly accumulated precipitation per basin in water-equivalent height, painted to pixels.",
     "note": "Same as Gt/month result but divided by basin area (ρ=1000 kg/m³)."
 })
+
+# save to disk with good memory usage
+svnme = os.path.join(basin_path, 'Monthly_mass_budget_precip_RignotBasin_in_GT.nc')
+Precip_map_Gt.to_netcdf(svnme)
+svnme = os.path.join(basin_path, 'Monthly_mass_budget_precip_RignotBasin_in_mm.nc')
+Precip_map_mm.to_netcdf(svnme)
 
 
 #%%

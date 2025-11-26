@@ -55,6 +55,10 @@ crs_format = 'proj4'
 
 crs_stereo = "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84"
 
+SEAS = ["DJF", "MAM", "JJA", "SON"]
+
+SEAS_ORDER = ("DJF", "MAM", "JJA", "SON")
+
 #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 mpl.rcParams['font.family'] = 'serif'
@@ -998,11 +1002,11 @@ def compare_mean_precip_2x2(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
 
     fig, axes = plt.subplots(
         2, 2, subplot_kw={"projection": proj}, 
-        figsize=(14, 14)
+        figsize=(12, 12)
     )
     axes = axes.ravel()
 
-    fig.subplots_adjust(wspace=0.05, hspace=0.2, bottom=0.20)
+    fig.subplots_adjust(wspace=0.05, hspace=0.25, bottom=0.20)
 
     for ax, (product_name, data) in zip(axes, arr_lst_mean):
 
@@ -1031,6 +1035,48 @@ def compare_mean_precip_2x2(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
             add_colorbar=False,
             add_labels=False, 
         )
+
+        # ---------- IMBIE basin boundaries (bold coast, thin internals) ----------
+        # pick the basin-ID DataArray from coords
+        if "basin_id" in data.coords:
+            basin_da = data["basin_id"]
+        elif "basin" in data.coords:
+            basin_da = data["basin"]
+        else:
+            basin_da = None
+
+        if basin_da is not None:
+            # ensure 2D (y,x); some variants could carry an extra dim
+            if "band" in basin_da.dims:
+                basin_da = basin_da.isel(band=0)
+
+            # fill NaNs with 0 so we get a 0–1 boundary at the grounded-coast
+            da_for_contour = xr.where(np.isnan(basin_da), 0, basin_da)
+
+            # thin internal basin boundaries
+            internal_levels = np.arange(1.5, 19.5, 1.0)
+            ax.contour(
+                da_for_contour["x"],
+                da_for_contour["y"],
+                da_for_contour.values,
+                levels=internal_levels,
+                colors="k",
+                linewidths=0.6,
+                transform=proj,
+                zorder=5,
+            )
+
+            # bold coastline (0 vs 1)
+            ax.contour(
+                da_for_contour["x"],
+                da_for_contour["y"],
+                da_for_contour.values,
+                levels=[0.5],
+                colors="k",
+                linewidths=1.2,
+                transform=proj,
+                zorder=6,
+            )
 
         # ax.add_feature(
         #     cfeature.OCEAN,
@@ -1089,8 +1135,8 @@ def compare_mean_precip_2x2(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
         ScalarMappable(norm=norm, cmap=cmap),
         ax=axes,  # Attach the colorbar to all axes for better placement
         orientation="horizontal",
-        fraction=0.07,  # Fraction of the original axes height
-        pad=0.15,  # Distance from the bottom of the subplots
+        fraction=0.03,  # Fraction of the original axes height
+        pad=0.1,  # Distance from the bottom of the subplots
         extend="max"
     )
     cb.set_ticks(cbar_tcks)  # Set integer ticks
@@ -1100,6 +1146,7 @@ def compare_mean_precip_2x2(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
     cb.set_label("Precipitation [mm/year]", fontsize=14)
 
     return fig, axes
+
 #----------------------------------------------------------------------------
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -1647,7 +1694,7 @@ def process_precipitation_data(
         annual_map   = annual_map.compute()
         seasonal_map = seasonal_map.compute()
 
-    return annual_map, seasonal_map
+    return annual_map, seasonal_map, P_basin
 
 #----------------------------------------------------------------------------
 def ensure_season_index(da,SEAS):
@@ -1663,4 +1710,357 @@ def ensure_season_index(da,SEAS):
 
 def pick_year(da, year):
     return da.sel(year=year) if "year" in da.dims else da
+
 #----------------------------------------------------------------------------
+
+def plot_basin_ranked_bar_overlay(
+    df,
+    basin_col="basin",
+    ref_col="Pmb",          # mass-budget precipitation (P_MB)
+    prod_cols=None,        # list of other products to overlay
+    prod_labels=None,      # pretty labels for legend
+    figsize=(12, 5),
+):
+    import matplotlib.ticker as mticker
+    """
+    Basin-ranked bar plot: basins sorted by reference precipitation (P_MB),
+    with other products overlaid as markers.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain one row per basin with columns for basin ID, P_MB, and other products.
+    basin_col : str
+        Column with basin identifier (e.g., integer 1–19 or 'A-Ap', etc.).
+    ref_col : str
+        Column name for the reference precipitation (P_MB).
+    prod_cols : list of str
+        Column names for other products to overlay (e.g. ["ERA5", "GPCP_v3.3", "RACMO_2.4p1"]).
+    prod_labels : list of str
+        Labels to use in legend. If None, uses prod_cols.
+    figsize : tuple
+        Figure size in inches.
+    """
+
+    if prod_cols is None:
+        prod_cols = ["ERA5", "GPCP_v3.3", "RACMO_2.4p1"]
+
+    if prod_labels is None:
+        prod_labels = prod_cols
+
+    # --- Convert basin IDs to int ---
+    df[basin_col] = df[basin_col].astype(int)
+
+    # --- 1. Sort by reference precipitation (P_MB) ---
+    # Drop rows where ref_col is NaN
+    df_plot = df.dropna(subset=[ref_col]).copy()
+    df_plot = df_plot.sort_values(ref_col)
+
+    basins = df_plot[basin_col].astype(str).values
+    x = np.arange(len(basins))
+
+    # --- 2. Start figure ---
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # --- 3. Plot P_MB as bars ---
+    ax.bar(
+        x,
+        df_plot[ref_col].values,
+        color="lightgray",
+        edgecolor="black",
+        linewidth=1.0,
+        label=r"$P_{\mathrm{MB}}$",
+        zorder=1,
+    )
+
+    # --- 4. Overlay other products as markers ---
+    markers = ["o", "s", "D", "^", "v"]  # enough variety
+    for i, (col, lab) in enumerate(zip(prod_cols, prod_labels)):
+        if col not in df_plot.columns:
+            continue
+
+        y = df_plot[col].values
+        mask = np.isfinite(y)  # avoid NaNs
+
+        ax.plot(
+            x[mask],
+            y[mask],
+            marker=markers[i % len(markers)],
+            linestyle="-",
+            linewidth=1.5,
+            markersize=6,
+            label=lab,
+            zorder=3,
+        )
+    
+    # ---------- LOG SCALE ----------
+    ax.set_yscale("log")
+    ax.set_ylim(10, 2000)
+
+    # clean log ticks
+    log_ticks = [10, 50, 100, 200, 500, 1000, 1500, 2000]
+    ax.set_yticks(log_ticks)
+    ax.get_yaxis().set_major_formatter(mticker.ScalarFormatter())
+    ax.tick_params(axis='y', labelsize=12)
+
+    # --- 5. Cosmetics ---
+    ax.set_xticks(x)
+    ax.set_xticklabels(basins, ha="center", fontsize=18)
+    ax.set_xlabel("Basin (sorted by " + r"$P_{\mathrm{MB}}$" + ")", fontsize=18)
+    ax.set_ylabel("Precipitation [mm/year]", fontsize=18)
+
+    ax.grid(axis="y", linestyle="--", 
+            alpha=0.4, zorder=0)
+
+    ax.legend(fontsize=18, ncol=2, frameon=False)
+    ax.set_xlim(-0.5, len(basins) - 0.5)
+    ax.set_ylim(0,2000)
+
+    plt.tight_layout()
+    return fig, ax
+
+#----------------------------------------------------------------
+def da_season_to_basin_df(da, basin_name="basin"):
+    """
+    Convert a seasonal (season, y, x) gridded DataArray into a tidy DataFrame:
+    
+    Output columns:
+        basin   (int)
+        season  (str)
+        value   (float)  <-- named after da.name
+    """
+
+    df_all = []
+    for sees in da["season"].values:
+        da_sees = da.sel(season=sees)
+        df_sees = da_sees.to_dataframe().reset_index()
+        cols = df_sees.columns.tolist()
+        cols = [c for c in cols if 'precip' in c \
+                 or 'pr' in c \
+             or 'basin' in c \
+            or c in ['season', 'basin']]
+        prcp_col = [c for c in cols if 'precip' in c or\
+                    'pr' in c][0]
+        bsn_col  = [c for c in cols if 'basin' in c][0]
+        # name = df.columns[-1]  # last column is the data values
+
+        df_sees = df_sees[cols].copy()
+
+        # Drop dummy basin IDs (0 or NaN) and NaN values
+        df_sees = df_sees.dropna(subset=[prcp_col])
+        df_sees = df_sees[df_sees[bsn_col] > 1]
+        df_sees = df_sees.groupby(["season", bsn_col]).mean().reset_index()
+
+        df_all.append(df_sees)
+    df_mean_seas_acc = pd.concat(df_all, ignore_index=True).sort_values(by=bsn_col)
+
+    df_mean_seas_acc[bsn_col] = df_mean_seas_acc[bsn_col].astype(int)
+
+    return df_mean_seas_acc
+
+#----------------------------------------------------------------------------
+def plot_seasonal_heatmaps_by_basin_v2(
+    plot_dfs,
+    vmin=0, vmax=120,
+    seasons=("DJF", "MAM", "JJA", "SON"),
+    cmap="jet"
+):
+    """
+    plot_dfs: dict {product_name : df}
+        Each df must contain columns including: basin, season, precip variable.
+    """
+
+    nprod = len(plot_dfs)
+    fig, axes = plt.subplots(
+        1, nprod, figsize=(4*nprod, 8),
+        sharey=False
+    )
+
+    if nprod == 1:
+        axes = [axes]
+
+    # --- Collect all images for one colorbar ---
+    img_list = []
+
+    for ax, (prod_name, df_prod) in zip(axes, plot_dfs.items()):
+
+        cols = df_prod.columns
+        bsn_col  = [c for c in cols if 'basin' in c][0]
+        prcp_col = [c for c in cols if 'precip' in c or 'pr' in c][0]
+
+        # Ensure season order
+        df_prod = df_prod.copy()
+        df_prod["season"] = pd.Categorical(df_prod["season"], seasons, ordered=True)
+
+        # Pivot to matrix (basin × season)
+        mat = df_prod.pivot(index=bsn_col, columns="season", values=prcp_col)
+        mat = mat.loc[sorted(mat.index), seasons]
+
+        # Plot heatmap
+        im = ax.imshow(mat.values, aspect="auto", origin="lower",
+                       cmap=cmap, vmin=vmin, vmax=vmax)
+        img_list.append(im)
+
+        # Axes formatting
+        ax.set_xticks(np.arange(len(seasons)))
+        ax.set_xticklabels(seasons, fontsize=15)
+        ax.set_yticks(np.arange(len(mat.index)))
+        ax.set_yticklabels(mat.index, fontsize=15)
+
+        ax.set_title(prod_name, fontsize=15, fontweight="bold")
+
+        # grid lines
+        ax.set_xticks(np.arange(-0.5, len(seasons), 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(mat.index), 1), minor=True)
+        ax.grid(which="minor", linestyle="-", linewidth=0.4, color="white")
+
+    axes[0].set_ylabel("Basin ID", fontsize=15)
+
+    # --- COLORBAR OUTSIDE BELOW EVERYTHING ---
+    # Add extra space at the bottom
+    fig.subplots_adjust(bottom=0.18)
+
+    # cbar_ax = fig.add_axes([0.2, 0.08, 0.6, 0.03])
+    cbar_ax = fig.add_axes([0.35, 0.08, 0.30, 0.03])
+    cbar = fig.colorbar(img_list[0], cax=cbar_ax, 
+                        orientation="horizontal",
+                        extend="max",
+                        )
+    cbar.set_label("Precipitation [mm/season]", fontsize=18)
+    cbar.ax.tick_params(labelsize=18)
+
+    plt.show()
+
+#---------------------------------------------------------------------------
+def plot_seasonal_by_season_product(
+    plot_dfs,
+    basin_order=None,
+    vmin=None,
+    vmax=None,
+    cmap="jet",
+):
+    """
+    Seasonal comparison heatmap.
+
+    Parameters
+    ----------
+    plot_dfs : dict
+        {product_label: df} where each df has columns including:
+        - basin column (name contains 'basin')
+        - precip column (name contains 'precip' or 'pr')
+        - season column ('season')
+    basin_order : list or None
+        Order of basin IDs on the y-axis. If None, inferred from data.
+    vmin, vmax : float or None
+        Colorbar limits. If None, computed from all products.
+    cmap : str
+        Matplotlib colormap name.
+    """
+
+    product_labels = list(plot_dfs.keys())
+
+    # ---------- infer basin_order if not given ----------
+    if basin_order is None:
+        all_basins = []
+        for df in plot_dfs.values():
+            cols = df.columns.tolist()
+            bsn_col = [c for c in cols if "basin" in c][0]
+            all_basins.extend(df[bsn_col].dropna().unique())
+        # drop 0 if present, sort, cast to int
+        basin_order = sorted(int(b) for b in set(all_basins) if b != 0)
+
+    # ---------- infer global vmin / vmax if needed ----------
+    if (vmin is None) or (vmax is None):
+        vals = []
+        for df in plot_dfs.values():
+            cols = df.columns.tolist()
+            prcp_col = [c for c in cols if ("precip" in c) or ("pr" in c)][0]
+            vals.append(df[prcp_col].to_numpy().ravel())
+        vals = np.concatenate(vals)
+        vals = vals[np.isfinite(vals)]
+        if vmin is None:
+            vmin = 0.0 if np.nanmin(vals) >= 0 else float(np.nanmin(vals))
+        if vmax is None:
+            vmax = float(np.nanmax(vals))
+
+    # ---------- make figure: 4 panels, one per season ----------
+    fig, axes = plt.subplots(
+        1, len(SEAS),
+        figsize=(4 * len(SEAS), 6),
+        sharey=False,
+        sharex=False,
+    )
+
+    if len(SEAS) == 1:
+        axes = [axes]
+
+    img_list = []
+
+    for ax, season in zip(axes, SEAS):
+        # matrix: rows = basins, cols = products
+        mat = np.full((len(basin_order), len(product_labels)), np.nan)
+
+        for j, (prod_label, df) in enumerate(plot_dfs.items()):
+            cols = df.columns.tolist()
+            bsn_col = [c for c in cols if "basin" in c][0]
+            prcp_col = [c for c in cols if ("precip" in c) or ("pr" in c)][0]
+            seas_col = [c for c in cols if "season" in c.lower()][0]
+
+            # ensure ordered categorical seasons
+            df_loc = df.copy()
+            df_loc[seas_col] = pd.Categorical(df_loc[seas_col], SEAS, ordered=True)
+
+            # subset this season and aggregate per basin
+            df_s = (
+                df_loc[df_loc[seas_col] == season]
+                .groupby(bsn_col)[prcp_col]
+                .mean()
+                .reindex(basin_order)
+            )
+
+            mat[:, j] = df_s.to_numpy()
+
+        im = ax.imshow(
+            mat,
+            origin="lower",
+            aspect="auto",
+            vmin=vmin,
+            vmax=vmax,
+            cmap=cmap,
+        )
+        img_list.append(im)
+
+        # x / y ticks
+        ax.set_xticks(np.arange(len(product_labels)))
+        ax.set_xticklabels(product_labels, rotation=45, ha="right", fontsize=12)
+        ax.set_yticks(np.arange(len(basin_order)))
+        ax.set_yticklabels(basin_order, fontsize=15)
+
+        # panel title = season
+        ax.set_title(season, fontsize=15, fontweight="bold")
+
+        # light grid (minor)
+        ax.set_xticks(np.arange(-0.5, len(product_labels), 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(basin_order), 1), minor=True)
+        ax.grid(which="minor", color="w", linewidth=0.6, alpha=0.6)
+        ax.tick_params(which="minor", length=0)
+
+    # Axis labels
+    axes[0].set_ylabel("Basin ID", fontsize=15)
+    # fig.supxlabel("Product", fontsize=13, y=0.10)
+
+    # ---------- colorbar outside, shorter ----------
+    fig.subplots_adjust(bottom=0.2, left=0.07, right=0.97, top=0.94, wspace=0.20)
+
+    # [left, bottom, width, height]  → shorter bar centered
+    cbar_ax = fig.add_axes([0.35, 0.008, 0.3, 0.04])
+    cbar = fig.colorbar(
+        img_list[0],
+        cax=cbar_ax,
+        orientation="horizontal",
+        extend="max",
+    )
+    cbar.set_label("Precipitation [mm/season]", fontsize=18)
+    cbar.ax.tick_params(labelsize=18)
+
+    plt.show()
