@@ -406,10 +406,6 @@ print("WAIS basin IDs:", WAIS_IDS)
 print("EAIS basin IDs:", EAIS_IDS)
 print("Inland basin IDs:", INLAND_IDS)
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-
 # ---- Region definitions (from our agreed mapping) ----
 REGION_DEFS = [
     ("Antarctica",      [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
@@ -417,143 +413,7 @@ REGION_DEFS = [
     ("East Antarctica", [2, 3, 4, 5, 6, 7, 8, 9, 18, 19]),
 ]
 
-def _normalize_monthly_df(df):
-    """Make df columns consistent: basin, month, precipitation."""
-    df = df.copy()
-
-    # Basin column: basin_id -> basin
-    if "basin" not in df.columns:
-        if "basin_id" in df.columns:
-            df = df.rename(columns={"basin_id": "basin"})
-        else:
-            raise ValueError("DataFrame must have 'basin' or 'basin_id' column.")
-
-    # Precip column: precip_mm_per_month -> precipitation
-    if "precipitation" not in df.columns:
-        if "precip_mm_per_month" in df.columns:
-            df = df.rename(columns={"precip_mm_per_month": "precipitation"})
-        else:
-            raise ValueError("DataFrame must have 'precipitation' "
-                             "or 'precip_mm_per_month' column.")
-
-    # Month: if missing, derive from 'time'
-    if "month" not in df.columns:
-        if "time" in df.columns:
-            df["month"] = pd.to_datetime(df["time"]).dt.month
-        else:
-            raise ValueError("DataFrame must have 'month' or 'time' column.")
-
-    return df[["month", "basin", "precipitation"]]
-
-
-def plot_monthly_cycles_regions_3x1(plot_dfs, region_defs=REGION_DEFS):
-    """
-    plot_dfs: dict mapping product_name -> DataFrame
-    region_defs: list of (region_name, [basin_ids])
-    """
-    # Normalize all dfs first
-    norm_dfs = {name: _normalize_monthly_df(df)
-                for name, df in plot_dfs.items()}
-
-    months = np.arange(1, 13)
-    month_labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-    # Pre-compute regional series but no global ymax since y is NOT shared
-    region_series = {}
-
-    for region_name, basin_ids in region_defs:
-        region_series[region_name] = {}
-        for prod_name, df in norm_dfs.items():
-            sub = df[df["basin"].isin(basin_ids)]
-            s = (sub.groupby("month")["precipitation"]
-                     .mean()
-                     .reindex(months))
-            region_series[region_name][prod_name] = s
-
-    # --- Plotting ---
-    n_regions = len(region_defs)
-    fig, axes = plt.subplots(n_regions, 1, sharex=True,
-                             figsize=(9, 9), constrained_layout=False)
-    # Make room on the left for the shared y-label
-    fig.subplots_adjust(left=0.18, ) # bottom=0.10, hspace=0.18
-    fig.text(
-    0.08, 0.5, 
-    "Precipitation [mm/month]", 
-    va="center", 
-    rotation="vertical",
-    fontsize=15,
-    fontweight="bold"
-    )
-
-    if n_regions == 1:
-        axes = [axes]
-
-    # consistent colors/markers across products
-    product_names = list(plot_dfs.keys())
-    color_cycle = ["k", "tab:blue", "tab:orange", "tab:green", "tab:red"]
-    marker_cycle = ["o", "s", "D", "^", "v"]
-
-    prod_style = {}
-    for i, pname in enumerate(product_names):
-        prod_style[pname] = dict(
-            color=color_cycle[i % len(color_cycle)],
-            marker=marker_cycle[i % len(marker_cycle)]
-        )
-
-    # --- Plotting ---
-    for i, (ax, (region_name, _)) in enumerate(zip(axes, region_defs)):
-
-        for pname in product_names:
-            s = region_series[region_name][pname]
-            ax.plot(
-                months,
-                s.values,
-                label=pname,
-                linewidth=1.8,
-                **prod_style[pname]
-            )
-
-        # ---------- REGION-SPECIFIC Y-TICKS ----------
-        if region_name == "Antarctica":
-            ax.set_yticks([10, 20, 30, 40, 50])
-        elif region_name == "East Antarctica":
-            ax.set_yticks([0, 5, 10, 15, 20])
-
-        # ---------- AXIS LABELING ----------
-        # ax.set_ylabel("Precipitation [mm/month]", fontsize=15)
-        ax.set_title(region_name, fontsize=13, fontweight="bold")
-
-        # X-axis on bottom
-        axes[-1].set_xticks(months)
-        axes[-1].set_xticklabels(month_labels, fontsize=15)
-
-        # ---------- TICKS & GRIDS ----------
-        # Major ticks: both axes
-        ax.tick_params(axis="both", which="major", direction="out")
-
-        # Minor ticks: ONLY on Y axis
-        ax.tick_params(axis="y", which="minor", direction="out")
-        ax.minorticks_on()
-
-        # Disable minor ticks on X axis
-        ax.tick_params(axis="x", which="minor", bottom=False, top=False)
-
-        # Grid: only major gridlines
-        ax.grid(which="major", alpha=0.35)
-        ax.grid(which="minor", alpha=0)
-
-    # -------- LEGEND AT BOTTOM --------
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels,
-               loc="lower center",
-               bbox_to_anchor=(0.53, -0.01),
-               ncol=len(product_names),
-               fontsize=13, frameon=False)
-
-    return fig, axes
-
-fig, axes = plot_monthly_cycles_regions_3x1(plot_dfs)
+fig, axes = plot_monthly_cycles_regions_3x1(plot_dfs, REGION_DEFS)
 # plt.show()
 # Save the plot to disk
 svnme = os.path.join(path_to_plots, 'monthly_cycles_precip_over_imbie_basins_regions.png')
@@ -573,170 +433,6 @@ fig, ax = plot_basin_ranked_bar_overlay(
 plt.show()
 
 #----------------------------------------------------------------------------------
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-
-def plot_basin_spread_points(
-    df,
-    basin_col="basin",
-    ref_col="Pmb",                 # mass-budget precipitation (P_MB)
-    prod_cols=None,                # list of other products to overlay
-    prod_labels=None,              # pretty labels for legend
-    figsize=(13, 5.2),
-    log_scale=True,
-    ylim=(10, 2000),               # only used if log_scale=True
-):
-    """
-    Basin plot with P_MB bars, product points, and per-basin spread annotation.
-
-    Spread per basin is defined as:
-        (max(products) - min(products)) / mean(products)
-
-    where products = [ref_col] + prod_cols.
-    """
-
-    # --- defaults for products ---
-    if prod_cols is None:
-        prod_cols = ["ERA5", "GPCP_v3.3", "RACMO_2.4p1"]
-    if prod_labels is None:
-        prod_labels = prod_cols
-
-    all_prod_cols = [ref_col] + list(prod_cols)
-
-    # --- make a clean copy and ensure basin is int ---
-    df_plot = df.copy()
-    df_plot[basin_col] = df_plot[basin_col].astype(int)
-
-    # keep only basins where the reference exists
-    df_plot = df_plot.dropna(subset=[ref_col])
-
-    # --- sort basins NUMERICALLY, not by precipitation ---
-    df_plot = df_plot.sort_values(basin_col)
-    basins = df_plot[basin_col].values
-    x = np.arange(len(basins))
-
-    # we assume one row per basin; if not, aggregate first outside this function
-    df_plot = df_plot.set_index(basin_col).loc[basins]
-
-    # --- start figure ---
-    fig, ax = plt.subplots(figsize=figsize)
-
-    # --- P_MB bars ---
-    ax.bar(
-        x,
-        df_plot[ref_col].values,
-        color="lightgray",
-        edgecolor="black",
-        linewidth=1.0,
-        label=r"$P_{\mathrm{MB}}$",
-        zorder=1,
-    )
-
-    # --- overlay products as POINTS only ---
-    markers = ["o", "s", "D", "^", "v"]
-    sizes     = [8, 6, 4] 
-    fillstyles = ["none", "full", "full", "full", "full"]   # ERA5 hollow, others filled
-
-    for i, (col, lab) in enumerate(zip(prod_cols, prod_labels)):
-        if col not in df_plot.columns:
-            continue
-        y = df_plot[col].values
-        mask = np.isfinite(y)
-
-        ax.plot(
-            x[mask],
-            y[mask],
-            marker=markers[i % len(markers)],
-            markersize=sizes[i],
-            linestyle="None",
-            markerfacecolor="white" if fillstyles[i] == "none" else None,
-            markeredgewidth=1.5,
-            label=lab,
-            zorder=4,
-        )
-
-    # --- log / linear axis settings ---
-    if log_scale:
-        # add ~15% headroom so text isn’t at the very top
-        bottom, top = ylim
-        top *= 1.25
-        ax.set_yscale("log")
-        ax.set_ylim(bottom, top)
-
-        log_ticks = [10, 50, 100, 200, 500, 1000, 1500, 2000]
-        ax.set_yticks([t for t in log_ticks if bottom <= t <= 2000])
-        ax.get_yaxis().set_major_formatter(mticker.ScalarFormatter())
-    ymax = ax.get_ylim()[1]  # <-- move this AFTER set_ylim
-    ax.tick_params(axis="y", labelsize=12)
-
-    # --- compute per-basin spread (min-max)/mean over all products ---
-    vals_stack = []
-    for col in all_prod_cols:
-        if col in df_plot.columns:
-            vals_stack.append(df_plot[col].values.astype(float))
-        else:
-            vals_stack.append(np.full(len(basins), np.nan))
-    vals_stack = np.vstack(vals_stack)  # shape: (n_products, n_basins)
-
-    vmin = np.nanmin(vals_stack, axis=0)
-    vmax = np.nanmax(vals_stack, axis=0)
-    vmean = np.nanmean(vals_stack, axis=0)
-
-    spread = np.full_like(vmean, np.nan, dtype=float)
-    valid = np.isfinite(vmin) & np.isfinite(vmax) & np.isfinite(vmean) & (vmean != 0)
-    spread[valid] = (vmax[valid] - vmin[valid]) / vmean[valid]
-    spread_pct = np.round(spread * 100).astype(int)   # integer percent
-
-    # --- annotate spread above each basin ---
-    ymax = ax.get_ylim()[1]
-
-    for xi, s, top_val in zip(x, spread_pct, vmax):
-        if not np.isfinite(s):
-            continue
-        if not np.isfinite(top_val) or top_val <= 0:
-            continue
-
-        # base position a bit above the max value
-        if log_scale:
-            y_text = top_val * 1.25    # smaller multiplier = less pushing toward the top
-        else:
-            y_text = top_val + 0.05 * (ymax - ax.get_ylim()[0])
-
-        # keep annotation comfortably inside top
-        if y_text > ymax:
-            y_text = top_val * 1.05   # only 5% above max
-
-        ax.text(
-            xi,
-            y_text,
-            f"{s}%",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            rotation=0,
-            zorder=4,
-        )
-
-    # --- cosmetics ---
-    ax.set_xticks(x)
-    ax.set_xticklabels(basins, ha="center", fontsize=14)
-    ax.set_xlabel("Basin", fontsize=16)
-    ax.set_ylabel("Precipitation [mm/year]", fontsize=16)
-
-    ax.grid(axis="y", linestyle="--", alpha=0.4, zorder=0)
-    # ax.legend(fontsize=16, ncol=2, frameon=False)
-    ax.legend(
-    fontsize=14,
-    ncol=4,
-    frameon=False,
-    loc="upper center",
-    bbox_to_anchor=(0.48, -0.18)  # tweak -0.18 if it’s too close/far
-    )
-
-    # fig.tight_layout()
-    fig.tight_layout(rect=[0, 0.05, 1, 1])
-    return fig, ax, spread,spread_pct
 
 fig, ax, spread, spread_pct = plot_basin_spread_points(
     df_mean_yr_acc,
@@ -761,6 +457,19 @@ plot_dfs = {
     "GPCP v3.3": gpcp_mean_df,
     "RACMO 2.4p1": racmo_mean_df,
 }
+
+#----------------------------------------------------------------------------------
+fig, axes = plot_seasonal_cycles_regions_3x1(
+            plot_dfs, 
+            REGION_DEFS)
+gc.collect()
+
+#----------------------------------------------------------------------------------
+fig, axes = plot_seasonal_cycles_regions_1x3(
+            plot_dfs, 
+            REGION_DEFS)
+# plt.show()
+gc.collect()
 #----------------------------------------------------------------------------------
 plot_seasonal_heatmaps_by_basin_v2(
     plot_dfs,
@@ -780,6 +489,8 @@ plot_seasonal_by_season_product(
 )
 
 gc.collect()
+
+
 # df_mean_yr_acc.plot(kind='box')
 #%%
 
