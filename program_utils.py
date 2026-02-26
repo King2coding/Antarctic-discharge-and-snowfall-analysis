@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 import datetime
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from scipy.stats import linregress
 import math
 from collections import Counter
@@ -53,6 +53,7 @@ import matplotlib as mpl
 
 #%%
 # floating variables
+cde_run_dte = date.today().strftime('%Y%m%d')
 misc_out = r'/ra1/pubdat/AVHRR_CloudSat_proj/miscelaneous_outs'
 
 crs = "+proj=longlat +datum=WGS84 +no_defs"  

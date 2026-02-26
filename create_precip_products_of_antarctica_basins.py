@@ -8,11 +8,12 @@ from program_utils import *
 basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
 
 path_to_avhrr_precp = r'/ra1/pubdat/AVHRR_CloudSat_proj/preci_maps/2010_IMERG_based_0.5_res_mean_daily_ERA5_added_0_train_thresh_variable_mask_7_upto_70_smoothed_win_2_Ebtehaj_masking_params_1/'
-path_to_era5 = r'/ra1/pubdat/AVHRR_CloudSat_proj/ERA5_0.25deg/ERA5_to_netcdf_files'
+path_to_era5 = r'/ra1/pubdat/ECMWF/ERA5/daily'
+# r'/ra1/pubdat/AVHRR_CloudSat_proj/ERA5_0.25deg/ERA5_to_netcdf_files'
 path_to_airs_ir = r'/ra1/pubdat/AVHRR_CloudSat_proj/TOVSAIRS/AIRS_from_Eric_to_netcdf_files'
 path_to_imerg = r'/ra1/pubdat/AVHRR_CloudSat_proj/IMERG/IMERGV7/DataV7_2007-2020'
 path_to_ssmis_17 = r'/ra1/pubdat/AVHRR_CloudSat_proj/SSMI/data/daily/SSMIS-F17-ncfiles_pnt5'
-gpcpv3pt3_path = r'/ra1/pubdat/Satellite_eval_over_Oceans/data/GPCP/GPCP_v3_pnt_3_2010_2020'
+gpcpv3pt3_path = r'/ra1/pubdat/Satellite_eval_over_Oceans/data/GPCP/GPCP_v3_pnt_3_1998_2024'
 racmo_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/RACMO2pt4p1'
 
 # paths to put satellite precip over basins data
@@ -27,22 +28,28 @@ gpcpv3pt3_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_ana
 
 # load the different precipitation files
 imerg_files = sorted([os.path.join(path_to_imerg,x) for x in os.listdir(path_to_imerg) if x.endswith('.nc4')])
-# Filter file paths to include only files from the year 2019 and 2020
-imerg_files_2019_2020 = sorted([
+# Filter file paths to include only files from the year 2013 and 2020
+imerg_files_2013_2020 = sorted([
     file for file in imerg_files 
-    if os.path.basename(file).split('.')[4][:4] in ['2019', '2020']
+    if int(os.path.basename(file).split('.')[4][:4]) >= 2013 and \
+        int(os.path.basename(file).split('.')[4][:4]) <= 2020
 ])
 
 gpcpv3pt3_files = sorted([os.path.join(gpcpv3pt3_path,x) for x in os.listdir(gpcpv3pt3_path) if x.endswith('.nc4')])
-# Filter file paths to include only files from the year 2019 and 2020
-gpcpv3pt3_files_2019_2020 = sorted([file for file in gpcpv3pt3_files 
-                             if os.path.basename(file).split('_')[2][:4] in ['2019', '2020']]
+# Filter file paths to include only files from the year 2013 and 2020
+gpcpv3pt3_files_2013_2020 = sorted([file for file in gpcpv3pt3_files 
+                             if int(os.path.basename(file).split('_')[2][:4]) >= 2013 and \
+                                int(os.path.basename(file).split('_')[2][:4]) <= 2020]
 )
 # avhrr_precp_files = sorted([os.path.join(path_to_avhrr_precp,x) for x in os.listdir(path_to_avhrr_precp) if x.endswith('.tif')])
 
-era5_file_2019 = os.path.join(path_to_era5,'ERA5_daily_precipitation_2019_0.25res.nc') #Total_precip_2019_0.5.nc
-era5_file_2020 = os.path.join(path_to_era5,'ERA5_daily_precipitation_2020_0.25res.nc') #Total_precip_2020_0.5.nc
-
+# era5_file_2019 = os.path.join(path_to_era5,'ERA5_daily_precipitation_2019_0.25res.nc') #Total_precip_2019_0.5.nc
+# era5_file_2020 = os.path.join(path_to_era5,'ERA5_daily_precipitation_2020_0.25res.nc') #Total_precip_2020_0.5.nc
+era5_files = sorted([os.path.join(path_to_era5,x) for x in os.listdir(path_to_era5) if ('tp' in x ) and (x.endswith('.nc'))])
+era5_files_2013_2020 = sorted([file for file in era5_files 
+                             if int(os.path.basename(file).split('_')[2][:4]) >= 2013 and \
+                                int(os.path.basename(file).split('_')[2][:4]) <= 2020]
+)
 # airs_file_2019 = os.path.join(path_to_airs_ir,'3A_AIRSV6_IR_HDD_daily_precipitation_2019.nc')
 # # airs_file_2020 = os.path.join(path_to_airs_ir,'3A_AIRSV6_IR_HDD_daily_precipitation_2020.nc')
 
@@ -68,7 +75,7 @@ basins = basins.where((basins > 1) & (basins.notnull()))
 # read and process satellite precipitation data
 
 # process imerg files
-for idx, im in enumerate(imerg_files_2019_2020, start=1):
+for idx, im in enumerate(imerg_files_2013_2020, start=1):
     fle_svnme = os.path.join(imerg_basin_path,os.path.basename(im).replace('.nc4', '_imbie_basin_precip.nc'))
     img_bsn = process_imerg_file_to_basin(im, misc_out, basins)
 
@@ -170,7 +177,7 @@ for er5 in [era5_file_2019, era5_file_2020]:
 #-----------------------------------------------------------------------------------------
 # process gpcpv3pt3 files
 # Iterate through GPCP files and process
-for idx, gp in enumerate(gpcpv3pt3_files_2019_2020, start=1):
+for idx, gp in enumerate(gpcpv3pt3_files_2013_2020, start=1):
     # Open the GPCP file
     gpcp_fle_time = os.path.basename(gp).split('_')[2]
 
