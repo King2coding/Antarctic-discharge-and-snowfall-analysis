@@ -201,8 +201,8 @@ p_mm_mean_df = p_mm_df.groupby(['year','month','basin_id'])['precip_mm_per_month
 p_mm_mean_df['time'] = pd.to_datetime(dict(year=p_mm_mean_df['year'], month=p_mm_mean_df['month'], day=1))
 p_mm_mean_df['basin_id'] = p_mm_mean_df['basin_id'].astype(int)
 
-Pmb_annual = xr.open_dataarray(os.path.join(basins_path, "Pmb_annual_2013_2020_mm.nc"))
-Pmb_seasonal = xr.open_dataarray(os.path.join(basins_path, "Pmb_seasonal_mm_2013_2020.nc"))
+Pmb_annual = xr.open_dataarray(os.path.join(basins_path, "Pmb_annual_2013_2022_mm.nc"))
+Pmb_seasonal = xr.open_dataarray(os.path.join(basins_path, "Pmb_seasonal_mm_2013_2022.nc"))
 img_fle_lst = sorted([os.path.join(imerg_basin_path, x) for x in os.listdir(imerg_basin_path) if 'imbie_basin' in x])
 era5_fle_lst = sorted([os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_path) if 'imbie_basin' in x])
 gpcpv3pt3_fle_lst = sorted([os.path.join(gpcpv3pt3_basin_path, x) for x in os.listdir(gpcpv3pt3_basin_path) if 'imbie_basin' in x])
@@ -311,6 +311,15 @@ plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
 
 
+compare_mean_precip_2x2_log(
+    mean_annual_plot_arrs,
+    vmin=0,        # or 0.5 depending on your minimum values
+    vmax=450,
+    cbar_tcks=[0, 10, 25, 50, 100, 200, 300, 400,]
+)
+svnme = os.path.join(path_to_plots, f'annual_snowfall_accumulation_over_imbie_basins_log_{cde_run_dte}.png')
+plt.savefig(svnme,  dpi=500, bbox_inches='tight')
+gc.collect()
 #----------------------------------------------------------------------------------
 # make scatter plots comparison
 
@@ -496,7 +505,24 @@ plot_seasonal_by_season_product(
 
 gc.collect()
 
+#----------------------------------------------------------------------------------
+# Yearly cycle
+product_cols = ["Pmb", "ERA5", "GPCP", "RACMO"]
 
+prdt_df = [("Pmb",df_pmb, Pmb_annual), ("ERA5",df_era5, era5_annual_mean), 
+           ("GPCP",df_gpcp, gpcpv3pt3_annual_mean), ("RACMO",df_racmo, racmo_pr_annual_mean)]
+
+# region_data = compute_region_means(df, REGION_DEFS, product_cols)
+# region_data = compute_region_means_from_products(prdt_df, REGION_DEFS)
+region_data = compute_region_means_from_maps(
+    prdt_df,
+    REGION_DEFS
+)
+
+plot_region_time_series(region_data, product_cols)
+svnme = os.path.join(path_to_plots, f'annual_mean_time_series_precip_over_imbie_basins_{cde_run_dte}.png')
+plt.savefig(svnme,  dpi=500, bbox_inches='tight')
+gc.collect()
 # df_mean_yr_acc.plot(kind='box')
 #%%
 
