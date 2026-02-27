@@ -27,28 +27,28 @@ gpcpv3pt3_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_ana
 # floating variables
 
 # load the different precipitation files
-imerg_files = sorted([os.path.join(path_to_imerg,x) for x in os.listdir(path_to_imerg) if x.endswith('.nc4')])
-# Filter file paths to include only files from the year 2013 and 2020
-imerg_files_2013_2020 = sorted([
-    file for file in imerg_files 
-    if int(os.path.basename(file).split('.')[4][:4]) >= 2013 and \
-        int(os.path.basename(file).split('.')[4][:4]) <= 2020
-])
+# imerg_files = sorted([os.path.join(path_to_imerg,x) for x in os.listdir(path_to_imerg) if x.endswith('.nc4')])
+# # Filter file paths to include only files from the year 2013 and 2020
+# imerg_files_2013_2022 = sorted([
+#     file for file in imerg_files 
+#     if int(os.path.basename(file).split('.')[4][:4]) >= 2013 and \
+#         int(os.path.basename(file).split('.')[4][:4]) <= 2022
+# ])
 
 gpcpv3pt3_files = sorted([os.path.join(gpcpv3pt3_path,x) for x in os.listdir(gpcpv3pt3_path) if x.endswith('.nc4')])
 # Filter file paths to include only files from the year 2013 and 2020
-gpcpv3pt3_files_2013_2020 = sorted([file for file in gpcpv3pt3_files 
+gpcpv3pt3_files_2013_2022 = sorted([file for file in gpcpv3pt3_files 
                              if int(os.path.basename(file).split('_')[2][:4]) >= 2013 and \
-                                int(os.path.basename(file).split('_')[2][:4]) <= 2020]
+                                int(os.path.basename(file).split('_')[2][:4]) <= 2022]
 )
 # avhrr_precp_files = sorted([os.path.join(path_to_avhrr_precp,x) for x in os.listdir(path_to_avhrr_precp) if x.endswith('.tif')])
 
 # era5_file_2019 = os.path.join(path_to_era5,'ERA5_daily_precipitation_2019_0.25res.nc') #Total_precip_2019_0.5.nc
 # era5_file_2020 = os.path.join(path_to_era5,'ERA5_daily_precipitation_2020_0.25res.nc') #Total_precip_2020_0.5.nc
 era5_files = sorted([os.path.join(path_to_era5,x) for x in os.listdir(path_to_era5) if ('tp' in x ) and (x.endswith('.nc'))])
-era5_files_2013_2020 = sorted([file for file in era5_files 
+era5_files_2013_2022 = sorted([file for file in era5_files 
                              if int(os.path.basename(file).split('_')[2][:4]) >= 2013 and \
-                                int(os.path.basename(file).split('_')[2][:4]) <= 2020]
+                                int(os.path.basename(file).split('_')[2][:4]) <= 2022]
 )
 # airs_file_2019 = os.path.join(path_to_airs_ir,'3A_AIRSV6_IR_HDD_daily_precipitation_2019.nc')
 # # airs_file_2020 = os.path.join(path_to_airs_ir,'3A_AIRSV6_IR_HDD_daily_precipitation_2020.nc')
@@ -75,19 +75,19 @@ basins = basins.where((basins > 1) & (basins.notnull()))
 # read and process satellite precipitation data
 
 # process imerg files
-for idx, im in enumerate(imerg_files_2013_2020, start=1):
-    fle_svnme = os.path.join(imerg_basin_path,os.path.basename(im).replace('.nc4', '_imbie_basin_precip.nc'))
-    img_bsn = process_imerg_file_to_basin(im, misc_out, basins)
+# for idx, im in enumerate(imerg_files_2013_2020, start=1):
+#     fle_svnme = os.path.join(imerg_basin_path,os.path.basename(im).replace('.nc4', '_imbie_basin_precip.nc'))
+#     img_bsn = process_imerg_file_to_basin(im, misc_out, basins)
 
-    encoding = {img_bsn.name:{"zlib": True, "complevel": 9}}
-    img_bsn.to_netcdf(os.path.join(imerg_basin_path, fle_svnme), 
-                      mode='w', 
-                      format='NETCDF4', 
-                      encoding=encoding)
+#     encoding = {img_bsn.name:{"zlib": True, "complevel": 9}}
+#     img_bsn.to_netcdf(os.path.join(imerg_basin_path, fle_svnme), 
+#                       mode='w', 
+#                       format='NETCDF4', 
+#                       encoding=encoding)
 
-    # Print progress every 100 files
-    if idx % 100 == 0:
-        print(f"Processed {idx} files: {os.path.basename(fle_svnme)}")
+#     # Print progress every 100 files
+#     if idx % 100 == 0:
+#         print(f"Processed {idx} files: {os.path.basename(fle_svnme)}")
 
 #-----------------------------------------------------------------------------------------
 
@@ -148,11 +148,11 @@ for idx, im in enumerate(imerg_files_2013_2020, start=1):
 
 
 #-----------------------------------------------------------------------------------------
-# process era5 files
-for er5 in [era5_file_2019, era5_file_2020]:
+# process era5 files [era5_file_2019, era5_file_2020]
+for er5 in era5_files_2013_2022:
     if not os.path.exists(er5):
         raise FileNotFoundError(f"ERA5 file not found: {er5}")
-    era5_data = xr.open_dataarray(er5)
+    era5_data = process_era5_file(er5)#xr.open_dataarray(er5)
     if 'longitude' in era5_data.coords and 'latitude' in era5_data.coords:
         era5_data = era5_data.rename({'longitude': 'lon', 'latitude': 'lat'})    
 
@@ -160,47 +160,49 @@ for er5 in [era5_file_2019, era5_file_2020]:
         era5_time = pd.to_datetime(er_tme).strftime('%Y%m%d')
         fle_svnme = os.path.join(era5_basin_path, f'ERA5_daily_precipitation_imbie_basin_{era5_time}.nc')
 
-        er_time = pd.to_datetime(er_tme).strftime('%Y%m%d')
+        if not os.path.isfile(fle_svnme):
+            er_time = pd.to_datetime(er_tme).strftime('%Y%m%d')
         
-        era5_bsn = process_era5_file_to_basin(era5_data, er_tme, basins, fle_svnme)
+            era5_bsn = process_era5_file_to_basin(era5_data, er_tme, basins, fle_svnme)
 
-        encoding = {era5_bsn.name: {"zlib": True, "complevel": 9}}
-        era5_bsn.to_netcdf(os.path.join(era5_basin_path, fle_svnme), 
-                            mode='w', 
-                            format='NETCDF4', 
-                            encoding=encoding)
+            encoding = {era5_bsn.name: {"zlib": True, "complevel": 9}}
+            era5_bsn.to_netcdf(os.path.join(era5_basin_path, fle_svnme), 
+                                mode='w', 
+                                format='NETCDF4', 
+                                encoding=encoding)
+
+            # Print progress every 100 files
+            if idx % 100 == 0:
+                print(f"Processed {idx} files: {os.path.basename(fle_svnme)}")
+
+#-----------------------------------------------------------------------------------------
+# process gpcpv3pt3 files
+# Iterate through GPCP files and process
+for idx, gp in enumerate(gpcpv3pt3_files_2013_2022, start=1):
+    # Open the GPCP file
+    gpcp_fle_time = os.path.basename(gp).split('_')[2]
+
+    fle_svnme = os.path.join(gpcpv3pt3_basin_path, f'GPCP_v3_pnt_3_imbie_basin_{gpcp_fle_time}.nc')
+    if not os.path.isfile(fle_svnme):
+        gpcp_bsn = process_gpcp_file_to_basin(gp, basins)
+
+        encoding = {gpcp_bsn.name:{"zlib": True, "complevel": 9}}
+        gpcp_bsn.to_netcdf(os.path.join(gpcpv3pt3_basin_path, fle_svnme), 
+                        mode='w', 
+                        format='NETCDF4', 
+                        encoding=encoding)
 
         # Print progress every 100 files
         if idx % 100 == 0:
             print(f"Processed {idx} files: {os.path.basename(fle_svnme)}")
 
 #-----------------------------------------------------------------------------------------
-# process gpcpv3pt3 files
-# Iterate through GPCP files and process
-for idx, gp in enumerate(gpcpv3pt3_files_2013_2020, start=1):
-    # Open the GPCP file
-    gpcp_fle_time = os.path.basename(gp).split('_')[2]
-
-    fle_svnme = os.path.join(gpcpv3pt3_basin_path, f'GPCP_v3_pnt_3_imbie_basin_{gpcp_fle_time}.nc')
-    gpcp_bsn = process_gpcp_file_to_basin(gp, basins)
-
-    encoding = {gpcp_bsn.name:{"zlib": True, "complevel": 9}}
-    gpcp_bsn.to_netcdf(os.path.join(gpcpv3pt3_basin_path, fle_svnme), 
-                      mode='w', 
-                      format='NETCDF4', 
-                      encoding=encoding)
-
-    # Print progress every 100 files
-    if idx % 100 == 0:
-        print(f"Processed {idx} files: {os.path.basename(fle_svnme)}")
-
-#-----------------------------------------------------------------------------------------
 # process racmo files
 racmo_sublim_file = os.path.join(racmo_path, 'pr_monthlyS_ANT11_RACMO2.4p1_ERA5_197901_202312.nc')
-# --- open & subset RACMO to 2019–2020 ---
+# --- open & subset RACMO to 2013–2022 ---
 # --- 1) open & subset RACMO on its native curvilinear grid ---
-# 1) Open and subset RACMO to 2019–2020
-da_src = xr.open_dataset(racmo_sublim_file)['pr'].sel(time=slice('2019-01-01', '2020-12-31'))
+# 1) Open and subset RACMO to 2013–2022
+da_src = xr.open_dataset(racmo_sublim_file)['pr'].sel(time=slice('2013-01-01', '2022-12-31'))
 da_src[0].plot(cmap='jet',vmax=100)
 # Pull 2-D lon/lat (RACMO supplies these on the curvilinear grid)
 lon2d = da_src['lon'].values
@@ -326,7 +328,7 @@ encoding = {
 da = mask_to_basins(da, basins)
 
 # (7) Write to netCDF
-out_nc = os.path.join(racmo_path, "pr_monthlyS_ANT11_RACMO2.4p1_ERA5_2019_2022.nc")
+out_nc = os.path.join(racmo_path, "pr_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022.nc")
 
 da.to_netcdf(out_nc, encoding=encoding)
 print("wrote:", out_nc)

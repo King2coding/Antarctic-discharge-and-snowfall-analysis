@@ -8,7 +8,7 @@ basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data
 #%% Floating Variables
 
 start_date = "2013-01-01"
-end_date   = "2020-12-01"
+end_date   = "2022-12-01"
 
 #%% Step A — Prepare Full Monthly State Series
 rignot_deltaS = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='Basin_Timeseries (Gt)')
@@ -22,7 +22,7 @@ rignot_deltaS["Month"] = pd.to_datetime(rignot_deltaS["Date"]).dt.month
 basin_cols = [c for c in rignot_deltaS.columns if c not in ("Time","Date","Year","Month")]
 
 # ---------------------------------------------------------
-# FULL MONTHLY STATE SERIES (2013–2020)
+# FULL MONTHLY STATE SERIES (2013–2022)
 # ---------------------------------------------------------
 
 full_index = pd.date_range(start=start_date, end=end_date, freq="MS")
@@ -69,6 +69,8 @@ for basin in basin_cols:
     # Add seasonal cycle back
     S_tier1[basin] = deseason_interp + deseason_interp.index.month.map(climatology)
 
+# save df to disk
+S_tier1.to_pickle(os.path.join(basin_path, f"DataCombo_RignotBasins_LI_tier1_{cde_run_dte}.pkl"))
 #%%
 # ---------------------------------------------------------
 # TIER 2: Harmonic Trend + Annual Cycle Fit
@@ -109,6 +111,8 @@ for basin in basin_cols:
 
 S_tier2.index = full_index
 
+# save df to disk
+S_tier2.to_pickle(os.path.join(basin_path, f"DataCombo_RignotBasins_Harmonic_tier2_{cde_run_dte}.pkl"))
 
 #%%
 # ---------------------------------------------------------
@@ -119,7 +123,7 @@ dS_tier1 = S_tier1.diff().dropna()
 dS_tier2 = S_tier2.diff().dropna()
 
 #%% Visual Comparison of Tiers
-test_basins = ["H-Hp", "Ep-f", "A-Ap", "Jpp-K", "C-Cp"]  # example names
+test_basins = ["H-Hp", "Ep-f", "A-Ap", "Jpp-K", "C-Cp", "I-Ipp"]  # example names
 for basin in test_basins:
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)

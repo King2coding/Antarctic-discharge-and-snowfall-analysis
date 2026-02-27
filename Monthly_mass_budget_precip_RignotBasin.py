@@ -111,7 +111,7 @@ rignot_deltaS_err = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasi
 
 # - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
 # Year window
-YEARS = [2019, 2020]
+YEARS = np.arange(2013,2023)#[2019, 2020]
 #%% - - - - - - - - - - Plot basins - - - - - - - - - - - - - - - - - - - - - - - 
 
 # Set up colormap and norm for 27 discrete basins
@@ -266,16 +266,19 @@ output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
 plt.savefig(output_path, dpi=300, bbox_inches='tight')
 
 
-#%% 1) Read David's Excel and compute ΔS (Gt/month) for 2019–2020
-rignot_deltaS = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='Basin_Timeseries (Gt)')
+#%% 1) Read David's Excel and compute ΔS (Gt/month) for 2013–2020
+# rignot_deltaS = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='Basin_Timeseries (Gt)')
+rignot_deltaS = pd.read_pickle(os.path.join(basin_path, 'DataCombo_RignotBasins_LI_tier1_20260226.pkl'))
 
-rignot_deltaS["Date"] = rignot_deltaS["Time"].apply(decimal_year_to_date).dt.strftime('%Y-%m-%d')
-rignot_deltaS['Date'] = pd.to_datetime(rignot_deltaS['Date'])
-rignot_deltaS["Year"] = pd.to_datetime(rignot_deltaS["Date"]).dt.year
-rignot_deltaS["Month"] = pd.to_datetime(rignot_deltaS["Date"]).dt.month
+# rignot_deltaS["Date"] = rignot_deltaS["Time"].apply(decimal_year_to_date).dt.strftime('%Y-%m-%d')
+# rignot_deltaS['Date'] = pd.to_datetime(rignot_deltaS['Date'])
+rignot_deltaS["Year"] = rignot_deltaS.index.year
+# pd.to_datetime(rignot_deltaS["Date"]).dt.year
+rignot_deltaS["Month"] = rignot_deltaS.index.month
+# pd.to_datetime(rignot_deltaS["Date"]).dt.month
 
-# Keep only 2019–2020 rows
-rignot_deltaS = rignot_deltaS[rignot_deltaS["Year"].isin(YEARS)].copy()
+# Keep only 2013–2020 rows
+# rignot_deltaS = rignot_deltaS[rignot_deltaS["Year"].isin(YEARS)].copy()
 
 # Identify basin columns
 basin_cols = [c for c in rignot_deltaS.columns if c not in ("Time","Date","Year","Month")]
@@ -348,7 +351,7 @@ basin_discharge = discharge_data['Discharge (Gt yr^-1)']
 basin_cols_ = basin_cols.copy()
 basin_cols_ = [b.replace('-f', '-F') if b == 'Ep-f' else b for b in basin_cols_]
 
-basin_discharge = basin_discharge.loc[basin_discharge['IMBIE basin'].isin(basin_cols_), ['IMBIE basin', '2019', '2020']].rename(columns={'IMBIE basin': 'basin'})
+basin_discharge = basin_discharge.loc[basin_discharge['IMBIE basin'].isin(basin_cols_), ['IMBIE basin'] + [str(yr) for yr in YEARS]].rename(columns={'IMBIE basin': 'basin'})
 
 # --- Basal melt ---
 basal_melt = discharge_data['Summary']
@@ -423,139 +426,139 @@ plt.title(f"Basal Melt for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}
 
 
 #%% 3) RACMO: integrate subltot (mm/month) to basin Gt/month
-# racmo_sublim_file = os.path.join(racmo_path, 'subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_197901_202312.nc')
-# # --- open & subset RACMO to 2019–2020 ---
-# # --- 1) open & subset RACMO on its native curvilinear grid ---
-# # 1) Open and subset RACMO to 2019–2020
-# da_src = xr.open_dataset(racmo_sublim_file)['subltot'].sel(time=slice('2019-01-01', '2020-12-31'))
+racmo_sublim_file = os.path.join(racmo_path, 'subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_197901_202312.nc')
+# --- open & subset RACMO to 2013–2020 ---
+# --- 1) open & subset RACMO on its native curvilinear grid ---
+# 1) Open and subset RACMO to 2013–2020
+da_src = xr.open_dataset(racmo_sublim_file)['subltot'].sel(time=slice('2013-01-01', '2020-12-31'))
 
-# # Pull 2-D lon/lat (RACMO supplies these on the curvilinear grid)
-# lon2d = da_src['lon'].values
-# lat2d = da_src['lat'].values
+# Pull 2-D lon/lat (RACMO supplies these on the curvilinear grid)
+lon2d = da_src['lon'].values
+lat2d = da_src['lat'].values
 
-# # Safety: mask impossible lon/lat
-# bad = ~np.isfinite(lon2d) | ~np.isfinite(lat2d)
-# if bad.any():
-#     lon2d = lon2d.copy()
-#     lat2d = lat2d.copy()
-#     lon2d[bad] = np.nan
-#     lat2d[bad] = np.nan
+# Safety: mask impossible lon/lat
+bad = ~np.isfinite(lon2d) | ~np.isfinite(lat2d)
+if bad.any():
+    lon2d = lon2d.copy()
+    lat2d = lat2d.copy()
+    lon2d[bad] = np.nan
+    lat2d[bad] = np.nan
 
-# # 2) Build target x/y coordinates (pixel centers) from your transform/shape
-# #    (x = xmin + (j + 0.5)*xres, y = ymax - (i + 0.5)*|yres|)
-# # height, width = basins_imbie.shape
+# 2) Build target x/y coordinates (pixel centers) from your transform/shape
+#    (x = xmin + (j + 0.5)*xres, y = ymax - (i + 0.5)*|yres|)
+# height, width = basins_imbie.shape
 
-# jj = np.arange(width)
-# ii = np.arange(height)
-# x_target = xmin + (jj + 0.5) * xres
-# y_target = ymax - (ii + 0.5) * abs(yres)
+jj = np.arange(width)
+ii = np.arange(height)
+x_target = xmin + (jj + 0.5) * xres
+y_target = ymax - (ii + 0.5) * abs(yres)
 
-# X, Y = np.meshgrid(x_target, y_target)  # shape (height, width)
+X, Y = np.meshgrid(x_target, y_target)  # shape (height, width)
 
-# # 3) Convert target X/Y (stereo) -> lon/lat for interpolation
-# crs_out = CRS.from_proj4(crs_stereo)
-# transform_to_geo = Transformer.from_crs(crs_out, CRS.from_epsg(4326), always_xy=True)
-# lon_tgt, lat_tgt = transform_to_geo.transform(X, Y)  # each (height, width)
+# 3) Convert target X/Y (stereo) -> lon/lat for interpolation
+crs_out = CRS.from_proj4(crs_stereo)
+transform_to_geo = Transformer.from_crs(crs_out, CRS.from_epsg(4326), always_xy=True)
+lon_tgt, lat_tgt = transform_to_geo.transform(X, Y)  # each (height, width)
 
-# # 4) Prepare source points and target points for griddata
-# #    Flatten source and target; drop any NaN lon/lat in the source
-# pts_src = np.column_stack([lon2d.ravel(), lat2d.ravel()])
-# mask_src = np.isfinite(pts_src).all(axis=1)
-# pts_src = pts_src[mask_src]
+# 4) Prepare source points and target points for griddata
+#    Flatten source and target; drop any NaN lon/lat in the source
+pts_src = np.column_stack([lon2d.ravel(), lat2d.ravel()])
+mask_src = np.isfinite(pts_src).all(axis=1)
+pts_src = pts_src[mask_src]
 
-# # To save RAM, we’ll pre-allocate the output and loop over time
-# out = np.full((da_src.sizes['time'], height, width), np.nan, dtype=np.float32)
+# To save RAM, we’ll pre-allocate the output and loop over time
+out = np.full((da_src.sizes['time'], height, width), np.nan, dtype=np.float32)
 
-# # 5) Fast pre-check to avoid "all-NaN" surprises: ensure target overlaps source bbox
-# src_lon_min, src_lon_max = np.nanmin(lon2d), np.nanmax(lon2d)
-# src_lat_min, src_lat_max = np.nanmin(lat2d), np.nanmax(lat2d)
-# tgt_lon_min, tgt_lon_max = np.nanmin(lon_tgt), np.nanmax(lon_tgt)
-# tgt_lat_min, tgt_lat_max = np.nanmin(lat_tgt), np.nanmax(lat_tgt)
+# 5) Fast pre-check to avoid "all-NaN" surprises: ensure target overlaps source bbox
+src_lon_min, src_lon_max = np.nanmin(lon2d), np.nanmax(lon2d)
+src_lat_min, src_lat_max = np.nanmin(lat2d), np.nanmax(lat2d)
+tgt_lon_min, tgt_lon_max = np.nanmin(lon_tgt), np.nanmax(lon_tgt)
+tgt_lat_min, tgt_lat_max = np.nanmin(lat_tgt), np.nanmax(lat_tgt)
 
-# overlap_lon = (tgt_lon_min <= src_lon_max) and (tgt_lon_max >= src_lon_min)
-# overlap_lat = (tgt_lat_min <= src_lat_max) and (tgt_lat_max >= src_lat_min)
-# if not (overlap_lon and overlap_lat):
-#     print("WARNING: target grid is outside the RACMO domain in lon/lat — interpolation would be all NaN.")
+overlap_lon = (tgt_lon_min <= src_lon_max) and (tgt_lon_max >= src_lon_min)
+overlap_lat = (tgt_lat_min <= src_lat_max) and (tgt_lat_max >= src_lat_min)
+if not (overlap_lon and overlap_lat):
+    print("WARNING: target grid is outside the RACMO domain in lon/lat — interpolation would be all NaN.")
 
-# # 6) Interpolate each time slice with bilinear (griddata 'linear'); fall back to nearest for edge holes
-# tgt_points = np.column_stack([lon_tgt.ravel(), lat_tgt.ravel()])  # (height*width, 2)
+# 6) Interpolate each time slice with bilinear (griddata 'linear'); fall back to nearest for edge holes
+tgt_points = np.column_stack([lon_tgt.ravel(), lat_tgt.ravel()])  # (height*width, 2)
 
-# for tt in range(da_src.sizes['time']):
-#     v = da_src.isel(time=tt).values.astype(np.float64)  # (rlat, rlon)
-#     v_flat = v.ravel()[mask_src]
+for tt in range(da_src.sizes['time']):
+    v = da_src.isel(time=tt).values.astype(np.float64)  # (rlat, rlon)
+    v_flat = v.ravel()[mask_src]
 
-#     # linear interpolation
-#     interp_lin = griddata(pts_src, v_flat, tgt_points, method='linear')
+    # linear interpolation
+    interp_lin = griddata(pts_src, v_flat, tgt_points, method='linear')
 
-#     # nearest-neighbor fill for anything linear missed (edges/outside convex hull)
-#     nan_mask = ~np.isfinite(interp_lin)
-#     if nan_mask.any():
-#         interp_nn = griddata(pts_src, v_flat, tgt_points[nan_mask], method='nearest')
-#         interp_lin[nan_mask] = interp_nn
+    # nearest-neighbor fill for anything linear missed (edges/outside convex hull)
+    nan_mask = ~np.isfinite(interp_lin)
+    if nan_mask.any():
+        interp_nn = griddata(pts_src, v_flat, tgt_points[nan_mask], method='nearest')
+        interp_lin[nan_mask] = interp_nn
 
-#     out[tt, :, :] = interp_lin.reshape(height, width).astype(np.float32)
+    out[tt, :, :] = interp_lin.reshape(height, width).astype(np.float32)
 
-# # 7) Wrap into an xarray.DataArray on the IMBIE grid, stamp georeferencing
-# racmo_on_imbie = xr.DataArray(
-#     out,
-#     name='subltot',
-#     dims=('time', 'y', 'x'),
-#     coords={
-#         'time': da_src['time'].values,
-#         'x': x_target,  # meters, polar stereo
-#         'y': y_target,  # meters, polar stereo
-#     },
-#     attrs=da_src.attrs,  # keep units/long_name
-# )
+# 7) Wrap into an xarray.DataArray on the IMBIE grid, stamp georeferencing
+racmo_on_imbie = xr.DataArray(
+    out,
+    name='subltot',
+    dims=('time', 'y', 'x'),
+    coords={
+        'time': da_src['time'].values,
+        'x': x_target,  # meters, polar stereo
+        'y': y_target,  # meters, polar stereo
+    },
+    attrs=da_src.attrs,  # keep units/long_name
+)
 
-# # Attach CRS/transform so it plays nicely with rioxarray
-# racmo_on_imbie = racmo_on_imbie.rio.write_crs(CRS.from_proj4(crs_stereo).to_wkt(), inplace=False)
-# racmo_on_imbie = racmo_on_imbie.rio.write_transform(basin_transform, inplace=False)
+# Attach CRS/transform so it plays nicely with rioxarray
+racmo_on_imbie = racmo_on_imbie.rio.write_crs(CRS.from_proj4(crs_stereo).to_wkt(), inplace=False)
+racmo_on_imbie = racmo_on_imbie.rio.write_transform(basin_transform, inplace=False)
 
-# # print(racmo_on_imbie)
-# # sve to disk
-# # start from the reprojected DataArray you showed
-# # start from your DataArray
-# da = racmo_on_imbie
+# print(racmo_on_imbie)
+# sve to disk
+# start from the reprojected DataArray you showed
+# start from your DataArray
+da = racmo_on_imbie
 
-# # (1) Make a copy so we can mutate safely
-# da = da.copy()
+# (1) Make a copy so we can mutate safely
+da = da.copy()
 
-# # (2) Strip problematic CF-encoding attrs on the data variable
-# for key in ("_FillValue", "grid_mapping", "scale_factor", "add_offset"):
-#     if key in da.attrs:
-#         da.attrs.pop(key)
+# (2) Strip problematic CF-encoding attrs on the data variable
+for key in ("_FillValue", "grid_mapping", "scale_factor", "add_offset"):
+    if key in da.attrs:
+        da.attrs.pop(key)
 
-# # (3) Also remove those from coords if any lib snuck them in
-# for c in list(da.coords):
-#     for key in ("_FillValue", "grid_mapping", "scale_factor", "add_offset"):
-#         if key in da[c].attrs:
-#             da[c].attrs.pop(key)
+# (3) Also remove those from coords if any lib snuck them in
+for c in list(da.coords):
+    for key in ("_FillValue", "grid_mapping", "scale_factor", "add_offset"):
+        if key in da[c].attrs:
+            da[c].attrs.pop(key)
 
-# # (4) Drop the unused scalar coord that can confuse CF writing
-# if "rotated_pole" in da.coords and da["rotated_pole"].ndim == 0:
-#     da = da.drop_vars("rotated_pole")
+# (4) Drop the unused scalar coord that can confuse CF writing
+if "rotated_pole" in da.coords and da["rotated_pole"].ndim == 0:
+    da = da.drop_vars("rotated_pole")
 
-# # (5) Ensure a consistent dtype and NaN fill
-# da = da.astype("float32")
+# (5) Ensure a consistent dtype and NaN fill
+da = da.astype("float32")
 
-# # (6) Build encoding ONLY on the data variable (not coords)
-# var_name = da.name or "subltot"
-# encoding = {
-#     var_name: {
-#         "zlib": True,
-#         "complevel": 4,
-#         "_FillValue": np.float32(np.nan),
-#         # optional but often nice:
-#         "dtype": "float32",
-#         "chunksizes": None,  # let engine choose; omit if you want specific chunking
-#     }
-# }
+# (6) Build encoding ONLY on the data variable (not coords)
+var_name = da.name or "subltot"
+encoding = {
+    var_name: {
+        "zlib": True,
+        "complevel": 4,
+        "_FillValue": np.float32(np.nan),
+        # optional but often nice:
+        "dtype": "float32",
+        "chunksizes": None,  # let engine choose; omit if you want specific chunking
+    }
+}
 
 # (7) Write to netCDF
-out_nc = os.path.join(racmo_path, "subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2019_2020.nc")
-# da.to_netcdf(out_nc, encoding=encoding)
-# print("wrote:", out_nc)
+out_nc = os.path.join(racmo_path, "subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2020.nc")
+da.to_netcdf(out_nc, encoding=encoding)
+print("wrote:", out_nc)
 
 racmo_on_imbie = xr.open_dataarray(out_nc)
 
@@ -580,7 +583,7 @@ basin_labels = D["basin_id"]                     # (y,x) float32 with NaNs outsi
 
 # 1) Mask SUB to basin interiors (for plotting and for the budget)
 SUBm = mask_to_basins(SUB, basin_labels)
-tms_plt = SUBm['time'][0]
+tms_plt = SUBm['date'][0]
 SUBm.isel(date=0).plot(cmap='jet', vmin=-10, vmax=5, cbar_kwargs={'label': 'Sublimation [mm/month]'})
 plt.title(f"Sublimation for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
 
@@ -616,8 +619,8 @@ SUB_basin.isel(date=0).plot(cmap='jet', vmin=-10, vmax=10, cbar_kwargs={'label':
 plt.title(f"Sublimation for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
 # (optional) Plot a masked frame to confirm
 SUBm.isel(date=0).plot(
-    cmap="RdBu_r",
-    vmin=0, vmax=15,  # adjust to your range
+    # cmap="RdBu_r",
+    vmin=0, vmax=1.5,  # adjust to your range
     cbar_kwargs={"label": "Snowdrift Sublimation [kg m⁻2]"},
 )
 
@@ -649,9 +652,9 @@ Precip_map_mm.attrs.update({
 })
 
 # save to disk with good memory usage
-svnme = os.path.join(basin_path, 'Monthly_mass_budget_precip_RignotBasin_in_GT.nc')
+svnme = os.path.join(basin_path, f'Monthly_mass_budget_precip_RignotBasin_in_GT_{cde_run_dte}.nc')
 Precip_map_Gt.to_netcdf(svnme)
-svnme = os.path.join(basin_path, 'Monthly_mass_budget_precip_RignotBasin_in_mm.nc')
+svnme = os.path.join(basin_path, f'Monthly_mass_budget_precip_RignotBasin_in_mm_{cde_run_dte}.nc')
 Precip_map_mm.to_netcdf(svnme)
 
 
@@ -674,7 +677,7 @@ Pmm_basin_ann = (
     .groupby("date.year")
     .sum("date")                         # sum of 12 months
     .rename(year="year")
-    .sel(year=[2019, 2020])              # pick the two years you want
+    .sel(year=YEARS)              # pick the two years you want
 )
 
 # 3) Paint the annual basin values back to (y, x) maps
@@ -683,7 +686,7 @@ Pmm_ann_maps = paint_basin_series_to_grid(Pmm_basin_ann, template)  # (year, y, 
 Pmm_ann_maps.attrs.update(dict(units="mm/year", description="Annual mass-budget precipitation"))
 
 # 4) (optional) Save & quick plots
-# Pmm_ann_maps.to_netcdf(os.path.join(basin_path, "Pmb_annual_2019_2020_mm.nc"))
+Pmm_ann_maps.to_netcdf(os.path.join(basin_path, "Pmb_annual_2013_2020_mm.nc"))
 
 # for yr in [2019, 2020]:
 #     Pmm_ann_maps.sel(year=yr).plot(
@@ -695,7 +698,7 @@ Pmm_ann_maps.attrs.update(dict(units="mm/year", description="Annual mass-budget 
 #     plt.title(f"P_MB annual accumulation — {yr}")
 #     plt.show()
 
-Pmm_basin_ann_arrs = [(f'P_MB annual accumulation — {yr}',Pmm_ann_maps.sel(year=yr)) for yr in [2019, 2020]]
+Pmm_basin_ann_arrs = [(f'P_MB annual accumulation — {yr}',Pmm_ann_maps.sel(year=yr)) for yr in YEARS]
 compare_mean_precp_plot(Pmm_basin_ann_arrs, 
                         vmin=0, vmax=300, 
                         cbar_tcks=[0,  50, 100, 150, 200, 250, 300])
@@ -707,7 +710,7 @@ Pmm_season = Pmm.groupby('date.season').mean(dim="date")
 Pmm_season = Pmm_season.assign_coords(season=["DJF", "MAM", "JJA", "SON"])
 
 # save to disk
-# Pmm_season.to_netcdf(os.path.join(basin_path, "Pmb_seasonal_mm_2019_2020.nc"))
+Pmm_season.to_netcdf(os.path.join(basin_path, "Pmb_seasonal_mm_2013_2020.nc"))
 
 # make array for plot
 Pmm_season_arrs = [(f'P_MB seasonal mean — {s}', Pmm_season.sel(season=s)) for s in ["DJF", "MAM", "JJA", "SON"]]

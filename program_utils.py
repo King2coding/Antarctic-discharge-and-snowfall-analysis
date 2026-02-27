@@ -124,6 +124,24 @@ def ds_swaplon(ds):
     return ds
 #----------------------------------------------------------------------------
 # function to read and process ERA5 precip file
+def process_era5_file(file_info):
+    # idx, file_path = file_info
+    # if idx % 5 == 0:
+    #     print(f"Processing ERA5 file {idx+1}")
+    era5_xr = xr.open_dataset(file_info, engine='netcdf4')
+    era5_xr = era5_xr.rename({'valid_time': 'time'})
+    era5_xr = ds_swaplon(era5_xr)
+    # data units are in m per day, convert to mm/day using 1000 factor
+    era5_xr = era5_xr['tp'] * 1000  # mm/h
+    era5_xr = era5_xr * 24  # mm/day
+    # # write crs and resample to gpcp resolution
+    # era5_xr.rio.write_crs(cc.to_string(), inplace=True)
+    # era5_xr = era5_xr.rio.reproject(
+    #     era5_xr.rio.crs,
+    #     shape=(360, 720),#gpcp_ds_v3pt2_xr['precip'].shape[1:], # # set the shape as the GPCP data
+    #     resampling=Resampling.average,
+    # )
+    return era5_xr
 def process_era5_file_to_basin(era5_xr_data, er_tme, basin, fle_svnme):
 
     basin_transform = basin.rio.transform()
@@ -2703,7 +2721,7 @@ def plot_seasonal_cycles_regions_3x1(plot_dfs, region_defs):
     n_regions = len(region_defs)
     fig, axes = plt.subplots(
         n_regions, 1, sharex=True,
-        figsize=(8, 9), constrained_layout=False
+        figsize=(8, 10), constrained_layout=False
     )
 
     # Make room on the left for shared y-label and at bottom for legend

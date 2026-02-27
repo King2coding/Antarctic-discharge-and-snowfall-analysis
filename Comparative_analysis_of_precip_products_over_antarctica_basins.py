@@ -188,7 +188,8 @@ output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
 plt.savefig(output_path, dpi=300, bbox_inches='tight')
 gc.collect()
 #%%
-Pmb_mm_fle = os.path.join(basins_path, 'Monthly_mass_budget_precip_RignotBasin_in_mm.nc')
+Pmb_mm_fle = os.path.join(basins_path, 'Monthly_mass_budget_precip_RignotBasin_in_mm_20260226.nc')
+# 'Monthly_mass_budget_precip_RignotBasin_in_mm.nc'
 
 P_mm_mnth = xr.open_dataarray(Pmb_mm_fle)
 p_mm_df = P_mm_mnth.to_dataframe().reset_index().dropna(axis=0)
@@ -200,12 +201,12 @@ p_mm_mean_df = p_mm_df.groupby(['year','month','basin_id'])['precip_mm_per_month
 p_mm_mean_df['time'] = pd.to_datetime(dict(year=p_mm_mean_df['year'], month=p_mm_mean_df['month'], day=1))
 p_mm_mean_df['basin_id'] = p_mm_mean_df['basin_id'].astype(int)
 
-Pmb_annual = xr.open_dataarray(os.path.join(basins_path, "Pmb_annual_2019_2020_mm.nc"))
-Pmb_seasonal = xr.open_dataarray(os.path.join(basins_path, "Pmb_seasonal_mm_2019_2020.nc"))
+Pmb_annual = xr.open_dataarray(os.path.join(basins_path, "Pmb_annual_2013_2020_mm.nc"))
+Pmb_seasonal = xr.open_dataarray(os.path.join(basins_path, "Pmb_seasonal_mm_2013_2020.nc"))
 img_fle_lst = sorted([os.path.join(imerg_basin_path, x) for x in os.listdir(imerg_basin_path) if 'imbie_basin' in x])
 era5_fle_lst = sorted([os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_path) if 'imbie_basin' in x])
 gpcpv3pt3_fle_lst = sorted([os.path.join(gpcpv3pt3_basin_path, x) for x in os.listdir(gpcpv3pt3_basin_path) if 'imbie_basin' in x])
-racmo_pr = xr.open_dataarray(os.path.join(racmo_path,'pr_monthlyS_ANT11_RACMO2.4p1_ERA5_2019_2022.nc'))
+racmo_pr = xr.open_dataarray(os.path.join(racmo_path,'pr_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022.nc'))
 # 1) drop the dummy band dimension
 racmo_pr = racmo_pr.squeeze("band", drop=True)          # now (time, y, x)
 
@@ -226,7 +227,7 @@ gc.collect()
 # IMERG
 print('Processing IMERG data')
 
-imerg_annual_mean, imerg_seasonal_mean = process_precipitation_data(img_fle_lst, basins)
+# imerg_annual_mean, imerg_seasonal_mean = process_precipitation_data(img_fle_lst, basins)
 # imerg_annual_mean = imerg_annual_mean * 365
 gc.collect()
 
@@ -305,7 +306,7 @@ compare_mean_precip_2x2(mean_annual_plot_arrs,
                  cbar_tcks=[0, 50, 100, 150, 200, 250, 300, 350, 400])
 
 # save plot to disk
-svnme = os.path.join(path_to_plots, 'annual_snowfall_accumulation_over_imbie_basins.png')
+svnme = os.path.join(path_to_plots, f'annual_snowfall_accumulation_over_imbie_basins_{cde_run_dte}.png')
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
 
@@ -352,7 +353,7 @@ plt.tight_layout()
 plt.show()
 
 # Save the DataFrame to a CSV file
-df_mean_yr_acc.round(2).to_csv(os.path.join(path_to_dfs, 'df_mean_yr_acc.csv'), index=False)
+df_mean_yr_acc.round(2).to_csv(os.path.join(path_to_dfs, f'df_mean_yr_acc_{cde_run_dte}.csv'), index=False)
 
 
 #%%
@@ -416,7 +417,7 @@ REGION_DEFS = [
 fig, axes = plot_monthly_cycles_regions_3x1(plot_dfs, REGION_DEFS)
 # plt.show()
 # Save the plot to disk
-svnme = os.path.join(path_to_plots, 'monthly_cycles_precip_over_imbie_basins_regions.png')
+svnme = os.path.join(path_to_plots, f'monthly_cycles_precip_over_imbie_basins_regions_{cde_run_dte}.png')
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
 # For the continent we’ll just use “all basins we see in the dataframe”
@@ -441,6 +442,9 @@ fig, ax, spread, spread_pct = plot_basin_spread_points(
     prod_cols=["ERA5", "GPCP", "RACMO"],
     prod_labels=["ERA5", "GPCP v3.3", "RACMO 2.4p1"],
 )
+svnme = os.path.join(path_to_plots, f'basin_spread_points_precip_over_imbie_basins_{cde_run_dte}.png')
+plt.savefig(svnme,  dpi=500, bbox_inches='tight')
+gc.collect()
 #%%
 
 Pmb_mean_seas_df = da_season_to_basin_df(Pmb_seasonal, basin_name="basin_id")
@@ -462,6 +466,8 @@ plot_dfs = {
 fig, axes = plot_seasonal_cycles_regions_3x1(
             plot_dfs, 
             REGION_DEFS)
+svnme = os.path.join(path_to_plots, f'seasonal_cycles_precip_over_imbie_basins_regions_{cde_run_dte}.png')
+plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
 
 #----------------------------------------------------------------------------------
@@ -499,9 +505,11 @@ gc.collect()
 # Example usage:
 products = ["ERA5", "GPCP", "RACMO"]
 plot_pmb_scatter(df_mean_yr_acc, "Pmb", products, high_thresh=500.0, scale="linear")
-products = ["ERA5", "GPCP", "RACMO"]
-plot_pmb_scatter(df_mean_yr_acc, "Pmb", products, high_thresh=500.0, scale="log")
 
+plot_pmb_scatter(df_mean_yr_acc, "Pmb", products, high_thresh=500.0, scale="log")
+svnme = os.path.join(path_to_plots, f'log_scatterplot_precip_over_imbie_basins_{cde_run_dte}.png')
+plt.savefig(svnme,  dpi=500, bbox_inches='tight')
+gc.collect()
 
 products = ["GPCP", "RACMO"]
 plot_pmb_scatter(df_mean_yr_acc, "ERA5", products, high_thresh=500.0, scale="linear")
