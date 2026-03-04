@@ -332,3 +332,109 @@ out_nc = os.path.join(racmo_path, "pr_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022.n
 
 da.to_netcdf(out_nc, encoding=encoding)
 print("wrote:", out_nc)
+
+
+#%% Sanity check
+# Open the dataset and select the land-sea mask data
+land_sea_mask_path = '/ra1/pubdat/AVHRR_CloudSat_proj/IMERG/ancillary_imerg_data/GPM_IMERG_LandSeaMask.2.nc4'
+lsm_ds = xr.open_dataset(land_sea_mask_path)
+lsm_arr = lsm_ds['landseamask']
+
+# Transpose the data to get longitude on the x-axis
+lsm_transposed = lsm_arr.transpose('lat', 'lon')
+
+# Flip the latitude axis so that latitude is displayed south to north
+lsm_flipped = lsm_transposed.isel(lat=slice(None, None, -1))
+
+# Apply the land-sea mask condition
+lsm = xr.where(lsm_flipped < 25, 1, 0)
+
+cc = CRS.from_authority(code=4326,auth_name='EPSG')
+
+lsm.rio.write_crs(cc.to_string(), inplace=True)
+
+ant_precip = xr.open_dataset(gp)['precip'][0] #era5_data[0].sel(latitude=slice(-55, -90))
+
+
+lsm = lsm.rio.reproject(lsm.rio.crs, 
+                        shape=ant_precip.shape,
+                        resampling=Resampling.mode,)
+
+lsm = lsm.rename({'x': 'lon', 'y': 'lat'})
+
+ant_lsm = lsm.sel(lat=slice(-55, -90))
+ant_precip = ant_precip.sel(lat=slice(-55, -90))
+ant_precip = ant_precip.sel(
+            latitude=ant_lsm['lat'].values, 
+            longitude=ant_lsm['lon'].values, 
+            method='nearest'
+        )
+
+ant_precip = ant_precip.where(ant_lsm.data == 1)
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import matplotlib.path as mpath
+
+def plot_antarctica_polar(da2d, title=None, vmin=None, vmax=None):
+    """
+    da2d: xarray DataArray with dims (lat, lon) or (y, x) but coords lat/lon in degrees.
+    """
+    # Ensure (lat, lon) for plotting
+    if "latitude" in da2d.dims and "longitude" in da2d.dims:
+        plot_da = da2d
+    elif "y" in da2d.dims and "x" in da2d.dims:
+        plot_da = da2d.rename({"y": "latitude", "x": "longitude"})
+    elif 'lon' in da2d.dims and 'lat' in da2d.dims:
+        plot_da = da2d.rename({"lat": "latitude", "lon": "longitude"})
+    else:
+        plot_da = da2d.transpose("latitude", "longitude")
+
+    proj = ccrs.SouthPolarStereo()
+    pc = ccrs.PlateCarree()
+
+    fig = plt.figure(figsize=(7, 7))
+    ax = plt.axes(projection=proj)
+
+    # Antarctica extent (lon W/E, lat S/N) in PlateCarree coords
+    ax.set_extent([-180, 180, -90, -55], crs=pc)
+
+    # Add coastlines for context
+    ax.coastlines(linewidth=0.8)
+
+    # Plot (pcolormesh is usually safest)
+    im = ax.pcolormesh(
+        plot_da["longitude"].values,
+        plot_da["latitude"].values,
+        plot_da.values,
+        transform=pc,
+        shading="auto",
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+    # Circular boundary (gives the “round” polar plot look)
+    theta = np.linspace(0, 2*np.pi, 200)
+    center, radius = [0.5, 0.5], 0.5
+    verts = np.vstack([np.sin(theta), np.cos(theta)]).T
+    circle = mpath.Path(verts * radius + center)
+    ax.set_boundary(circle, transform=ax.transAxes)
+
+    # Gridlines (optional)
+    gl = ax.gridlines(crs=pc, draw_labels=False, linewidth=0.5, linestyle="--", alpha=0.5)
+
+    cb = plt.colorbar(im, ax=ax, shrink=0.75, pad=0.05)
+    cb.set_label(f"{da2d.name or 'precip'} ({da2d.attrs.get('units','')})")
+
+    if title:
+        ax.set_title(title)
+
+    plt.show()
+
+# Example use (pick one time if da has time dim)
+plot_antarctica_polar(
+    (ant_precip),
+    title="Antarctica precipitation (polar stereographic)",vmax=5
+)

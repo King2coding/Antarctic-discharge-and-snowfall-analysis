@@ -285,6 +285,12 @@ def process_gpm_precip_file(xr_da, tme, basin, flenme2svnme):
 
         ant_precip_dat = xr_da.sel(lat=slice(-90, -55)).compute()
 
+        # Make it match GDAL north-up convention: row 0 = max lat
+        if ant_precip_dat["lat"][0] < ant_precip_dat["lat"][-1]:
+            ant_precip_dat = ant_precip_dat.sortby("lat", ascending=False)
+        
+        # print("lat[0], lat[-1] =", float(ant_precip_dat.lat[0]), float(ant_precip_dat.lat[-1]))
+
         yshp, xshp = ant_precip_dat.shape
 
         # minx = ant_precip_dat['lon'].min().item()
@@ -293,12 +299,11 @@ def process_gpm_precip_file(xr_da, tme, basin, flenme2svnme):
         origin_x = float(ant_precip_dat["lon"].min()) - px_sz/2
         origin_y = float(ant_precip_dat["lat"].max()) + px_sz/2
         
-
         dest_flnme = os.path.join(misc_out, os.path.basename(flenme2svnme).replace('.nc', '_sh.tif'))
 
         gdal_based_save_array_to_disk2(dest_flnme, xshp, yshp, px_sz, origin_x, origin_y, crs, crs_format, ant_precip_dat.values)
 
-        print(gdal.Info(dest_flnme) + ' of file')
+        # print(gdal.Info(dest_flnme) + ' of file')
 
         output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.tif', '_sh_stere.tif'))
 
@@ -321,7 +326,7 @@ def process_gpm_precip_file(xr_da, tme, basin, flenme2svnme):
                     stdout=subprocess.DEVNULL, 
                     stderr=subprocess.DEVNULL)
         
-        print(gdal.Info(output_file_stereo) + ' of stereo file')
+        # print(gdal.Info(output_file_stereo) + ' of stereo file')
 
         # Read the stereographic projection file
         ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)

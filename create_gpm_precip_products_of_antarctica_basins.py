@@ -65,6 +65,11 @@ print(f"Basin bounds: {basin_bounds}")
 basins = basins.where((basins > 1) & (basins.notnull()))
 
 #%%
+replace_elem = ['_F16','_F17','_F18','_F19','_NOAA-20',
+                '_NOAA-18','_NOAA-19','_METOP-A','_METOP-B',
+                '_METOP-C','_AMSR2', '_NPP', '_NOAA20', 
+                '_NOAA18', '_NOAA19', '_METOPA', '_METOPB', '_METOPC',
+                '_GCOM-W1']
 SATELLITE_CATEGORY_DATA = []
 
 for sat, files in SATELLITE_CATEGORY_FILES.items():
@@ -73,6 +78,7 @@ for sat, files in SATELLITE_CATEGORY_FILES.items():
 
     fname = os.path.basename(files[0]).split('_',1)[1]
     key = '_'.join(fname.split('.')[:4])
+    key = [key.replace(x,'') for x in replace_elem if x in key][0]
     sv_path = os.path.join(path_to_put_precip_over_basins, sat)
 
     ds = xr.open_mfdataset(
@@ -96,6 +102,19 @@ for sat, files in SATELLITE_CATEGORY_FILES.items():
         fle_svnme = os.path.join(sv_path, f'{key}_{fle_tme}.nc')
 
         basin_precip = process_gpm_precip_file(da.sel(time=fle_tme), fle_tme, basins, fle_svnme)
+
+        # da = basin_precip.copy()
+
+        # Drop nuisance coords that came from rasterio/GDAL
+        for c in ["band", "spatial_ref", "mapping"]:
+            if c in basin_precip.coords:
+                basin_precip = basin_precip.drop_vars(c)
+
+        # Make sure time is plain numpy datetime64[ns] and 1D
+        basin_precip = basin_precip.assign_coords(time=basin_precip["time"].astype("datetime64[ns]"))
+
+        # Optional: ensure no object dtype sneaks in
+        # basin_precip = basin_precip.astype("float32")  # keeps files smaller too
 
         encoding = {basin_precip.name: {"zlib": True, "complevel": 9}}
         basin_precip.to_netcdf(os.path.join(sv_path, fle_svnme), 
