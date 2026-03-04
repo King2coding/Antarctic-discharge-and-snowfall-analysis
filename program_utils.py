@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore")
 
 import gc
 import os
-
+import glob
 import pandas as pd
 import numpy as np
 import datetime
@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, date
 from scipy.stats import linregress
 import math
 from collections import Counter
+import HydroErr as he
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm
@@ -25,6 +26,7 @@ from matplotlib.cm import get_cmap
 import matplotlib.colors as mcolors
 import matplotlib.patheffects as pe
 import matplotlib.ticker as mticker
+
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
@@ -65,6 +67,8 @@ SEAS = ["DJF", "MAM", "JJA", "SON"]
 
 SEAS_ORDER = ("DJF", "MAM", "JJA", "SON")
 
+color_cycle = ["k", "tab:blue", "tab:orange", "tab:green", "tab:red"]
+marker_cycle = ["o", "s", "D", "^", "v"]
 #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 mpl.rcParams['font.family'] = 'serif'
@@ -109,7 +113,59 @@ PALETTE   = plt.cm.gist_ncar(np.linspace(0, 1, len(BASIN_IDS)))
 ID2COLOR  = dict(zip(BASIN_IDS, PALETTE))
 
 #%%
+def p_corr(obs,model):
+    return he.pearson_r(model,obs)
+
+def rmsqe(obs,model):
+    return he.rmse(model,obs)
 # fucntions
+def relative_bias(obs, model):
+    obs = np.asarray(obs, dtype=float)
+    model = np.asarray(model, dtype=float)
+
+    m = np.isfinite(obs) & np.isfinite(model)
+    if m.sum() == 0:
+        return np.nan
+
+    mu_obs = np.mean(obs[m])
+    if mu_obs == 0:
+        return np.nan  # or np.inf / raise, depending on your preference
+
+    mu_residuals = np.mean(model[m] - obs[m])
+    return mu_residuals / mu_obs
+
+# rmse
+# Range 0 RMSE < inf, smaller is better.
+# Notes: The standard deviation of the residuals. A lower spread indicates that the points are better concentrated
+# around the line of best fit (linear). Random errors do not cancel. This metric will highlights larger errors.
+
+def rmsqe(obs,model):
+    return he.rmse(model,obs)
+#- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+
+def calculate_metrics(df, xcol, ycol):
+    df = df.dropna(axis=0, how='any', subset=[xcol, ycol])  # Drop rows with NaN in specified columns
+    xdf = df[xcol].values
+    ydf = df[ycol].values
+    
+    
+    # if len(xdf) == 0 or len(ydf) == 0:
+    #     return np.nan, np.nan, np.nan
+    
+    # Calculate metrics
+    rb = round(relative_bias(xdf, ydf) * 100,1)  # Relative Bias in %
+    rmse = round(rmsqe(xdf, ydf), 2)  # Root Mean Square Error
+    cc = round(p_corr(xdf, ydf), 2)   # Pearson Correlation Coefficient    
+    mae  = round(np.mean(np.abs(ydf - xdf)), 2) # Mean Absolute Error
+
+    return {
+        'Bias':rb, 
+        'RMSE':rmse, 
+        'CC':cc, 
+        'MAE':mae
+        } # rb, rmse, cc, mae
+
+
 def ds_swaplon(ds):
     """
     Swap longitude coordinates from [0, 360] to [-180, 180] and sort.
@@ -217,6 +273,80 @@ def process_era5_file_to_basin(era5_xr_data, er_tme, basin, fle_svnme):
     )
 
     return er_xrr_clip_res
+#----------------------------------------------------------------------------
+def process_gpm_precip_file(xr_da, tme, basin, flenme2svnme):
+
+        basin_transform = basin.rio.transform()
+        height, width = basin.data.shape[1:]
+        xmin, ymax = basin_transform.c, basin_transform.f
+        xres, yres = basin_transform.a, -basin_transform.e
+        xmax = xmin + width * xres
+        ymin = ymax - height * yres       
+
+        ant_precip_dat = xr_da.sel(lat=slice(-90, -55)).compute()
+
+        yshp, xshp = ant_precip_dat.shape
+
+        minx = ant_precip_dat['lon'].min().item()
+        maxy = ant_precip_dat['lat'].max().item()
+        px_sz = round(ant_precip_dat['lon'].diff('lon').mean().item(), 2)
+
+        dest_flnme = os.path.join(misc_out, os.path.basename(flenme2svnme).replace('.nc', '_sh.nc'))
+
+        gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, ant_precip_dat.data)
+
+        output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.nc', '_sh_stere.nc'))
+
+        gdalwarp_command = [
+            'gdalwarp',
+            '-t_srs', '+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84',
+            '-r', 'near',
+            dest_flnme,
+            output_file_stereo
+        ]
+
+        subprocess.run(gdalwarp_command, 
+                    shell=False, check=True,
+                    stdout=subprocess.DEVNULL, 
+                    stderr=subprocess.DEVNULL)
+
+        # Read the stereographic projection file
+        ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
+
+        os.remove(dest_flnme)
+        os.remove(output_file_stereo)
+
+        # Clip the data to the bounds of the basin dataset
+        ant_xrr_clip = ant_xrr_sh_stereo.sel(
+            x=slice(xmin, xmax),
+            y=slice(ymin, ymax)
+        ).squeeze()
+
+        ccrs = CRS.from_proj4('+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84')
+
+        # Explicitly set the CRS before reprojecting
+        ant_xrr_clip.rio.write_crs(ccrs.to_string(), inplace=True)
+
+        ant_xrr_clip_res = ant_xrr_clip.rio.reproject(
+            ant_xrr_clip.rio.crs,
+            shape=(height, width),  # set the shape as the basin data shape
+            resampling=Resampling.nearest,
+            transform=basin.rio.transform()
+        )
+
+        # Add the time coordinate to the reprojected DataArray
+        ant_xrr_clip_res_arr = ant_xrr_clip_res['Band1'].values
+        ant_xrr_clip_res_arr = np.where(basin.values > 0, ant_xrr_clip_res_arr, np.nan)
+        ant_xrr_clip_res = xr.DataArray(
+            np.expand_dims(ant_xrr_clip_res_arr[0], axis=0),  # Expand dimensions to match ['time', 'y', 'x']
+            dims=['time', 'y', 'x'],
+            coords={'time': [np.datetime64(pd.to_datetime(tme, format='%Y%m%d'), 'D')], 
+                    'y': ant_xrr_clip_res.coords['y'], 
+                    'x': ant_xrr_clip_res.coords['x']},
+            name='precipitation'  # Change the variable name to 'precipitation'
+        )
+
+        return ant_xrr_clip_res
 #----------------------------------------------------------------------------
 # function to read and process AIRS precip file
 def process_airs_file_to_basin(airs_xrr_data, ai_tme, basin, fle_svnme):
@@ -771,6 +901,19 @@ def return_sim_cords(file):
     file_dat.close()
     return lon, lat
 
+#----------------------------------------------------------------------------
+def preprocess(ds):
+
+    file = ds.encoding["source"]
+
+    file_date = pd.to_datetime(
+        os.path.basename(file).split('.')[4].split('-')[0],
+        format='%Y%m%d'
+    )
+
+    ds = ds.assign_coords(time=("time", [file_date]))
+
+    return ds
 #----------------------------------------------------------------------------
 # function to run batched processing
 def run_batched_processing(batches, basin):
@@ -2318,12 +2461,14 @@ def plot_pmb_scatter(
         # stats
         in_box = (x >= lims[0]) & (x <= lims[1]) & (y >= lims[0]) & (y <= lims[1])
         if np.count_nonzero(in_box) >= 2:
-            cc = np.corrcoef(x[in_box], y[in_box])[0, 1]
-            bias = np.nanmean(y[in_box]) / np.nanmean(x[in_box])
+            cc = round(p_corr(x[in_box], y[in_box]), 2)   # Pearson Correlation Coefficient
+            # np.corrcoef(x[in_box], y[in_box])[0, 1]
+            bias = round(relative_bias(x[in_box], y[in_box]) * 100,1)  # Relative Bias in %
+            # np.nanmean(y[in_box]) / np.nanmean(x[in_box])
         else:
             cc, bias = np.nan, np.nan
 
-        ax.text(0.03, 0.97, f"CC={cc:.2f}\nBias={bias:.2f}",
+        ax.text(0.03, 0.97, f"CC={cc:.2f}\nBias={bias:.2f} %",
                 transform=ax.transAxes, va="top", ha="left", fontsize=14,
                 bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"))
 
@@ -2742,8 +2887,7 @@ def plot_seasonal_cycles_regions_3x1(plot_dfs, region_defs):
 
     # Consistent styles across products
     product_names = list(plot_dfs.keys())
-    color_cycle = ["k", "tab:blue", "tab:orange", "tab:green", "tab:red"]
-    marker_cycle = ["o", "s", "D", "^", "v"]
+    
 
     prod_style = {
         pname: dict(
@@ -2921,3 +3065,350 @@ def plot_seasonal_cycles_regions_1x3(plot_dfs, region_defs):
     )
 
     return fig, axes
+
+#-----------------------------------------------------------------------------
+def compute_region_means(df, region_defs, product_cols):
+    """
+    Returns dictionary:
+        {region_name: dataframe with columns [year, products...]}
+    """
+
+    region_data = {}
+
+    for region_name, basin_ids in region_defs:
+
+        df_region = df[df["basin"].isin(basin_ids)]
+
+        df_mean = (
+            df_region
+            .groupby("year")[product_cols]
+            .mean()
+            .reset_index()
+            .sort_values("year")
+        )
+
+        region_data[region_name] = df_mean
+
+    return region_data
+
+#-----------------------------------------------------------------------------
+def compute_region_means_from_products(prdt_df, region_defs):
+    """
+    prdt_df: list of tuples like
+        [("Pmb", df_pmb), ("ERA5", df_era5), ...]
+
+    region_defs: list like
+        [("Antarctica", [2,3,...]), ...]
+
+    Returns:
+        dict {region_name: dataframe with year + all products}
+    """
+
+    region_data = {}
+
+    for region_name, basin_ids in region_defs:
+
+        region_product_dfs = []
+
+        for prod_name, df in prdt_df:
+
+            # Filter basins
+            df_region = df[df["basin"].isin(basin_ids)]
+
+            # Compute regional annual mean
+            df_mean = (
+                df_region
+                .groupby("year")[prod_name]
+                .mean()
+                .reset_index()
+            )
+
+            region_product_dfs.append(df_mean)
+
+        # Merge all product dfs on year
+        from functools import reduce
+
+        df_merged = reduce(
+            lambda left, right: pd.merge(left, right, on="year", how="outer"),
+            region_product_dfs
+        ).sort_values("year")
+
+        region_data[region_name] = df_merged
+
+    return region_data
+
+#-----------------------------------------------------------------------------
+def compute_region_means_from_maps(
+        prdt_df,
+        region_defs
+    ):
+    """
+    Compute regional precipitation means directly from annual map DataArrays.
+
+    prdt_df:
+        [("Pmb", df_unused, Pmb_annual_map),
+         ("ERA5", df_unused, era5_annual_map),
+         ...]
+
+    region_defs:
+        [("Antarctica", [2,3,...]), ...]
+
+    Returns:
+        dict {region_name: dataframe with year + product columns}
+    """
+
+    import pandas as pd
+    import numpy as np
+    from functools import reduce
+
+    region_data = {}
+
+    for region_name, basin_ids in region_defs:
+
+        product_results = []
+
+        for prod_name, _, da in prdt_df:
+
+            # -------------------------
+            # 🔎 Smart basin detection
+            # -------------------------
+            basin_candidates = [
+                c for c in da.coords
+                if c.lower().startswith("basin")
+            ]
+
+            if len(basin_candidates) == 0:
+                raise ValueError(
+                    f"No basin mask coordinate found in {prod_name}. "
+                    f"Available coords: {list(da.coords)}"
+                )
+
+            basin_name = basin_candidates[0]  # take first match
+
+            yearly_vals = []
+
+            for yr in da["year"].values:
+
+                da_yr = da.sel(year=yr)
+
+                basin_mask = da_yr.coords[basin_name]
+
+                # Region mask
+                region_mask = basin_mask.isin(basin_ids)
+
+                # Apply mask
+                masked = da_yr.where(region_mask)
+
+                # Spatial mean (area-weighted since grid uniform)
+                mean_val = masked.mean(dim=("y", "x"), skipna=True).item()
+
+                yearly_vals.append((yr, mean_val))
+
+            df_prod = pd.DataFrame(yearly_vals, columns=["year", prod_name])
+            product_results.append(df_prod)
+
+        # Merge products
+        df_merged = reduce(
+            lambda left, right: pd.merge(left, right, on="year", how="outer"),
+            product_results
+        ).sort_values("year")
+
+        region_data[region_name] = df_merged
+
+    return region_data
+#-----------------------------------------------------------------------------
+
+def plot_region_time_series(region_data, product_cols):
+
+    fig, axes = plt.subplots(
+        nrows=len(region_data),
+        ncols=1,
+        figsize=(8, 10),
+        sharex=True
+    )
+
+    if len(region_data) == 1:
+        axes = [axes]
+
+    prod_style = {
+        pname: dict(
+            color=color_cycle[i % len(color_cycle)],
+            marker=marker_cycle[i % len(marker_cycle)],
+            linewidth=2,
+            markersize=5
+        )
+        for i, pname in enumerate(product_cols)
+    }
+
+    # Store legend handles
+    handles = None
+
+    for ax, (region_name, df_region) in zip(axes, region_data.items()):
+
+        # ---- Plot lines ----
+        for prod in product_cols:
+
+            if prod == "GPCP":
+                prod_lb = "GPCP v3.3"
+            elif prod == "RACMO":
+                prod_lb = "RACMO 2.4p1"
+            else:
+                prod_lb = prod
+
+            line = ax.plot(
+                df_region["year"],
+                df_region[prod],
+                label=prod_lb,
+                **prod_style[prod]
+            )
+
+        # Save handles once
+        if handles is None:
+            handles = ax.get_legend_handles_labels()
+
+        ax.set_title(region_name)
+        ax.set_ylabel("Precipitation (mm/yr)")
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+        ax.grid(which="major", alpha=0.3)
+
+        # ---- Metrics vs Pmb ----
+        metric_text = ""
+        for prod in product_cols:
+            if prod == "Pmb":
+                continue
+
+            metrics = calculate_metrics(df_region, "Pmb", prod)
+
+            metric_text += (
+                f"{prod}: "
+                f"CC={metrics['CC']}  "
+                f"Bias={metrics['Bias']}%\n"
+            )
+
+        ax.text(
+            0.02, 0.98,
+            metric_text.strip(),
+            transform=ax.transAxes,
+            fontsize=12,
+            verticalalignment='top',
+            bbox=dict(facecolor='white', alpha=0.6, edgecolor='none')
+        )
+
+    axes[-1].set_xlabel("Year")
+
+    # ---- Legend outside bottom ----
+    fig.legend(
+        handles[0],
+        handles[1],
+        loc="lower center",
+        ncol=len(product_cols),
+        frameon=False,
+        bbox_to_anchor=(0.5, -0.02)
+    )
+
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.12)
+    plt.show()
+
+#----------------------------------------------------------------------------
+
+from matplotlib.colors import LogNorm
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import PowerNorm
+def compare_mean_precip_2x2_log(arr_lst_mean,
+                                vmin=1,
+                                vmax=400,
+                                cbar_tcks=None):
+
+    if len(arr_lst_mean) != 4:
+        raise ValueError("compare_mean_precip_2x2 expects exactly 4 datasets.")
+
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet
+
+
+
+
+
+    # ---- Log normalization ----
+    norm = PowerNorm(gamma=0.6, vmin=0, vmax=450)
+
+    lat_rings = (-65, -70, -75, -80)
+    lon_spokes = np.arange(-180, 180, 30)
+
+    fig, axes = plt.subplots(
+        2, 2,
+        subplot_kw={"projection": proj},
+        figsize=(12, 12)
+    )
+    axes = axes.ravel()
+
+    fig.subplots_adjust(wspace=0.05, hspace=0.25, bottom=0.20)
+
+    for ax, (product_name, data) in zip(axes, arr_lst_mean):
+
+        ax.set_frame_on(False)
+        ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+
+        ax.text(
+            0.15, 1.05,
+            product_name,
+            transform=ax.transAxes,
+            fontsize=16,
+            fontweight="bold",
+            ha="center",
+            va="bottom"
+        )
+
+        # ---- Avoid zeros for log scale ----
+        data_log = xr.where(data <= 0, 1e-3, data)
+
+        data_log.plot(
+            ax=ax,
+            transform=ccrs.SouthPolarStereo(),
+            cmap=cmap,
+            norm=norm,
+            add_colorbar=False,
+            add_labels=False,
+        )
+
+        gl = ax.gridlines(
+            crs=ccrs.PlateCarree(),
+            draw_labels=False,
+            linewidth=0.55,
+            color="gray",
+            alpha=0.8,
+            linestyle="--",
+        )
+        gl.ylocator = FixedLocator(lat_rings)
+        gl.xlocator = FixedLocator(lon_spokes)
+
+        add_polar_latlon_labels(
+            ax,
+            lat_rings=lat_rings,
+            lon_spokes=lon_spokes,
+            label_size=11
+        )
+
+    # ---- Colorbar ----
+    sm = ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+
+    cb = fig.colorbar(
+        sm,
+        ax=axes,
+        orientation="horizontal",
+        fraction=0.03,
+        pad=0.1
+    )
+
+    if cbar_tcks is not None:
+        cb.set_ticks(cbar_tcks)
+
+    cb.ax.tick_params(labelsize=12)
+    cb.set_label("Precipitation [mm/year] (log scale)", fontsize=14)
+
+    return fig, axes
+
+
+

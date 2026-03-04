@@ -26,6 +26,11 @@ era5_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis
 gpcpv3pt3_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpcpv3pt3'
 racmo_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/RACMO2pt4p1'
 
+atms_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites/ATMS'
+dmsp_ssmis_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites/DMSP-SSMIS'
+amsr2_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites/AMSR2'
+mhs_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites/MHS'
+all_gpm_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites'
 annual_precip_in_basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/precip_in_basins/annual'
 seasonal_precip_in_basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/precip_in_basins/seasonal'
 
@@ -207,6 +212,13 @@ img_fle_lst = sorted([os.path.join(imerg_basin_path, x) for x in os.listdir(imer
 era5_fle_lst = sorted([os.path.join(era5_basin_path, x) for x in os.listdir(era5_basin_path) if 'imbie_basin' in x])
 gpcpv3pt3_fle_lst = sorted([os.path.join(gpcpv3pt3_basin_path, x) for x in os.listdir(gpcpv3pt3_basin_path) if 'imbie_basin' in x])
 racmo_pr = xr.open_dataarray(os.path.join(racmo_path,'pr_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022.nc'))
+
+atms_fle_lst = sorted([os.path.join(atms_basin_path, x) for x in os.listdir(atms_basin_path) if x.endswith('.nc')])
+dmsp_ssmis_fle_lst = sorted([os.path.join(dmsp_ssmis_basin_path, x) for x in os.listdir(dmsp_ssmis_basin_path) if x.endswith('.nc')])
+amsr2_fle_lst = sorted([os.path.join(amsr2_basin_path, x) for x in os.listdir(amsr2_basin_path) if x.endswith('.nc')])
+mhs_fle_lst = sorted([os.path.join(mhs_basin_path, x) for x in os.listdir(mhs_basin_path) if x.endswith('.nc')])
+all_gpm_fle = os.path.join(all_gpm_basin_path, "all_gpm_satellite_precip_mean_20260303.nc")
+
 # 1) drop the dummy band dimension
 racmo_pr = racmo_pr.squeeze("band", drop=True)          # now (time, y, x)
 
@@ -283,6 +295,32 @@ racmo_basin_mnth_mean = racmo_pr_b_mean.to_dataframe().reset_index()
 racmo_basin_mnth_mean['year'] = racmo_basin_mnth_mean['time'].dt.year
 racmo_basin_mnth_mean['month'] = racmo_basin_mnth_mean['time'].dt.month
 # racmo_pr_annual_mean = racmo_pr_annual_mean * 365
+gc.collect()
+
+#----------------------------------------------------------------------------------
+
+# read and process era5 data
+print('Processing GPM Constellation data')
+print('processing ATMS data')
+atms_annual_mean, atms_seasonal_mean,atms_b_mean = process_precipitation_data(atms_fle_lst, 
+                                                                  basins, 
+                                                                  'precipitation',
+                                                                  False,)
+atms_annual_mean = (atms_annual_mean * 24) * 365
+
+atms_basin_mean = atms_b_mean.to_dataframe().reset_index()
+atms_basin_mean['year'] = atms_basin_mean['time'].dt.year
+atms_basin_mean['month'] = atms_basin_mean['time'].dt.month
+
+atms_basin_mnth_mean = atms_basin_mean.groupby(['year','month','basin'])['precipitation'].sum().reset_index()
+atms_basin_mnth_mean['time'] = pd.to_datetime(dict(year=atms_basin_mnth_mean['year'], month=atms_basin_mnth_mean['month'], day=1))
+
+print('Processing MSH data')
+msh_annual_mean, msh_seasonal_mean,msh_b_mean = process_precipitation_data(msh_fle_lst, 
+                                                                  basins, 
+                                                                  'precipitation',
+                                                                  False,)
+msh_annual_mean = (msh_annual_mean * 24) * 365
 gc.collect()
 
 #----------------------------------------------------------------------------------

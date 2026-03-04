@@ -427,10 +427,10 @@ plt.title(f"Basal Melt for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}
 
 #%% 3) RACMO: integrate subltot (mm/month) to basin Gt/month
 racmo_sublim_file = os.path.join(racmo_path, 'subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_197901_202312.nc')
-# --- open & subset RACMO to 2013–2020 ---
+# --- open & subset RACMO to 2013–2022 ---
 # --- 1) open & subset RACMO on its native curvilinear grid ---
-# 1) Open and subset RACMO to 2013–2020
-da_src = xr.open_dataset(racmo_sublim_file)['subltot'].sel(time=slice('2013-01-01', '2020-12-31'))
+# 1) Open and subset RACMO to 2013–2022
+da_src = xr.open_dataset(racmo_sublim_file)['subltot'].sel(time=slice('2013-01-01', '2022-12-31'))
 
 # Pull 2-D lon/lat (RACMO supplies these on the curvilinear grid)
 lon2d = da_src['lon'].values
@@ -556,7 +556,7 @@ encoding = {
 }
 
 # (7) Write to netCDF
-out_nc = os.path.join(racmo_path, "subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2020.nc")
+out_nc = os.path.join(racmo_path, "subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022.nc")
 da.to_netcdf(out_nc, encoding=encoding)
 print("wrote:", out_nc)
 
@@ -615,8 +615,8 @@ SUB_basin = areal_to_basin_series(
     SUBm, pixel_area_m2=10000.0 * 10000.0, units="kg m-2"
 )
 SUB_basin.name = "subl_Gt_per_month"
-SUB_basin.isel(date=0).plot(cmap='jet', vmin=-10, vmax=10, cbar_kwargs={'label': 'Sublimation [mm/month]'})
-plt.title(f"Sublimation for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
+# SUB_basin.sel(date='2013-01-01').plot(cmap='jet', vmin=-10, vmax=10, cbar_kwargs={'label': 'Sublimation [mm/month]'})
+# plt.title(f"Sublimation for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
 # (optional) Plot a masked frame to confirm
 SUBm.isel(date=0).plot(
     # cmap="RdBu_r",
@@ -657,7 +657,6 @@ Precip_map_Gt.to_netcdf(svnme)
 svnme = os.path.join(basin_path, f'Monthly_mass_budget_precip_RignotBasin_in_mm_{cde_run_dte}.nc')
 Precip_map_mm.to_netcdf(svnme)
 
-
 #%%
 # 0) Short alias
 Pmm = Precip_map_mm  # (date, y, x), mm/month, constant within each basin_id
@@ -686,7 +685,7 @@ Pmm_ann_maps = paint_basin_series_to_grid(Pmm_basin_ann, template)  # (year, y, 
 Pmm_ann_maps.attrs.update(dict(units="mm/year", description="Annual mass-budget precipitation"))
 
 # 4) (optional) Save & quick plots
-Pmm_ann_maps.to_netcdf(os.path.join(basin_path, "Pmb_annual_2013_2020_mm.nc"))
+Pmm_ann_maps.to_netcdf(os.path.join(basin_path, "Pmb_annual_2013_2022_mm.nc"))
 
 # for yr in [2019, 2020]:
 #     Pmm_ann_maps.sel(year=yr).plot(
@@ -710,7 +709,7 @@ Pmm_season = Pmm.groupby('date.season').mean(dim="date")
 Pmm_season = Pmm_season.assign_coords(season=["DJF", "MAM", "JJA", "SON"])
 
 # save to disk
-Pmm_season.to_netcdf(os.path.join(basin_path, "Pmb_seasonal_mm_2013_2020.nc"))
+Pmm_season.to_netcdf(os.path.join(basin_path, "Pmb_seasonal_mm_2013_2022.nc"))
 
 # make array for plot
 Pmm_season_arrs = [(f'P_MB seasonal mean — {s}', Pmm_season.sel(season=s)) for s in ["DJF", "MAM", "JJA", "SON"]]
