@@ -287,28 +287,41 @@ def process_gpm_precip_file(xr_da, tme, basin, flenme2svnme):
 
         yshp, xshp = ant_precip_dat.shape
 
-        minx = ant_precip_dat['lon'].min().item()
-        maxy = ant_precip_dat['lat'].max().item()
-        px_sz = round(ant_precip_dat['lon'].diff('lon').mean().item(), 2)
+        # minx = ant_precip_dat['lon'].min().item()
+        # maxy = ant_precip_dat['lat'].max().item()
+        px_sz = float(ant_precip_dat["lon"].diff("lon").mean())
+        origin_x = float(ant_precip_dat["lon"].min()) - px_sz/2
+        origin_y = float(ant_precip_dat["lat"].max()) + px_sz/2
+        
 
-        dest_flnme = os.path.join(misc_out, os.path.basename(flenme2svnme).replace('.nc', '_sh.nc'))
+        dest_flnme = os.path.join(misc_out, os.path.basename(flenme2svnme).replace('.nc', '_sh.tif'))
 
-        gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, crs, crs_format, ant_precip_dat.data)
+        gdal_based_save_array_to_disk2(dest_flnme, xshp, yshp, px_sz, origin_x, origin_y, crs, crs_format, ant_precip_dat.values)
 
-        output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.nc', '_sh_stere.nc'))
+        print(gdal.Info(dest_flnme) + ' of file')
+
+        output_file_stereo = os.path.join(misc_out, os.path.basename(dest_flnme).replace('_sh.tif', '_sh_stere.tif'))
 
         gdalwarp_command = [
-            'gdalwarp',
-            '-t_srs', '+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84',
-            '-r', 'near',
-            dest_flnme,
-            output_file_stereo
+        "gdalwarp",
+        "-s_srs", "EPSG:4326",
+        "-t_srs", "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84",
+        "-of", "GTiff",
+        "-r", "bilinear",                 # keep near if you insist, but see note below
+        "-tr", str(xres), str(yres),  # 10000 10000 (meters)
+        "-te", str(xmin), str(ymin), str(xmax), str(ymax),
+        "-tap",
+        dest_flnme,
+        output_file_stereo,
         ]
+        gdalwarp_command += ["-srcnodata", "-9999.9", "-dstnodata", "nan"]
 
         subprocess.run(gdalwarp_command, 
                     shell=False, check=True,
                     stdout=subprocess.DEVNULL, 
                     stderr=subprocess.DEVNULL)
+        
+        print(gdal.Info(output_file_stereo) + ' of stereo file')
 
         # Read the stereographic projection file
         ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)
@@ -317,10 +330,15 @@ def process_gpm_precip_file(xr_da, tme, basin, flenme2svnme):
         os.remove(output_file_stereo)
 
         # Clip the data to the bounds of the basin dataset
-        ant_xrr_clip = ant_xrr_sh_stereo.sel(
-            x=slice(xmin, xmax),
-            y=slice(ymin, ymax)
-        ).squeeze()
+        # ant_xrr_clip = ant_xrr_sh_stereo.sel(
+        #     x=slice(xmin, xmax),
+        #     y=slice(ymin, ymax)
+        # ).squeeze()
+
+        ycoord = ant_xrr_sh_stereo["y"]
+        ysel = slice(ymax, ymin) if ycoord[0] > ycoord[-1] else slice(ymin, ymax)
+
+        ant_xrr_clip = ant_xrr_sh_stereo.sel(x=slice(xmin, xmax), y=ysel).squeeze()
 
         ccrs = CRS.from_proj4('+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84')
 
@@ -335,18 +353,24 @@ def process_gpm_precip_file(xr_da, tme, basin, flenme2svnme):
         )
 
         # Add the time coordinate to the reprojected DataArray
-        ant_xrr_clip_res_arr = ant_xrr_clip_res['Band1'].values
-        ant_xrr_clip_res_arr = np.where(basin.values > 0, ant_xrr_clip_res_arr, np.nan)
-        ant_xrr_clip_res = xr.DataArray(
-            np.expand_dims(ant_xrr_clip_res_arr[0], axis=0),  # Expand dimensions to match ['time', 'y', 'x']
-            dims=['time', 'y', 'x'],
-            coords={'time': [np.datetime64(pd.to_datetime(tme, format='%Y%m%d'), 'D')], 
-                    'y': ant_xrr_clip_res.coords['y'], 
-                    'x': ant_xrr_clip_res.coords['x']},
-            name='precipitation'  # Change the variable name to 'precipitation'
-        )
+        # after reprojection:
+        # ant_xrr_clip_res is a Dataset -> extract the data variable as a DataArray
+        if isinstance(ant_xrr_clip_res, xr.Dataset):
+            if "band_data" in ant_xrr_clip_res:
+                ant_xrr_clip_res_da = ant_xrr_clip_res["band_data"]
+            elif "Band1" in ant_xrr_clip_res:
+                ant_xrr_clip_res_da = ant_xrr_clip_res["Band1"]
+            else:
+                # fall back: take the first data variable
+                ant_xrr_clip_res_da = next(iter(ant_xrr_clip_res.data_vars.values()))
+        else:
+            ant_xrr_clip_res_da = ant_xrr_clip_res
+        ant_xrr_clip_res_da = ant_xrr_clip_res_da.where(basin.squeeze() > 0)
+        ant_xrr_clip_res_da = ant_xrr_clip_res_da.expand_dims(
+        time=[np.datetime64(pd.to_datetime(tme, format="%Y%m%d"), "D")]
+        ).rename("precipitation")
 
-        return ant_xrr_clip_res
+        return ant_xrr_clip_res_da
 #----------------------------------------------------------------------------
 # function to read and process AIRS precip file
 def process_airs_file_to_basin(airs_xrr_data, ai_tme, basin, fle_svnme):
@@ -778,6 +802,60 @@ def gdal_based_save_array_to_disk(dstflnme, xpx, ypx, px_sz, minx, maxy, crs, cr
         ))  
 
         dataset.SetProjection(srs)
+        dataset.GetRasterBand(1).WriteArray(arrayTosave)
+        dataset.FlushCache()
+        del(dataset)
+#----------------------------------------------------------------------------
+def gdal_based_save_array_to_disk2(dstflnme, xpx, ypx, px_sz, minx, maxy, crs, crs_format, arrayTosave):
+        
+        """
+        Save an array to disk using GDAL.
+
+        Parameters:
+        - dstflnme: Destination filename including the file path.
+        - xpx: Number of pixels in x (width).
+        - ypx: Number of pixels in y (height).
+        - px_sz: Size of the pixel (e.g., 0.5 degrees).
+        - minx: Minimum x (longitude) value.
+        - maxy: Maximum y (latitude) value (top-left corner).
+        - crs: Coordinate reference system in proj4 or WKT format.
+        - crs_format: 'proj4' or 'WKT', indicating the format of the CRS.
+        - arrayTosave: The array to save to disk.
+        """        
+        
+        # Calculate the bottom latitude and clamp it to -90.0 if necessary
+        bottom_latitude = maxy - (ypx * px_sz)
+        if bottom_latitude < -90.0:
+            bottom_latitude = -90.0
+            # Adjust ypx based on the clamped latitude
+            ypx = int((maxy - bottom_latitude) / px_sz)
+            # Slice the array to match the new dimensions
+            arrayTosave = arrayTosave[:ypx, :]
+
+        srs = osr.SpatialReference()
+        if crs_format == "proj4":
+            srs.ImportFromProj4(crs)
+        elif crs_format == "WKT":
+            srs.ImportFromWkt(crs)
+
+        driver = gdal.GetDriverByName('GTiff')
+
+        # Print dimensions to debug
+        # print(f"Array Shape After Clamping: {arrayTosave.shape}")
+        # print(f"Raster Size: (ypx={ypx}, xpx={xpx})")
+
+        dataset = driver.Create(dstflnme, xpx, ypx, 1, gdal.GDT_Float64)
+
+        dataset.SetGeoTransform((
+            minx,    
+            px_sz,   
+            0.0,     
+            maxy,    
+            0.0,     
+            -px_sz   
+        ))  
+
+        dataset.SetProjection(srs.ExportToWkt())
         dataset.GetRasterBand(1).WriteArray(arrayTosave)
         dataset.FlushCache()
         del(dataset)
