@@ -92,6 +92,78 @@ REGION_DEFS = [
 ]
 #----------------------------------------------------------------------------------
 
+product_order_corr = [
+    r"$P_{\mathrm{MB}}$",
+    "ERA5",
+    "GPCP v3.3",
+    "ATMS",
+    "ATMS (corr.)",
+    "MHS",
+    "MHS (corr.)",
+    "DMSP SSMIS",
+    "DMSP SSMIS (corr.)",
+    "AMSR2",
+    "AMSR2 (corr.)",
+    "GPM Satellites",
+    "GPM Satellites (corr.)",
+]
+
+product_styles_corr = {
+    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.5},
+
+    "ERA5": {"color": "blue", "marker": "s", "lw": 2.5},
+    "GPCP v3.3": {"color": "orange", "marker": "D", "lw": 2.5},
+
+    "ATMS": {"color": "tab:blue", "lw": 1.5},
+    "ATMS (corr.)": {"color": "tab:blue", "ls": "--", "lw": 2},
+
+    "MHS": {"color": "lime", "lw": 1.5},
+    "MHS (corr.)": {"color": "lime", "ls": "--", "lw": 2},
+
+    "DMSP SSMIS": {"color": "green", "lw": 1.5},
+    "DMSP SSMIS (corr.)": {"color": "green", "ls": "--", "lw": 2},
+
+    "AMSR2": {"color": "red", "lw": 1.5},
+    "AMSR2 (corr.)": {"color": "red", "ls": "--", "lw": 2},
+
+    "GPM Satellites": {"color": "cyan", "lw": 1.5},
+    "GPM Satellites (corr.)": {"color": "cyan", "ls": "--", "lw": 2},
+}
+
+corr_targets = [
+    "ATMS",
+    "MHS",
+    "DMSP SSMIS",
+    "AMSR2",
+    "GPM Satellites",
+]
+
+product_order = [
+    r"$P_{\mathrm{MB}}$",
+    "ERA5",
+    "GPCP v3.3",
+    # "RACMO 2.4p1",
+    "ATMS",
+    "MHS",
+    "DMSP SSMIS",
+    "AMSR2",
+    "GPM Satellites",
+]
+
+product_styles = {
+    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.0},
+    "ERA5": {"color": "blue", "marker": "s", "lw": 1.8},
+    "GPCP v3.3": {"color": "tab:orange", "marker": "D", "lw": 1.8},
+    # "RACMO 2.4p1": {"color": "tab:green", "marker": "^", "lw": 1.8},
+    "ATMS": {"lw": 1.5},
+    "MHS": {"lw": 1.5},
+    "DMSP SSMIS": {"lw": 1.5},
+    "AMSR2": {"lw": 1.5},
+    "GPM Satellites": {"lw": 1.5},
+}
+
+#----------------------------------------------------------------------------------
+# basin grid
 
 basins  = xr.open_dataarray(os.path.join(basins_path,'bedmap3_basins_0.1deg.tif'))
 # Mask out invalid values (0 or NaN)
@@ -428,8 +500,7 @@ dmsp_ssmis_annual_mean_mean = dmsp_ssmis_annual_mean.mean(dim='year')
 amsr2_annual_mean_mean = amsr2_annual_mean.mean(dim='year')
 gpm_sat_annual_mean_mean = gpm_sat_annual_mean.mean(dim='year')
 
-#%% make some plots ('IMERG', imerg_annual_mean[0])
-# annual plots
+#%% Annual Means - Spatial
 # calculate and plot the mean across years
 mean_annual_plot_arrs = [
                     (r"P$_{MB}$", Pmb_annual_mean),
@@ -443,9 +514,7 @@ mean_annual_plot_arrs = [
                    (f'GPM Satellites', gpm_sat_annual_mean_mean),
                    ]
 
-# compare_mean_precip_2x2(mean_annual_plot_arrs, 
-#                  vmin=0, vmax=400,
-#                  cbar_tcks=[0, 50, 100, 150, 200, 250, 300, 350, 400])
+
 fig, axes = compare_mean_precip_grid_power(
     mean_annual_plot_arrs,
     ncols=4,
@@ -461,15 +530,7 @@ svnme = f'annual_snowfall_accumulation_over_imbie_basins_{cde_run_dte}_sharedplo
 svnme = os.path.join(path_to_plots, svnme)
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
-
-
-# compare_mean_precip_2x2_log(
-#     mean_annual_plot_arrs,
-#     vmin=0,        # or 0.5 depending on your minimum values
-#     vmax=450,
-#     cbar_tcks=[0, 10, 25, 50, 100, 200, 300, 400,]
-# )
-
+#----------------------------------------------------------------------------------
 fig, axes, cb1, cb2 = compare_mean_precip_grid_power_dual_cbar(
     mean_annual_plot_arrs,
     group1_idx=[0, 1, 2],          # P_MB, ERA5, GPCP
@@ -491,49 +552,6 @@ svnme = os.path.join(path_to_plots,
                      f'annual_snowfall_accumulation_over_imbie_basins_log_{cde_run_dte}_diff_cbar.png')
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
-#----------------------------------------------------------------------------------
-# make scatter plots comparison
-
-# --- Convert each product to tidy DF ---
-df_pmb   = to_df(Pmb_annual)
-df_pmb.rename(columns={'basin_id': 'basin',
-                       'precip_mm_per_month': 'Pmb'}, inplace=True)
-df_era5  = to_df(era5_annual_mean)
-df_era5.rename(columns={'precipitation_annual': 'ERA5'}, inplace=True)
-df_gpcp  = to_df(gpcpv3pt3_annual_mean)
-df_gpcp.rename(columns={'precipitation_annual': 'GPCP'}, inplace=True)
-df_racmo = to_df(racmo_pr_annual_mean)
-df_racmo.rename(columns={'pr_annual': 'RACMO'}, inplace=True)
-
-# --- Merge all together on (year, basin) ---
-df = df_pmb.merge(df_era5, on=["year","basin"])
-df = df.merge(df_gpcp, on=["year","basin"])
-df = df.merge(df_racmo, on=["year","basin"])
-
-# add a "year-basin" key if you like
-df["year_basin"] = df["year"].astype(str) + "-" + df["basin"].astype(str)
-
-df_mean_yr_acc = df.groupby("basin")[["Pmb", "ERA5", "GPCP", "RACMO"]].mean().reset_index()
-
-f, ax = plt.subplots(figsize=(8, 6))
-width = 0.2  # Width of each bar
-basins = df_mean_yr_acc['basin']
-x = np.arange(len(basins))  # X positions for the bars
-
-# Plot each product as a separate bar group
-for i, col in enumerate(["Pmb", "ERA5", "GPCP", "RACMO"]):
-    ax.bar(x + i * width, df_mean_yr_acc[col], width=width, label=col)
-
-ax.set_xticks(x + width * 1.5)  # Center the ticks
-ax.set_xticklabels(basins)
-ax.set_xlabel('Basin')
-ax.set_ylabel('Precipitation (mm/yr)')
-ax.legend()
-plt.tight_layout()
-plt.show()
-
-# Save the DataFrame to a CSV file
-df_mean_yr_acc.round(2).to_csv(os.path.join(path_to_dfs, f'df_mean_yr_acc_{cde_run_dte}.csv'), index=False)
 
 
 #%% COMPUTE AND PLOT AREA WEIGHTED MEAN MONTHLY CYCLES
@@ -617,13 +635,6 @@ fig, axes = plot_weighted_region_monthly_climatology(
     figsize=(10, 10),
 )
 #-----------------------------------------------------------------------------------
-corr_targets = [
-    "ATMS",
-    "MHS",
-    "DMSP SSMIS",
-    "AMSR2",
-    "GPM Satellites",
-]
 
 region_monthly_clim_corr, correction_factors = add_scalar_bias_corrected_products_to_region_clim(
     region_monthly_clim,
@@ -633,87 +644,100 @@ region_monthly_clim_corr, correction_factors = add_scalar_bias_corrected_product
     clip_factor=None,   # or e.g. (0.25, 10.0)
 )
 
-product_order_corr = [
-    r"$P_{\mathrm{MB}}$",
-    "ERA5",
-    "GPCP v3.3",
-    "ATMS",
-    "ATMS (corr.)",
-    "MHS",
-    "MHS (corr.)",
-    "DMSP SSMIS",
-    "DMSP SSMIS (corr.)",
-    "AMSR2",
-    "AMSR2 (corr.)",
-    "GPM Satellites",
-    "GPM Satellites (corr.)",
-]
-
-product_styles_corr = {
-    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.0},
-
-    "ERA5": {"color": "tab:blue", "marker": "s", "lw": 1.8},
-    "GPCP v3.3": {"color": "tab:orange", "marker": "D", "lw": 1.8},
-
-    "ATMS": {"color": "tab:blue", "lw": 1.5},
-    "ATMS (corr.)": {"color": "tab:blue", "ls": "--", "lw": 1.8},
-
-    "MHS": {"color": "tab:orange", "lw": 1.5},
-    "MHS (corr.)": {"color": "tab:orange", "ls": "--", "lw": 1.8},
-
-    "DMSP SSMIS": {"color": "tab:green", "lw": 1.5},
-    "DMSP SSMIS (corr.)": {"color": "tab:green", "ls": "--", "lw": 1.8},
-
-    "AMSR2": {"color": "tab:red", "lw": 1.5},
-    "AMSR2 (corr.)": {"color": "tab:red", "ls": "--", "lw": 1.8},
-
-    "GPM Satellites": {"color": "tab:purple", "lw": 1.5},
-    "GPM Satellites (corr.)": {"color": "tab:purple", "ls": "--", "lw": 1.8},
-}
 
 fig, axes = plot_weighted_region_monthly_climatology(
     region_monthly_clim_corr,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
     product_order=product_order_corr,
     product_styles=product_styles_corr,
-    ylabel="Precipitation [mm/month]",
+    ylabel="[mm/month]",
     figsize=(11, 10),
 )
-
-Pmb_mnth_cycle = p_mm_mean_df.groupby(['month','basin_id'])['precip_mm_per_month'].mean().reset_index()
-era5_mnth_cycle = era5_basin_mnth_mean.groupby(['month','basin'])['precipitation'].mean().reset_index()
-gpcp_v3pt3_mnth_cycle = gpcpv3pt3_basin_mnth_mean.groupby(['month','basin'])['precipitation'].mean().reset_index()
-racmo_mnth_cycle = racmo_basin_mnth_mean.groupby(['month','basin'])['precipitation'].mean().reset_index()
-atms_mnth_cycle = atms_basin_mnth_mean.groupby(['month','basin'])['precipitation'].mean().reset_index()
-mhs_mnth_cycle = mhs_basin_mnth_mean.groupby(['month','basin'])['precipitation'].mean().reset_index()
-dmsp_ssmis_mnth_cycle = dmsp_ssmis_basin_mnth_mean.groupby(['month','basin'])['precipitation'].mean().reset_index() 
-amsr2_mnth_cycle = amsr2_basin_mnth_mean.groupby(['month','basin'])['precipitation'].mean().reset_index()
-gpm_sat_mnth_cycle = gpm_sat_basin_mnth_mean.groupby(['month','basin'])['precipitation'].mean().reset_index()
-
-
-
-product_cols = ["Pmb", "ERA5", "GPCP", "RACMO"]
-
-prdt_df = [("Pmb",df_pmb, Pmb_annual), ("ERA5",df_era5, era5_annual_mean), 
-           ("GPCP",df_gpcp, gpcpv3pt3_annual_mean), ("RACMO",df_racmo, racmo_pr_annual_mean)]
-
-# region_data = compute_region_means(df, REGION_DEFS, product_cols)
-# region_data = compute_region_means_from_products(prdt_df, REGION_DEFS)
-region_data = compute_region_means_from_maps(
-    prdt_df,
-    REGION_DEFS
-)
-
-plot_region_time_series(region_data, product_cols)
-svnme = os.path.join(path_to_plots, f'annual_mean_time_series_precip_over_imbie_basins_{cde_run_dte}.png')
+# plt.show()
+# Save the plot to disk
+svnme = os.path.join(path_to_plots, f'basin_area_weighted_monthly_cycles_precip_over_imbie_basins_regions_{cde_run_dte}.png')
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
 
+#%% SEASONAL CYCLES - Basin Area Weighted
+region_seasonal_clim = compute_weighted_region_seasonal_climatologies(
+    monthly_df_data=monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    basin_weights=basin_weights,
+    basin_col="basin",
+    value_col="precipitation",
+    time_col="time",
+    seasonal_mode="sum",   # gives mm/season
+)
 
-fig, axes = plot_monthly_cycles_regions_3x1(plot_dfs, REGION_DEFS)
-# plt.show()
-# Save the plot to disk
-svnme = os.path.join(path_to_plots, f'monthly_cycles_precip_over_imbie_basins_regions_{cde_run_dte}.png')
+fig, axes = plot_weighted_region_seasonal_climatology(
+    region_seasonal_clim,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=product_order,
+    product_styles=product_styles,
+    ylabel="[mm/season]",
+    figsize=(10, 8),
+)
+
+
+#----------------------------------------------------------------------------------
+region_seasonal_clim_corr, seasonal_corr_factors = add_scalar_bias_corrected_products_to_region_clim(
+    region_seasonal_clim,
+    reference_col=r"$P_{\mathrm{MB}}$",
+    target_products=corr_targets,
+    suffix=" (corr.)",
+    clip_factor=None,   # or e.g. (0.25, 10.0) if you want to prevent extreme scaling
+)
+
+fig, axes = plot_weighted_region_seasonal_climatology(
+    region_seasonal_clim_corr,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=product_order_corr,
+    product_styles=product_styles_corr,
+    ylabel="[mm/season]",
+    figsize=(10, 9),
+)
+
+svnme = os.path.join(path_to_plots, f'basin_area_weighted_seasonal_cycles_precip_over_imbie_basins_regions_{cde_run_dte}.png')
+plt.savefig(svnme,  dpi=500, bbox_inches='tight')
+
+gc.collect()
+
+#%% Year to Year Variability - Basin Area Weighted
+region_annual = compute_weighted_region_annual_totals(
+    monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    basin_weights=basin_weights,
+    annual_mode="sum",  # mm/year
+)
+
+fig, axes = plot_weighted_region_interannual(
+    region_annual,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=product_order_corr,
+    product_styles=product_styles_corr,
+    ylabel="[mm/year]",
+    figsize=(11, 10),
+)
+
+#----------------------------------------------------------------------------------
+region_annual_corr, annual_corr_factors = add_scalar_bias_corrected_products_to_region_annual(
+    region_annual,
+    reference_col=r"$P_{\mathrm{MB}}$",
+    target_products=corr_targets,
+    suffix=" (corr.)",
+    clip_factor=None,   # or e.g. (0.25, 10.0)
+)
+
+fig, axes = plot_weighted_region_interannual(
+    region_annual_corr,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=product_order_corr,
+    product_styles=product_styles_corr,
+    ylabel="[mm/year]",
+    figsize=(11, 10),
+)
+svnme = os.path.join(path_to_plots, f'basin_area_weighted_year_to_year_variability_precip_over_imbie_basins_regions_{cde_run_dte}.png')
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
 # For the continent we’ll just use “all basins we see in the dataframe”

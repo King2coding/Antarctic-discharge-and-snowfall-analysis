@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import datetime
 import calendar
+from functools import reduce
 
 from datetime import datetime, timedelta, date
 from scipy.stats import linregress
@@ -3519,6 +3520,211 @@ def compute_weighted_region_monthly_climatologies(
 
     return region_monthly_clim
 
+#-----------------------------------------------------------------------------
+
+def month_to_season(month):
+    if month in [12, 1, 2]:
+        return "DJF"
+    elif month in [3, 4, 5]:
+        return "MAM"
+    elif month in [6, 7, 8]:
+        return "JJA"
+    elif month in [9, 10, 11]:
+        return "SON"
+    return np.nan
+
+
+def season_order_key(season):
+    order = {"DJF": 0, "MAM": 1, "JJA": 2, "SON": 3}
+    return order.get(season, 999)
+
+
+def compute_weighted_region_seasonal_climatologies(
+    monthly_df_data,
+    region_defs,
+    basin_weights,
+    basin_col="basin",
+    value_col="precipitation",
+    time_col="time",
+    seasonal_mode="sum",
+):
+    """
+    Compute area-weighted regional seasonal climatologies from basin-level data.
+
+    IMPORTANT:
+    Assumes precipitation has already been converted to mm/month.
+    Therefore:
+      - first collapse to ONE value per year-month
+      - then form seasonal totals (sum of 3 months) or seasonal means
+
+    Returns
+    -------
+    dict of region dataframes with columns:
+      season, <product1>, <product2>, ...
+    """
+
+    if seasonal_mode not in {"sum", "mean"}:
+        raise ValueError("seasonal_mode must be 'sum' or 'mean'")
+
+    per_region_product_tables = {rname: [] for rname, _ in region_defs}
+
+    for product_name, df in monthly_df_data.items():
+
+        # Step 1: area-weighted regional series
+        reg_series = compute_weighted_region_series_from_basin_df(
+            df=df,
+            region_defs=region_defs,
+            basin_weights=basin_weights,
+            basin_col=basin_col,
+            value_col=value_col,
+            time_col=time_col,
+            extra_group_cols=("year", "month"),
+        )
+
+        for region_name, reg_df in reg_series.items():
+            tmp = reg_df.copy()
+
+            # -------------------------------------------------
+            # CRITICAL FIX:
+            # collapse to ONE value per year-month first
+            # If there are daily/multiple timestamps within a month,
+            # we average them because values are already in mm/month.
+            # -------------------------------------------------
+            monthly_reg = (
+                tmp.groupby(["year", "month"], as_index=False)[value_col]
+                .mean()
+            )
+
+            # assign season
+            monthly_reg["season"] = monthly_reg["month"].apply(month_to_season)
+
+            # Step 2: aggregate 3 monthly values into year-season
+            if seasonal_mode == "sum":
+                yr_season = (
+                    monthly_reg.groupby(["year", "season"], as_index=False)[value_col]
+                    .sum()
+                )
+            else:  # seasonal_mode == "mean"
+                yr_season = (
+                    monthly_reg.groupby(["year", "season"], as_index=False)[value_col]
+                    .mean()
+                )
+
+            # Step 3: climatological mean across years
+            clim = (
+                yr_season.groupby("season", as_index=False)[value_col]
+                .mean()
+                .rename(columns={value_col: product_name})
+            )
+
+            clim["season_order"] = clim["season"].map(season_order_key)
+            clim = clim.sort_values("season_order").drop(columns="season_order")
+
+            per_region_product_tables[region_name].append(clim)
+
+    # Merge products by region
+    region_seasonal_clim = {}
+
+    for region_name, tables in per_region_product_tables.items():
+        merged = reduce(
+            lambda left, right: pd.merge(left, right, on="season", how="outer"),
+            tables
+        )
+
+        merged["season_order"] = merged["season"].map(season_order_key)
+        merged = (
+            merged.sort_values("season_order")
+            .drop(columns="season_order")
+            .reset_index(drop=True)
+        )
+
+        region_seasonal_clim[region_name] = merged
+
+    return region_seasonal_clim
+#----------------------------------------------------------------------------
+
+
+def compute_weighted_region_annual_totals(
+    monthly_df_data_mmmonth,
+    region_defs,
+    basin_weights,
+    basin_col="basin",
+    value_col="precipitation",
+    time_col="time",
+    annual_mode="sum",
+):
+    """
+    Compute area-weighted regional annual precipitation totals from basin-level data.
+
+    Assumes input precipitation is already in mm/month.
+
+    Steps (per product, per region):
+      1) area-weighted regional series at (time, year, month)
+      2) collapse to ONE value per (year, month) (mean if multiple timestamps in month)
+      3) annual total = sum of 12 monthly values  -> mm/year
+
+    Returns
+    -------
+    region_annual : dict
+        {
+          "Antarctica": df with columns ["year", prod1, prod2, ...],
+          "West Antarctica": ...,
+          "East Antarctica": ...
+        }
+    """
+
+    if annual_mode not in {"sum", "mean"}:
+        raise ValueError("annual_mode must be 'sum' or 'mean'")
+
+    per_region_tables = {rname: [] for rname, _ in region_defs}
+
+    for product_name, df in monthly_df_data_mmmonth.items():
+
+        reg_series = compute_weighted_region_series_from_basin_df(
+            df=df,
+            region_defs=region_defs,
+            basin_weights=basin_weights,
+            basin_col=basin_col,
+            value_col=value_col,
+            time_col=time_col,
+            extra_group_cols=("year", "month"),
+        )
+
+        for region_name, reg_df in reg_series.items():
+            tmp = reg_df.copy()
+
+            # collapse to one value per year-month (important if daily/multi-timestamp)
+            monthly_reg = (
+                tmp.groupby(["year", "month"], as_index=False)[value_col]
+                .mean()
+            )
+
+            if annual_mode == "sum":
+                annual = (
+                    monthly_reg.groupby("year", as_index=False)[value_col]
+                    .sum()
+                )  # mm/year
+            else:
+                annual = (
+                    monthly_reg.groupby("year", as_index=False)[value_col]
+                    .mean()
+                )  # mean mm/month (not recommended)
+
+            annual = annual.rename(columns={value_col: product_name})
+            per_region_tables[region_name].append(annual)
+
+    # Merge all products into one table per region
+    region_annual = {}
+
+    for region_name, tables in per_region_tables.items():
+        merged = reduce(
+            lambda left, right: pd.merge(left, right, on="year", how="outer"),
+            tables
+        ).sort_values("year").reset_index(drop=True)
+
+        region_annual[region_name] = merged
+
+    return region_annual
 #----------------------------------------------------------------------------
 def add_scalar_bias_corrected_products_to_region_clim(
     region_monthly_clim,
@@ -3589,6 +3795,75 @@ def add_scalar_bias_corrected_products_to_region_clim(
 
     return out_dict, factor_dict
 #----------------------------------------------------------------------------
+def add_scalar_bias_corrected_products_to_region_annual(
+    region_annual,
+    reference_col=r"$P_{\mathrm{MB}}$",
+    target_products=None,
+    suffix=" (corr.)",
+    clip_factor=None,
+    min_mean=1e-6,
+):
+    """
+    Add scalar bias-corrected versions of selected products to each region annual table.
+
+    For each region and product:
+        CF = mean(reference over years) / mean(product over years)
+        corrected(year) = product(year) * CF
+
+    Parameters
+    ----------
+    region_annual : dict
+        Output from compute_weighted_region_annual_totals()
+    reference_col : str
+        Reference product, usually PMB
+    target_products : list or None
+        Products to correct
+    suffix : str
+        Suffix for corrected product names
+    clip_factor : tuple or None
+        Optional clipping for CF, e.g. (0.25, 10)
+    min_mean : float
+        Small floor to avoid divide-by-zero
+    """
+
+    out_dict = {}
+    factor_dict = {}
+
+    for region_name, df in region_annual.items():
+        out = df.copy()
+        factor_dict[region_name] = {}
+
+        if reference_col not in out.columns:
+            raise ValueError(f"{reference_col} not found in region '{region_name}'")
+
+        ref_vals = out[reference_col].astype(float).to_numpy()
+        ref_mean = np.nanmean(ref_vals)
+        ref_mean = max(ref_mean, min_mean)
+
+        if target_products is None:
+            prods = [c for c in out.columns if c != "year" and c != reference_col]
+        else:
+            prods = [c for c in target_products if c in out.columns]
+
+        for prod in prods:
+            vals = out[prod].astype(float).to_numpy()
+            prod_mean = np.nanmean(vals)
+
+            if (not np.isfinite(prod_mean)) or (prod_mean <= 0):
+                cf = np.nan
+            else:
+                cf = ref_mean / prod_mean
+
+            if clip_factor is not None and np.isfinite(cf):
+                cf = np.clip(cf, clip_factor[0], clip_factor[1])
+
+            out[f"{prod}{suffix}"] = vals * cf if np.isfinite(cf) else np.nan
+            factor_dict[region_name][prod] = cf
+
+        out_dict[region_name] = out
+
+    return out_dict, factor_dict
+#---------------------------------------------------------------------------
 def convert_precip_to_mm_per_month(df, unit, time_col="time", pr_col="precipitation"):
     """
     Convert precipitation column to mm/month.
@@ -3961,7 +4236,7 @@ def plot_weighted_region_monthly_climatology(
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
     product_order=None,
     product_styles=None,
-    ylabel="Precipitation [mm/month]",
+    ylabel="[mm/month]",
     figsize=(9, 10),
     sharex=True,
 ):
@@ -4026,7 +4301,7 @@ def plot_weighted_region_monthly_climatology(
         ax.grid(True, alpha=0.3)
         ax.set_xlim(1, 12)
         ax.set_xticks(np.arange(1, 13))
-        ax.set_xticklabels(month_labels, fontsize=12)
+        ax.set_xticklabels(month_labels, fontsize=14)
 
     fig.supylabel(ylabel, fontsize=16, fontweight="bold")
 
@@ -4037,7 +4312,7 @@ def plot_weighted_region_monthly_climatology(
         ncol=min(len(legend_labels), 5),
         frameon=False,
         fontsize=12,
-        bbox_to_anchor=(0.5, -0.01)
+        bbox_to_anchor=(0.5, -0.03)
     )
 
     fig.tight_layout(rect=[0, 0.05, 1, 1])
@@ -4228,5 +4503,158 @@ def compare_mean_precip_2x2_log(arr_lst_mean,
 
     cb.ax.tick_params(labelsize=12)
     cb.set_label("Precipitation [mm/year] (log scale)", fontsize=14)
+
+    return fig, axes
+
+#----------------------------------------------------------------------------
+
+def plot_weighted_region_seasonal_climatology(
+    region_seasonal_clim,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=None,
+    product_styles=None,
+    ylabel="Precipitation [mm/season]",
+    figsize=(8, 9),
+    sharex=True,
+):
+    """
+    Plot seasonal climatology by region.
+
+    Parameters
+    ----------
+    region_seasonal_clim : dict
+        Output from compute_weighted_region_seasonal_climatologies()
+    product_order : list or None
+        Plotting/legend order
+    product_styles : dict or None
+        Style dict, same concept as monthly plotting
+    """
+
+    nrows = len(region_order)
+    fig, axes = plt.subplots(
+        nrows, 1,
+        figsize=figsize,
+        sharex=sharex
+    )
+
+    axes = np.atleast_1d(axes)
+
+    if product_styles is None:
+        product_styles = {}
+
+    season_labels = ["DJF", "MAM", "JJA", "SON"]
+    x = np.arange(len(season_labels))
+
+    legend_handles = []
+    legend_labels = []
+
+    for ax, region_name in zip(axes, region_order):
+        df = region_seasonal_clim[region_name].copy()
+
+        # Ensure season order
+        df["season_order"] = df["season"].map(season_order_key)
+        df = df.sort_values("season_order").drop(columns="season_order")
+
+        if product_order is None:
+            prod_cols = [c for c in df.columns if c != "season"]
+        else:
+            prod_cols = [c for c in product_order if c in df.columns]
+
+        for prod in prod_cols:
+            style = product_styles.get(prod, {})
+            line, = ax.plot(
+                x,
+                df[prod].to_numpy(dtype=float),
+                label=prod,
+                **style
+            )
+
+            if prod not in legend_labels:
+                legend_handles.append(line)
+                legend_labels.append(prod)
+
+        ax.set_title(region_name, fontsize=18, fontweight="bold", pad=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(-0.15, len(season_labels) - 0.85)
+        ax.set_xticks(x)
+        ax.set_xticklabels(season_labels, fontsize=15, fontweight="bold")
+
+    fig.supylabel(ylabel, fontsize=18, fontweight="bold")
+
+    fig.legend(
+        legend_handles,
+        legend_labels,
+        loc="lower center",
+        ncol=min(len(legend_labels), 4),
+        frameon=False,
+        fontsize=12,
+        bbox_to_anchor=(0.5, -0.05)
+    )
+
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
+
+    return fig, axes
+
+#----------------------------------------------------------------------------
+
+def plot_weighted_region_interannual(
+    region_annual,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=None,
+    product_styles=None,
+    ylabel="Precipitation [mm/year]",
+    figsize=(10, 10),
+    sharex=True,
+):
+    """
+    Plot interannual variability (annual totals) for each region.
+    region_annual: dict of dataframes from compute_weighted_region_annual_totals()
+    """
+
+    nrows = len(region_order)
+    fig, axes = plt.subplots(nrows, 1, figsize=figsize, sharex=sharex)
+    axes = np.atleast_1d(axes)
+
+    if product_styles is None:
+        product_styles = {}
+
+    legend_handles = []
+    legend_labels = []
+
+    for ax, region_name in zip(axes, region_order):
+        df = region_annual[region_name].copy()
+
+        if product_order is None:
+            prod_cols = [c for c in df.columns if c != "year"]
+        else:
+            prod_cols = [c for c in product_order if c in df.columns]
+
+        for prod in prod_cols:
+            style = product_styles.get(prod, {})
+            line, = ax.plot(df["year"], df[prod], label=prod, **style)
+
+            if prod not in legend_labels:
+                legend_handles.append(line)
+                legend_labels.append(prod)
+
+        ax.set_title(region_name, fontsize=18, fontweight="bold", pad=8)
+        ax.grid(True, alpha=0.3)
+
+    axes[-1].set_xticks(sorted(region_annual[region_order[0]]["year"].unique()))
+    axes[-1].tick_params(axis="x", labelsize=12)
+
+    fig.supylabel(ylabel, fontsize=18, fontweight="bold")
+
+    fig.legend(
+        legend_handles,
+        legend_labels,
+        loc="lower center",
+        ncol=min(len(legend_labels), 4),
+        frameon=False,
+        fontsize=12,
+        bbox_to_anchor=(0.5, -0.04),
+    )
+
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
 
     return fig, axes
