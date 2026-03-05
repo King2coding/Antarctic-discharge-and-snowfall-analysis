@@ -9,6 +9,7 @@ import glob
 import pandas as pd
 import numpy as np
 import datetime
+import calendar
 
 from datetime import datetime, timedelta, date
 from scipy.stats import linregress
@@ -17,15 +18,22 @@ from collections import Counter
 import HydroErr as he
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import BoundaryNorm
+from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.cm import ScalarMappable
 from matplotlib.ticker import FixedLocator
 from matplotlib.colors import LogNorm, Normalize
+
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import PowerNorm
 from matplotlib.ticker import MaxNLocator, FuncFormatter
 from matplotlib.cm import get_cmap
+import matplotlib.gridspec as gridspec
+
 import matplotlib.colors as mcolors
 import matplotlib.patheffects as pe
 import matplotlib.ticker as mticker
+from matplotlib import cm
+import matplotlib as mpl
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -40,18 +48,6 @@ from pyproj import CRS, Transformer
 from osgeo import gdal, osr
 
 import h5py
-
-import cartopy.crs as ccrs
-import cartopy.crs as ccrs
-
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-import matplotlib.gridspec as gridspec
-import cartopy.feature as cfeature
-from matplotlib.colors import BoundaryNorm, ListedColormap
-from matplotlib import cm
-import matplotlib as mpl
-
 
 #%%
 # floating variables
@@ -2771,7 +2767,6 @@ def _normalize_monthly_df(df):
     return df[["month", "basin", "precipitation"]]
 
 
-
 def plot_monthly_cycles_regions_3x1(plot_dfs, region_defs):
     """
     plot_dfs: dict mapping product_name -> DataFrame
@@ -3301,6 +3296,756 @@ def compute_region_means_from_maps(
     return region_data
 #-----------------------------------------------------------------------------
 
+
+def compute_basin_area_weights_from_mask(
+    basins_da,
+    basin_ids=None,
+    basin_col_name="basin",
+):
+    """
+    Compute basin area weights from a basin-ID raster.
+
+    Parameters
+    ----------
+    basins_da : xarray.DataArray
+        Basin mask raster. Example: your IMBIE basin grid.
+        Can have dims like (band, y, x) or (y, x).
+    basin_ids : list or None
+        If given, restrict to these basin IDs only.
+    basin_col_name : str
+        Output basin column name.
+
+    Returns
+    -------
+    weights_df : pd.DataFrame
+        Columns:
+        - basin
+        - n_cells
+        - area_m2
+        - area_km2
+        - weight_global
+    """
+
+    da = basins_da.copy()
+
+    # Ensure 2D
+    if "band" in da.dims:
+        da = da.isel(band=0)
+
+    vals = da.values
+
+    # Valid basin cells
+    valid = np.isfinite(vals)
+    basin_vals = vals[valid].astype(int)
+
+    if basin_ids is not None:
+        basin_ids = set(map(int, basin_ids))
+        basin_vals = basin_vals[np.isin(basin_vals, list(basin_ids))]
+
+    unique_ids, counts = np.unique(basin_vals, return_counts=True)
+
+    # Pixel area from transform (projected grid)
+    transform = da.rio.transform()
+    px_w = abs(transform.a)
+    px_h = abs(transform.e)
+    pixel_area_m2 = px_w * px_h
+    pixel_area_km2 = pixel_area_m2 / 1e6
+
+    area_m2 = counts * pixel_area_m2
+    area_km2 = counts * pixel_area_km2
+    weight_global = counts / counts.sum()
+
+    weights_df = pd.DataFrame({
+        basin_col_name: unique_ids.astype(int),
+        "n_cells": counts.astype(int),
+        "area_m2": area_m2.astype(float),
+        "area_km2": area_km2.astype(float),
+        "weight_global": weight_global.astype(float),
+    }).sort_values(basin_col_name).reset_index(drop=True)
+
+    return weights_df
+
+#-----------------------------------------------------------------------------
+def compute_weighted_region_series_from_basin_df(
+    df,
+    region_defs,
+    basin_weights,
+    basin_col="basin",
+    value_col="precipitation",
+    time_col="time",
+    extra_group_cols=("year", "month"),
+):
+    """
+    Compute area-weighted regional monthly series from basin-mean dataframe.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must contain at least:
+        [time, basin, precipitation, year, month]
+    region_defs : list
+        Example:
+        [
+            ("Antarctica", [2,3,...]),
+            ("West Antarctica", [...]),
+            ("East Antarctica", [...]),
+        ]
+    basin_weights : pd.DataFrame
+        Output from compute_basin_area_weights_from_mask()
+    basin_col, value_col, time_col : str
+        Column names
+    extra_group_cols : tuple
+        Additional columns to preserve per timestep
+
+    Returns
+    -------
+    region_dict : dict
+        {region_name: regional monthly dataframe}
+    """
+
+    df = df.copy()
+    df[basin_col] = df[basin_col].astype(int)
+
+    wdf = basin_weights[[basin_col, "area_km2"]].copy()
+
+    region_dict = {}
+
+    group_cols = [time_col] + [c for c in extra_group_cols if c in df.columns]
+
+    for region_name, basin_ids in region_defs:
+        basin_ids = set(map(int, basin_ids))
+
+        sub = df[df[basin_col].isin(basin_ids)].copy()
+        sub = sub.merge(wdf, on=basin_col, how="left")
+
+        if sub["area_km2"].isna().any():
+            missing = sorted(sub.loc[sub["area_km2"].isna(), basin_col].unique())
+            raise ValueError(
+                f"Missing basin weights for {region_name}: {missing}"
+            )
+
+        # Weighted mean within each timestep.
+        # Important: renormalize weights using only basins present in that timestep.
+        def _weighted_mean(g):
+            vals = g[value_col].to_numpy(dtype=float)
+            wts = g["area_km2"].to_numpy(dtype=float)
+
+            good = np.isfinite(vals) & np.isfinite(wts)
+            if good.sum() == 0:
+                return np.nan
+
+            vals = vals[good]
+            wts = wts[good]
+
+            return np.sum(vals * wts) / np.sum(wts)
+
+        out = (
+            sub.groupby(group_cols, dropna=False)
+            .apply(_weighted_mean)
+            .reset_index(name=value_col)
+            .sort_values(group_cols)
+            .reset_index(drop=True)
+        )
+
+        region_dict[region_name] = out
+
+    return region_dict
+
+#-----------------------------------------------------------------------------
+def compute_weighted_region_monthly_climatologies(
+    monthly_df_data,
+    region_defs,
+    basin_weights,
+    basin_col="basin",
+    value_col="precipitation",
+    time_col="time",
+):
+    """
+    For each product, compute area-weighted regional monthly series,
+    then average by month across years to form climatology.
+
+    Parameters
+    ----------
+    monthly_df_data : dict
+        {
+            "ERA5": era5_basin_mean,
+            "GPCP v3.3": gpcp_df,
+            ...
+        }
+
+    Returns
+    -------
+    region_monthly_clim : dict
+        {
+            "Antarctica": df(month + product columns),
+            "West Antarctica": ...,
+            "East Antarctica": ...
+        }
+    """
+
+    from functools import reduce
+
+    per_region_product_tables = {rname: [] for rname, _ in region_defs}
+
+    for product_name, df in monthly_df_data.items():
+
+        reg_series = compute_weighted_region_series_from_basin_df(
+            df=df,
+            region_defs=region_defs,
+            basin_weights=basin_weights,
+            basin_col=basin_col,
+            value_col=value_col,
+            time_col=time_col,
+            extra_group_cols=("year", "month"),
+        )
+
+        for region_name, reg_df in reg_series.items():
+            clim = (
+                reg_df.groupby("month", as_index=False)[value_col]
+                .mean()
+                .rename(columns={value_col: product_name})
+            )
+            per_region_product_tables[region_name].append(clim)
+
+    region_monthly_clim = {}
+
+    for region_name, tables in per_region_product_tables.items():
+        merged = reduce(
+            lambda left, right: pd.merge(left, right, on="month", how="outer"),
+            tables
+        ).sort_values("month").reset_index(drop=True)
+
+        region_monthly_clim[region_name] = merged
+
+    return region_monthly_clim
+
+#----------------------------------------------------------------------------
+def add_scalar_bias_corrected_products_to_region_clim(
+    region_monthly_clim,
+    reference_col=r"$P_{\mathrm{MB}}$",
+    target_products=None,
+    suffix=" (corr.)",
+    clip_factor=None,
+    min_mean=1e-6,
+):
+    """
+    Add scalar bias-corrected versions of selected products to each region monthly climatology.
+
+    For each region and product:
+        CF = mean(reference) / mean(product)
+        corrected(month) = product(month) * CF
+
+    Parameters
+    ----------
+    region_monthly_clim : dict
+        Output from compute_weighted_region_monthly_climatologies()
+    reference_col : str
+        Reference column, usually PMB
+    target_products : list or None
+        Products to correct. If None, all except reference_col.
+    suffix : str
+        Suffix for corrected product names
+    clip_factor : tuple or None
+        Optional clipping for correction factor, e.g. (0.25, 10)
+    min_mean : float
+        Small floor to avoid divide-by-zero
+    """
+
+    out_dict = {}
+    factor_dict = {}
+
+    for region_name, df in region_monthly_clim.items():
+        out = df.copy()
+        factor_dict[region_name] = {}
+
+        if reference_col not in out.columns:
+            raise ValueError(f"{reference_col} not found in region '{region_name}'")
+
+        ref_vals = out[reference_col].astype(float).to_numpy()
+        ref_mean = np.nanmean(ref_vals)
+        ref_mean = max(ref_mean, min_mean)
+
+        if target_products is None:
+            prods = [c for c in out.columns if c not in ["month", reference_col]]
+        else:
+            prods = [c for c in target_products if c in out.columns]
+
+        for prod in prods:
+            vals = out[prod].astype(float).to_numpy()
+            prod_mean = np.nanmean(vals)
+
+            if (not np.isfinite(prod_mean)) or (prod_mean <= 0):
+                cf = np.nan
+            else:
+                cf = ref_mean / prod_mean
+
+            if clip_factor is not None and np.isfinite(cf):
+                cf = np.clip(cf, clip_factor[0], clip_factor[1])
+
+            out[f"{prod}{suffix}"] = vals * cf if np.isfinite(cf) else np.nan
+            factor_dict[region_name][prod] = cf
+
+        out_dict[region_name] = out
+
+    return out_dict, factor_dict
+#----------------------------------------------------------------------------
+def convert_precip_to_mm_per_month(df, unit, time_col="time", pr_col="precipitation"):
+    """
+    Convert precipitation column to mm/month.
+
+    unit:
+      - "mm/month"
+      - "mm/day"
+      - "mm/hr"
+    """
+    out = df.copy()
+    t = pd.to_datetime(out[time_col])
+
+    days = t.dt.days_in_month.astype(float)
+
+    if unit == "mm/month":
+        factor = 1.0
+    elif unit == "mm/day":
+        factor = days
+    elif unit == "mm/hr":
+        factor = 24.0 * days
+    else:
+        raise ValueError(f"Unsupported unit: {unit}")
+
+    out[pr_col] = out[pr_col].astype(float) * factor
+    return out
+#----------------------------------------------------------------------------
+
+
+
+def _plot_single_polar_precip_panel(
+    ax,
+    product_name,
+    data,
+    proj,
+    cmap,
+    norm,
+    lat_rings=(-65, -70, -75, -80),
+    lon_spokes=np.arange(-180, 180, 30),
+    title_x=0.15,
+    title_fs=16,
+    title_weight="bold",
+    title_prefix=None,
+    panel_label=None,
+):
+    """
+    Internal helper to keep styling consistent across all panels.
+    Assumes `data` is already on SouthPolarStereo x/y coordinates.
+    """
+
+    ax.set_frame_on(False)
+    ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+
+    # Panel title
+    if panel_label is not None:
+        title_txt = f"({panel_label}) {product_name}"
+    else:
+        title_txt = product_name
+
+    ax.text(
+        title_x, 1.05,
+        title_txt,
+        transform=ax.transAxes,
+        fontsize=title_fs,
+        fontweight=title_weight,
+        ha="center",
+        va="bottom"
+    )
+
+    # Avoid zeros / negatives for PowerNorm emphasis
+    # (keeps low-end visible but still works if there are zeros)
+    data_plot = xr.where(data <= 0, 1e-6, data)
+
+    data_plot.plot(
+        ax=ax,
+        transform=proj,
+        cmap=cmap,
+        norm=norm,
+        add_colorbar=False,
+        add_labels=False,
+    )
+
+    # ---------- IMBIE basin boundaries ----------
+    if "basin_id" in data.coords:
+        basin_da = data["basin_id"]
+    elif "basin" in data.coords:
+        basin_da = data["basin"]
+    else:
+        basin_da = None
+
+    if basin_da is not None:
+        if "band" in basin_da.dims:
+            basin_da = basin_da.isel(band=0)
+
+        da_for_contour = xr.where(np.isnan(basin_da), 0, basin_da)
+
+        # thin internal basin boundaries
+        internal_levels = np.arange(1.5, 19.5, 1.0)
+        ax.contour(
+            da_for_contour["x"],
+            da_for_contour["y"],
+            da_for_contour.values,
+            levels=internal_levels,
+            colors="k",
+            linewidths=0.6,
+            transform=proj,
+            zorder=5,
+        )
+
+        # bold coastline
+        ax.contour(
+            da_for_contour["x"],
+            da_for_contour["y"],
+            da_for_contour.values,
+            levels=[0.5],
+            colors="k",
+            linewidths=1.2,
+            transform=proj,
+            zorder=6,
+        )
+
+    # Gridlines
+    gl = ax.gridlines(
+        crs=ccrs.PlateCarree(),
+        draw_labels=False,
+        linewidth=0.55,
+        color="gray",
+        alpha=0.8,
+        linestyle="--",
+    )
+    gl.ylocator = FixedLocator(lat_rings)
+    gl.xlocator = FixedLocator(lon_spokes)
+
+    # Your existing helper
+    add_polar_latlon_labels(
+        ax,
+        lat_rings=lat_rings,
+        lon_spokes=lon_spokes,
+        label_size=11
+    )
+
+
+#----------------------------------------------------------------------------
+def compare_mean_precip_grid_power(
+    arr_lst_mean,
+    ncols=4,
+    figsize=None,
+    cmap=None,
+    gamma=0.6,
+    vmin=0,
+    vmax=400,
+    cbar_tcks=None,
+    cbar_label="Precipitation [mm/year]",
+    panel_letters=False,
+):
+    """
+    Generalized version of your PowerNorm ('log-like') comparison plot.
+
+    Parameters
+    ----------
+    arr_lst_mean : list of tuples
+        [(product_name, dataarray), ...]
+    ncols : int
+        Number of columns in subplot layout.
+    figsize : tuple or None
+        If None, chosen automatically.
+    cmap : matplotlib colormap or None
+        Default: plt.cm.jet
+    gamma, vmin, vmax : float
+        PowerNorm settings
+    cbar_tcks : list or None
+        Colorbar ticks
+    panel_letters : bool
+        If True, titles become (a), (b), ...
+    """
+
+    if len(arr_lst_mean) == 0:
+        raise ValueError("arr_lst_mean is empty.")
+
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet if cmap is None else cmap
+    norm = PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax)
+
+    n = len(arr_lst_mean)
+    ncols = min(ncols, n)
+    nrows = math.ceil(n / ncols)
+
+    if figsize is None:
+        figsize = (4.0 * ncols, 4.2 * nrows)
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        subplot_kw={"projection": proj},
+        figsize=figsize
+    )
+
+    axes = np.atleast_1d(axes).ravel()
+
+    # keep similar spacing feel to your original
+    fig.subplots_adjust(
+        left=0.04, right=0.90,
+        top=0.96, bottom=0.10,
+        wspace=0.05, hspace=0.20
+    )
+
+    letters = list("abcdefghijklmnopqrstuvwxyz")
+
+    for i, (ax, (product_name, data)) in enumerate(zip(axes, arr_lst_mean)):
+        panel_label = letters[i] if panel_letters and i < len(letters) else None
+
+        _plot_single_polar_precip_panel(
+            ax=ax,
+            product_name=product_name,
+            data=data,
+            proj=proj,
+            cmap=cmap,
+            norm=norm,
+            panel_label=panel_label,
+        )
+
+    # Hide unused axes
+    for ax in axes[len(arr_lst_mean):]:
+        ax.set_visible(False)
+
+    # Shared colorbar
+    sm = ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+
+    cb = fig.colorbar(
+        sm,
+        ax=[ax for ax in axes if ax.get_visible()],
+        orientation="horizontal",
+        fraction=0.03,
+        pad=0.06,
+    )
+
+    if cbar_tcks is not None:
+        cb.set_ticks(cbar_tcks)
+
+    cb.ax.tick_params(labelsize=12)
+    cb.ax.minorticks_off()
+    cb.set_label(cbar_label, fontsize=14)
+
+    return fig, axes
+
+#----------------------------------------------------------------------------
+def compare_mean_precip_grid_power_dual_cbar(
+    arr_lst_mean,
+    group1_idx,
+    group2_idx,
+    ncols=4,
+    figsize=None,
+    cmap=None,
+    # group 1 norm (higher-range products)
+    gamma1=0.6,
+    vmin1=0,
+    vmax1=300,
+    cbar_tcks1=None,
+    cbar_label1="Precipitation [mm/year]",
+    # group 2 norm (lower-range GPM-like products)
+    gamma2=0.6,
+    vmin2=0,
+    vmax2=80,
+    cbar_tcks2=None,
+    cbar_label2="Precipitation [mm/year]",
+    panel_letters=False,
+):
+    """
+    Multi-panel polar plot with TWO PowerNorm colorbars.
+
+    Parameters
+    ----------
+    arr_lst_mean : list of tuples
+        [(product_name, dataarray), ...]
+    group1_idx : list of int
+        Indices in arr_lst_mean that use norm1 / colorbar1
+    group2_idx : list of int
+        Indices in arr_lst_mean that use norm2 / colorbar2
+    """
+
+    if len(arr_lst_mean) == 0:
+        raise ValueError("arr_lst_mean is empty.")
+
+    idx_all = set(range(len(arr_lst_mean)))
+    if set(group1_idx).union(set(group2_idx)) != idx_all:
+        raise ValueError("group1_idx and group2_idx must cover all panels exactly.")
+    if set(group1_idx).intersection(set(group2_idx)):
+        raise ValueError("group1_idx and group2_idx must not overlap.")
+
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet if cmap is None else cmap
+
+    norm1 = PowerNorm(gamma=gamma1, vmin=vmin1, vmax=vmax1)
+    norm2 = PowerNorm(gamma=gamma2, vmin=vmin2, vmax=vmax2)
+
+    n = len(arr_lst_mean)
+    ncols = min(ncols, n)
+    nrows = math.ceil(n / ncols)
+
+    if figsize is None:
+        figsize = (4.0 * ncols + 1.2, 4.2 * nrows)
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        subplot_kw={"projection": proj},
+        figsize=figsize
+    )
+    axes = np.atleast_1d(axes).ravel()
+
+    # leave room at right for two stacked vertical colorbars
+    fig.subplots_adjust(
+        left=0.04, right=0.87,
+        top=0.96, bottom=0.06,
+        wspace=0.05, hspace=0.20
+    )
+
+    letters = list("abcdefghijklmnopqrstuvwxyz")
+
+    for i, (ax, (product_name, data)) in enumerate(zip(axes, arr_lst_mean)):
+        panel_label = letters[i] if panel_letters and i < len(letters) else None
+        norm = norm1 if i in group1_idx else norm2
+
+        _plot_single_polar_precip_panel(
+            ax=ax,
+            product_name=product_name,
+            data=data,
+            proj=proj,
+            cmap=cmap,
+            norm=norm,
+            panel_label=panel_label,
+        )
+
+    # Hide unused axes
+    for ax in axes[len(arr_lst_mean):]:
+        ax.set_visible(False)
+
+    # ---- two vertical colorbars on the right ----
+    # upper colorbar
+    cax1 = fig.add_axes([0.89, 0.54, 0.016, 0.28])  # [left, bottom, width, height]
+    sm1 = ScalarMappable(norm=norm1, cmap=cmap)
+    sm1.set_array([])
+
+    cb1 = fig.colorbar(sm1, cax=cax1, orientation="vertical")
+    if cbar_tcks1 is not None:
+        cb1.set_ticks(cbar_tcks1)
+    cb1.ax.tick_params(labelsize=11)
+    cb1.ax.minorticks_off()
+    cb1.ax.set_title("mm/year", fontsize=12, pad=12)
+    cb1.set_label(cbar_label1, fontsize=0)  # keep clean; title already says mm/year
+
+    # lower colorbar
+    cax2 = fig.add_axes([0.89, 0.12, 0.016, 0.28])
+    sm2 = ScalarMappable(norm=norm2, cmap=cmap)
+    sm2.set_array([])
+
+    cb2 = fig.colorbar(sm2, cax=cax2, orientation="vertical")
+    if cbar_tcks2 is not None:
+        cb2.set_ticks(cbar_tcks2)
+    cb2.ax.tick_params(labelsize=11)
+    cb2.ax.minorticks_off()
+    cb2.ax.set_title("mm/year", fontsize=12, pad=12)
+    cb2.set_label(cbar_label2, fontsize=0)
+
+    return fig, axes, cb1, cb2
+
+
+#-----------------------------------------------------------------------------
+
+def plot_weighted_region_monthly_climatology(
+    region_monthly_clim,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=None,
+    product_styles=None,
+    ylabel="Precipitation [mm/month]",
+    figsize=(9, 10),
+    sharex=True,
+):
+    """
+    Plot stacked monthly climatologies for regions.
+
+    Parameters
+    ----------
+    region_monthly_clim : dict
+        Output of compute_weighted_region_monthly_climatologies()
+    region_order : tuple/list
+        Region subplot order
+    product_order : list or None
+        Order of products in legend / plotting
+    product_styles : dict or None
+        Example:
+        {
+            "ERA5": {"color": "tab:blue", "marker": "s", "lw": 1.8},
+            ...
+        }
+    """
+
+    nrows = len(region_order)
+    fig, axes = plt.subplots(
+        nrows, 1,
+        figsize=figsize,
+        sharex=sharex
+    )
+
+    axes = np.atleast_1d(axes)
+
+    if product_styles is None:
+        product_styles = {}
+
+    month_labels = [calendar.month_abbr[i] for i in range(1, 13)]
+
+    legend_handles = []
+    legend_labels = []
+
+    for ax, region_name in zip(axes, region_order):
+        df = region_monthly_clim[region_name].copy()
+
+        if product_order is None:
+            prod_cols = [c for c in df.columns if c != "month"]
+        else:
+            prod_cols = [c for c in product_order if c in df.columns]
+
+        for prod in prod_cols:
+            style = product_styles.get(prod, {})
+            line, = ax.plot(
+                df["month"],
+                df[prod],
+                label=prod,
+                **style
+            )
+
+            if prod not in legend_labels:
+                legend_handles.append(line)
+                legend_labels.append(prod)
+
+        ax.set_title(region_name, fontsize=16, fontweight="bold", pad=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(1, 12)
+        ax.set_xticks(np.arange(1, 13))
+        ax.set_xticklabels(month_labels, fontsize=12)
+
+    fig.supylabel(ylabel, fontsize=16, fontweight="bold")
+
+    fig.legend(
+        legend_handles,
+        legend_labels,
+        loc="lower center",
+        ncol=min(len(legend_labels), 5),
+        frameon=False,
+        fontsize=12,
+        bbox_to_anchor=(0.5, -0.01)
+    )
+
+    fig.tight_layout(rect=[0, 0.05, 1, 1])
+
+    return fig, axes
+
+
+#-----------------------------------------------------------------------------
 def plot_region_time_series(region_data, product_cols):
 
     fig, axes = plt.subplots(
@@ -3395,9 +4140,6 @@ def plot_region_time_series(region_data, product_cols):
 
 #----------------------------------------------------------------------------
 
-from matplotlib.colors import LogNorm
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import PowerNorm
 def compare_mean_precip_2x2_log(arr_lst_mean,
                                 vmin=1,
                                 vmax=400,
@@ -3408,10 +4150,6 @@ def compare_mean_precip_2x2_log(arr_lst_mean,
 
     proj = ccrs.SouthPolarStereo()
     cmap = plt.cm.jet
-
-
-
-
 
     # ---- Log normalization ----
     norm = PowerNorm(gamma=0.6, vmin=0, vmax=450)
@@ -3492,6 +4230,3 @@ def compare_mean_precip_2x2_log(arr_lst_mean,
     cb.set_label("Precipitation [mm/year] (log scale)", fontsize=14)
 
     return fig, axes
-
-
-
