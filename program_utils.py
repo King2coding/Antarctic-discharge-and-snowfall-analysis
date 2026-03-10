@@ -1082,6 +1082,29 @@ def decimal_year_to_date(decimal_year):
     days_in_year = 366 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 365
     return base + timedelta(days=rem * days_in_year)
 
+#------------------------------------------------------------------------------
+def decimal_year_to_month_start(decimal_year, mode="nearest"):
+    """
+    Convert decimal year -> month-start Timestamp (freq='MS').
+
+    mode:
+      - "nearest": nearest month (best if your decimal years are mid-month-ish)
+      - "floor"  : always floor to earlier month
+    """
+    y = float(decimal_year)
+    year = int(np.floor(y))
+    frac = y - year
+
+    m_float = frac * 12.0  # 0..12
+    if mode == "nearest":
+        month = int(np.round(m_float)) + 1
+    elif mode == "floor":
+        month = int(np.floor(m_float)) + 1
+    else:
+        raise ValueError("mode must be 'nearest' or 'floor'")
+
+    month = int(np.clip(month, 1, 12))
+    return pd.Timestamp(year=year, month=month, day=1)
 #-----------------------------------------------------------------------------
 
 def annual_slopes_with_se(df_year, cols):
@@ -1851,7 +1874,172 @@ def da_season_to_basin_df(da, basin_name="basin"):
     return df_mean_seas_acc
 
 #----------------------------------------------------------------------------
+def _to_monthly_basin_df(df, time_col="time", basin_col="basin", val_col="precipitation"):
+    """If df is daily/submonthly, aggregate to monthly per basin. If already monthly, returns as-is."""
+    d = df.copy()
+    d[time_col] = pd.to_datetime(d[time_col])
+    d[basin_col] = d[basin_col].astype(int)
 
+    # detect "already monthly": each basin has one record per year-month
+    # (cheap heuristic: if any basin has >1 record in a given month, treat as submonthly)
+    d["ym"] = d[time_col].dt.to_period("M")
+    dup = d.groupby([basin_col, "ym"]).size().max()
+
+    if dup > 1:
+        # aggregate to monthly mean per basin (works for mm/day daily series too
+        # as long as you've already converted to mm/month prior to this stage)
+        d = (d.groupby([basin_col, "ym"], as_index=False)[val_col]
+               .mean())
+        d[time_col] = d["ym"].dt.to_timestamp()  # month start
+    else:
+        # ensure month-start timestamps
+        d[time_col] = d["ym"].dt.to_timestamp()
+
+    d["year"] = d[time_col].dt.year
+    d["month"] = d[time_col].dt.month
+    return d[[time_col, "year", "month", basin_col, val_col]]
+
+def region_monthly_series_from_dict(
+    monthly_df_data_mmmonth,
+    region_defs,
+    basin_weights,
+    region_name,
+    time_col="time",
+    basin_col="basin",
+    val_col="precipitation",
+):
+    """
+    Returns a single DataFrame indexed by monthly time with one column per product (mm/month),
+    area-weighted over basins in the chosen region.
+    """
+    basin_ids = dict(region_defs)[region_name]
+    basin_ids = set(int(b) for b in basin_ids)
+
+    # normalize weights to region (so they sum to 1 over the region)
+    w = {int(k): float(v) for k, v in basin_weights.items() if int(k) in basin_ids}
+    wsum = sum(w.values())
+    w = {k: v / wsum for k, v in w.items()}
+
+    out = None
+
+    for prod, df in monthly_df_data_mmmonth.items():
+        d = _to_monthly_basin_df(df, time_col=time_col, basin_col=basin_col, val_col=val_col)
+
+        # d = d[d[basin_col].isin(basin_ids)].copy()
+        # d["w"] = d[basin_col].map(w).astype(float)
+
+        # # weighted mean per month
+        # reg = (d.groupby(time_col)
+        #          .apply(lambda g: np.sum(g[val_col].values * g["w"].values))
+        #          .rename(prod)
+        #          .to_frame())
+
+        d = d[d[basin_col].isin(basin_ids)].copy()
+
+        # map weights (some basins may be missing weights)
+        d["w"] = d[basin_col].map(w)
+
+        # drop rows where weight is missing
+        d = d.dropna(subset=["w"])
+
+        # weighted mean per month with re-normalization (so missing basins don't break everything)
+        def _wmean(g):
+            ww = g["w"].values.astype(float)
+            yy = g[val_col].values.astype(float)
+            s = np.nansum(ww)
+            if s <= 0:
+                return np.nan
+            return np.nansum(yy * ww) / s
+
+        reg = d.groupby(time_col).apply(_wmean)
+
+        # reg might be Series or DataFrame depending on pandas; force Series
+        if isinstance(reg, pd.DataFrame):
+            reg = reg.iloc[:, 0]
+
+        reg = reg.rename(prod).to_frame()
+
+        out = reg if out is None else out.join(reg, how="outer")
+
+    # enforce continuous monthly index (gap-aware)
+    # --- enforce continuous monthly index (gap-aware) ---
+    if out is None or out.empty:
+        raise ValueError(
+            f"Region series is empty for '{region_name}'. "
+            "Likely: basin IDs mismatch, weights missing, or time parsing failed."
+        )
+
+    out = out.sort_index()
+
+    start = pd.to_datetime(out.index.min(), errors="coerce")
+    end   = pd.to_datetime(out.index.max(), errors="coerce")
+
+    if pd.isna(start) or pd.isna(end):
+        raise ValueError(
+            f"Region series has invalid time index for '{region_name}'. "
+            f"start={start}, end={end}. Check time column parsing."
+        )
+
+    full = pd.date_range(start, end, freq="MS")
+    out = out.reindex(full)
+    out.index.name = "time"
+    return out
+
+#---------------------------------------------------------------------------
+def deseasonalize_monthly(df):
+    """Subtract monthly climatology (calendar-month mean) from each series."""
+    out = df.copy()
+    months = out.index.month
+    for c in out.columns:
+        clim = out[c].groupby(months).mean()
+        out[c] = out[c] - months.map(clim).values
+    return out
+
+def centered_13mo_rm(df):
+    return df.rolling(window=13, center=True, min_periods=7).mean()
+
+#---------------------------------------------------------------------------
+from scipy import stats
+
+def trend_with_ar1_correction(y, time_index):
+    """
+    Linear trend y ~ t with AR(1) effective sample size correction.
+    Returns slope per year and an approximate p-value.
+    """
+    y = np.asarray(y, float)
+    mask = np.isfinite(y)
+    if mask.sum() < 8:
+        return np.nan, np.nan
+
+    # t in years from start
+    t = (pd.to_datetime(time_index[mask]) - pd.to_datetime(time_index[mask])[0]).days / 365.25
+    yy = y[mask]
+
+    # OLS slope
+    slope, intercept, r, p_naive, stderr = stats.linregress(t, yy)
+
+    # residuals
+    resid = yy - (intercept + slope * t)
+
+    # lag-1 autocorr
+    if len(resid) < 4:
+        return slope, p_naive
+
+    r1 = np.corrcoef(resid[:-1], resid[1:])[0, 1]
+    if not np.isfinite(r1):
+        r1 = 0.0
+
+    # effective N (Bretherton-like)
+    N = len(resid)
+    Neff = N * (1 - r1) / (1 + r1)
+    Neff = max(3, Neff)
+
+    # recompute t-stat using Neff (approx)
+    tstat = slope / stderr if stderr > 0 else np.nan
+    dof = Neff - 2
+    p_eff = 2 * (1 - stats.t.cdf(np.abs(tstat), df=dof)) if np.isfinite(tstat) else np.nan
+
+    return slope, p_eff
 #---------------------------------------------------------------------------
 
 def to_df(da):
@@ -2464,31 +2652,45 @@ def colors_for_basins(basin_array, default=(0.8, 0.8, 0.8, 1.0)):
     return np.array([ID2COLOR.get(int(b), default) for b in basin_array])
 
 # ---------------------- Main plotting function ----------------------
+
 def plot_pmb_scatter(
     df_mean_yr_acc,
     ref,
     products,
     high_thresh=500.0,
     scale="linear",         # "linear" or "log"
-    log_min=10,             # lower bound for log plots
-    log_ticks=(10, 50, 100, 200, 500, 1000, 1500, 2000)
+    log_min=5,              # <-- set to 5 to reveal low GPM values
+    log_ticks=(5, 10, 20, 50, 100, 200, 500, 1000, 2000),
+    ncols=4,                # <-- controls layout; 4 gives 2x4 for 7 products
+    figsize_per_col=4.6,    # <-- minimal tuning knobs
+    figsize_per_row=4.2,
+    share_axes=True,        # keep comparability
+    show_ylabel_only_left=True,
 ):
     """
     Scatter of product vs ref (Pmb) by IMBIE basin with consistent colors (IDs 2..19).
-    scale="linear" keeps your original look; scale="log" switches axes to log with clean ticks.
+
+    Improvements:
+      - Uses a grid layout for many products (readable)
+      - Keeps scale switch: linear or log
+      - Allows log_min=5 to show low GPM values
     """
 
-    # nice product display names
     pretty = {"GPCP": "GPCP v3.3", "RACMO": "RACMO v2.4p1"}
 
-    fig, axes = plt.subplots(1, len(products), figsize=(18, 6), sharey=True)
-    if len(products) == 1:
-        axes = [axes]
+    n = len(products)
+    nrows = int(math.ceil(n / ncols))
 
-    # FIXED max at 2000 for both linear and log
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(ncols * figsize_per_col, nrows * figsize_per_row),
+        sharex=share_axes, sharey=share_axes
+    )
+    axes = np.array(axes).ravel()
+
     global_max = 2000.0
 
-    for ax, prod in zip(axes, products):
+    for k, (ax, prod) in enumerate(zip(axes, products)):
         yname = pretty.get(prod, prod)
 
         # valid rows and arrays
@@ -2514,18 +2716,26 @@ def plot_pmb_scatter(
         cols = colors_for_basins(b)
 
         # scatter
-        ax.scatter(x, y, c=cols, s=110, alpha=0.85,
-                   edgecolor="k", linewidths=0.6, zorder=2)
+        ax.scatter(
+            x, y,
+            c=cols, s=110, alpha=0.85,
+            edgecolor="k", linewidths=0.6, zorder=2
+        )
 
         # annotate
         diff = np.abs(x - y)
         mask = (diff >= high_thresh) | (((b >= 13) & (b <= 18)) | (x >= 500))
         for xx, yy, bb in zip(x[mask], y[mask], b[mask]):
-            ax.annotate(f"{int(bb)}", xy=(xx, yy), xycoords="data",
-                        xytext=(0, 6), textcoords="offset points",
-                        ha="center", va="bottom", fontsize=12, color="black",
-                        clip_on=False, path_effects=[pe.withStroke(linewidth=2.2, foreground="white")],
-                        zorder=4)
+            ax.annotate(
+                f"{int(bb)}",
+                xy=(xx, yy), xycoords="data",
+                xytext=(0, 6), textcoords="offset points",
+                ha="center", va="bottom",
+                fontsize=12, color="black",
+                clip_on=False,
+                path_effects=[pe.withStroke(linewidth=2.2, foreground="white")],
+                zorder=4
+            )
 
         # limits, scales, and 1:1 line
         if scale == "log":
@@ -2541,21 +2751,30 @@ def plot_pmb_scatter(
         # stats
         in_box = (x >= lims[0]) & (x <= lims[1]) & (y >= lims[0]) & (y <= lims[1])
         if np.count_nonzero(in_box) >= 2:
-            cc = round(p_corr(x[in_box], y[in_box]), 2)   # Pearson Correlation Coefficient
-            # np.corrcoef(x[in_box], y[in_box])[0, 1]
-            bias = round(relative_bias(x[in_box], y[in_box]) * 100,1)  # Relative Bias in %
-            # np.nanmean(y[in_box]) / np.nanmean(x[in_box])
+            cc = round(p_corr(x[in_box], y[in_box]), 2)
+            bias = round(relative_bias(x[in_box], y[in_box]) * 100, 2)
         else:
             cc, bias = np.nan, np.nan
 
-        ax.text(0.03, 0.97, f"CC={cc:.2f}\nBias={bias:.2f} %",
-                transform=ax.transAxes, va="top", ha="left", fontsize=14,
-                bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"))
+        ax.text(
+            0.03, 0.97,
+            f"CC={cc:.2f}\nBias={bias:.2f} %",
+            transform=ax.transAxes,
+            va="top", ha="left",
+            fontsize=14,
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none")
+        )
 
-        # labels
+        # labels: make them less repetitive
         ref_nme = r"$P_{\mathrm{MB}}$" if ref == "Pmb" else ref
-        ax.set_xlabel(f"{ref_nme} (mm/yr)", fontsize=14)
-        ax.set_ylabel(f"{yname} (mm/yr)", fontsize=14)
+        ax.set_title(yname, fontsize=14, fontweight="bold", pad=6)
+        ax.set_xlabel(f"{ref_nme} [mm/yr]", fontsize=13)
+
+        if (not show_ylabel_only_left) or (k % ncols == 0):
+            ax.set_ylabel(f"{yname} [mm/yr]", fontsize=13)
+        else:
+            ax.set_ylabel("")
+
         ax.tick_params(labelsize=12)
 
         # ticks & grid
@@ -2572,111 +2791,146 @@ def plot_pmb_scatter(
             ax.set_yticks(np.arange(0, global_max + step, step))
             ax.grid(which="major", linestyle="--", linewidth=0.6, alpha=0.6)
 
-    plt.subplots_adjust(left=0.08, right=0.99, top=0.97, bottom=0.1, wspace=0.15)
-    # plt.show()
+    # turn off any unused axes
+    for ax in axes[len(products):]:
+        ax.axis("off")
+
+    fig.tight_layout()
+    fig.subplots_adjust(wspace=0.03, hspace=0.2)
+    return fig, axes
 
 #---------------------------------------------------------------------------
+
 def plot_basin_spread_points(
     df,
     basin_col="basin",
-    ref_col="Pmb",                 # mass-budget precipitation (P_MB)
-    prod_cols=None,                # list of other products to overlay
-    prod_labels=None,              # pretty labels for legend
+    ref_col="Pmb",
+    prod_cols=None,
+    prod_labels=None,
+    product_styles=None,            # <-- use your product_styles_corr here
     figsize=(13, 5.2),
     log_scale=True,
-    ylim=(10, 2000),               # only used if log_scale=True
+    ylim=(10, 2000),
+    pmb_bar_color="lightgray",
+    pmb_edge_color="black",
+    legend_ncol=4,
 ):
     """
     Basin plot with P_MB bars, product points, and per-basin spread annotation.
 
-    Spread per basin is defined as:
+    Spread per basin:
         (max(products) - min(products)) / mean(products)
-
     where products = [ref_col] + prod_cols.
     """
 
-    # --- defaults for products ---
     if prod_cols is None:
-        prod_cols = ["ERA5", "GPCP_v3.3", "RACMO_2.4p1"]
+        prod_cols = ["ERA5", "GPCP v3.3", "RACMO 2.4p1"]
     if prod_labels is None:
         prod_labels = prod_cols
 
-    all_prod_cols = [ref_col] + list(prod_cols)
+    # styles dict
+    product_styles = {} if product_styles is None else product_styles
 
-    # --- make a clean copy and ensure basin is int ---
+    # --- clean copy ---
     df_plot = df.copy()
     df_plot[basin_col] = df_plot[basin_col].astype(int)
 
-    # keep only basins where the reference exists
+    # keep only basins where reference exists
     df_plot = df_plot.dropna(subset=[ref_col])
 
-    # --- sort basins NUMERICALLY, not by precipitation ---
+    # sort basins numerically
     df_plot = df_plot.sort_values(basin_col)
     basins = df_plot[basin_col].values
     x = np.arange(len(basins))
 
-    # we assume one row per basin; if not, aggregate first outside this function
+    # one row per basin assumption
     df_plot = df_plot.set_index(basin_col).loc[basins]
 
-    # --- start figure ---
+    # remove ref_col from prod_cols if user accidentally included it
+    prod_cols_clean = [c for c in prod_cols if c != ref_col]
+    prod_labels_clean = []
+    for c in prod_cols:
+        if c != ref_col:
+            # keep labels aligned
+            idx = prod_cols.index(c)
+            prod_labels_clean.append(prod_labels[idx] if prod_labels is not None else c)
+
+    prod_cols = prod_cols_clean
+    prod_labels = prod_labels_clean
+
+    all_prod_cols = [ref_col] + list(prod_cols)
+
+    # --- figure ---
     fig, ax = plt.subplots(figsize=figsize)
 
-    # --- P_MB bars ---
+    # --- Pmb bars ---
     ax.bar(
         x,
         df_plot[ref_col].values,
-        color="lightgray",
-        edgecolor="black",
+        color=pmb_bar_color,
+        edgecolor=pmb_edge_color,
         linewidth=1.0,
         label=r"$P_{\mathrm{MB}}$",
         zorder=1,
     )
 
-    # --- overlay products as POINTS only ---
-    markers = ["o", "s", "D", "^", "v"]
-    sizes     = [8, 6, 4] 
-    fillstyles = ["none", "full", "full", "full", "full"]   # ERA5 hollow, others filled
+    # --- overlay products as points ---
+    # fallback cycle if marker not provided
+    fallback_markers = ["o", "s", "D", "^", "v", "P", "X", "*", "h", ">", "<"]
+    fallback_sizes = [8, 7, 7, 7, 7, 7, 7, 8, 7, 7, 7]
 
     for i, (col, lab) in enumerate(zip(prod_cols, prod_labels)):
         if col not in df_plot.columns:
             continue
-        y = df_plot[col].values
+
+        y = df_plot[col].values.astype(float)
         mask = np.isfinite(y)
+
+        st = product_styles.get(col, {})
+        color = st.get("color", None)
+        marker = st.get("marker", fallback_markers[i % len(fallback_markers)])
+        ms = st.get("markersize", fallback_sizes[i % len(fallback_sizes)])
+
+        # if you want specific “hollow” behaviour:
+        # make ERA5 hollow only, everything else filled
+        is_hollow = (col == "ERA5")
+        mfc = "white" if is_hollow else (color if color is not None else None)
 
         ax.plot(
             x[mask],
             y[mask],
-            marker=markers[i % len(markers)],
-            markersize=sizes[i],
+            marker=marker,
+            markersize=ms,
             linestyle="None",
-            markerfacecolor="white" if fillstyles[i] == "none" else None,
+            color=color,
+            markerfacecolor=mfc,
+            markeredgecolor=color,
             markeredgewidth=1.5,
             label=lab,
             zorder=4,
         )
 
-    # --- log / linear axis settings ---
+    # --- y scale ---
     if log_scale:
-        # add ~15% headroom so text isn’t at the very top
         bottom, top = ylim
-        top *= 1.25
+        top = top * 1.25
         ax.set_yscale("log")
         ax.set_ylim(bottom, top)
 
-        log_ticks = [10, 50, 100, 200, 500, 1000, 1500, 2000]
-        ax.set_yticks([t for t in log_ticks if bottom <= t <= 2000])
+        log_ticks = [10, 20, 50, 100, 200, 500, 1000, 1500, 2000]
+        ax.set_yticks([t for t in log_ticks if bottom <= t <= ylim[1]])
         ax.get_yaxis().set_major_formatter(mticker.ScalarFormatter())
-    ymax = ax.get_ylim()[1]  # <-- move this AFTER set_ylim
+
     ax.tick_params(axis="y", labelsize=12)
 
-    # --- compute per-basin spread (min-max)/mean over all products ---
+    # --- spread calc ---
     vals_stack = []
     for col in all_prod_cols:
         if col in df_plot.columns:
             vals_stack.append(df_plot[col].values.astype(float))
         else:
             vals_stack.append(np.full(len(basins), np.nan))
-    vals_stack = np.vstack(vals_stack)  # shape: (n_products, n_basins)
+    vals_stack = np.vstack(vals_stack)
 
     vmin = np.nanmin(vals_stack, axis=0)
     vmax = np.nanmax(vals_stack, axis=0)
@@ -2685,36 +2939,27 @@ def plot_basin_spread_points(
     spread = np.full_like(vmean, np.nan, dtype=float)
     valid = np.isfinite(vmin) & np.isfinite(vmax) & np.isfinite(vmean) & (vmean != 0)
     spread[valid] = (vmax[valid] - vmin[valid]) / vmean[valid]
-    spread_pct = np.round(spread * 100).astype(int)   # integer percent
+    spread_pct = np.round(spread * 100).astype(int)
 
-    # --- annotate spread above each basin ---
-    ymax = ax.get_ylim()[1]
+    # --- annotate spread ---
+    y_top_axis = ax.get_ylim()[1]
+    y_bot_axis = ax.get_ylim()[0]
 
     for xi, s, top_val in zip(x, spread_pct, vmax):
-        if not np.isfinite(s):
-            continue
-        if not np.isfinite(top_val) or top_val <= 0:
+        if not np.isfinite(s) or not np.isfinite(top_val) or top_val <= 0:
             continue
 
-        # base position a bit above the max value
         if log_scale:
-            y_text = top_val * 1.25    # smaller multiplier = less pushing toward the top
+            y_text = top_val * 1.20
+            if y_text > y_top_axis:
+                y_text = top_val * 1.05
         else:
-            y_text = top_val + 0.05 * (ymax - ax.get_ylim()[0])
-
-        # keep annotation comfortably inside top
-        if y_text > ymax:
-            y_text = top_val * 1.05   # only 5% above max
+            y_text = top_val + 0.05 * (y_top_axis - y_bot_axis)
 
         ax.text(
-            xi,
-            y_text,
-            f"{s}%",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            rotation=0,
-            zorder=4,
+            xi, y_text, f"{s}%",
+            ha="center", va="bottom",
+            fontsize=10, zorder=5,
         )
 
     # --- cosmetics ---
@@ -2724,21 +2969,288 @@ def plot_basin_spread_points(
     ax.set_ylabel("Precipitation [mm/year]", fontsize=16)
 
     ax.grid(axis="y", linestyle="--", alpha=0.4, zorder=0)
-    # ax.legend(fontsize=16, ncol=2, frameon=False)
+
     ax.legend(
-    fontsize=14,
-    ncol=4,
-    frameon=False,
-    loc="upper center",
-    bbox_to_anchor=(0.48, -0.18)  # tweak -0.18 if it’s too close/far
+        fontsize=14,
+        ncol=legend_ncol,
+        frameon=False,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
     )
 
-    # fig.tight_layout()
     fig.tight_layout(rect=[0, 0.05, 1, 1])
-    return fig, ax, spread,spread_pct
+
+    return fig, ax, spread, spread_pct
 
 #-----------------------------------------------------------------
+def plot_basin_spread_points_dual(
+    df,
+    basin_col="basin",
+    ref_col="Pmb",                    # P_MB column in df (bar)
+    prod_cols=None,                   # products to plot as points (MUST NOT include ref_col)
+    prod_labels=None,                 # optional labels (list aligned with prod_cols) or dict col->label
+    product_styles=None,              # your product_styles_corr
+    non_gpm_group=None,               # spread group 1 (must include ref_col)
+    gpm_group=None,                   # spread group 2 (must include ref_col)
+    figsize=(13, 5.2),
+    log_scale=True,
+    ylim=(10, 2000),
+    pmb_bar_color="lightgray",
+    pmb_edge_color="black",
+    annotate_non_gpm_color="black",
+    annotate_gpm_color="dimgray",
+    annotate_fontsize=10,
+    legend_ncol=4,
+    place_key=True,
+    key_loc=(0.02, 0.98),
+    key_fontsize=10,
+):
+    """
+    Basin plot with:
+      - P_MB as bars (ref_col)
+      - product points for prod_cols using product_styles
+      - TWO spread annotations per basin:
+          S_nonGPM = spread among non_gpm_group (includes ref_col)
+          S_GPM    = spread among gpm_group     (includes ref_col)
 
+    Spread definition:
+        S = (max(P_i) - min(P_i)) / mean(P_i) * 100%
+    """
+
+    # -----------------------------
+    # defaults / safety
+    # -----------------------------
+    if product_styles is None:
+        product_styles = {}
+
+    if prod_cols is None:
+        prod_cols = ["ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM Satellites"]
+
+    # HARD RULE: never plot ref_col as marker
+    prod_cols = [c for c in prod_cols if c != ref_col]
+
+    # Labels mapping: dict(col->label)
+    if prod_labels is None:
+        label_map = {c: c for c in prod_cols}
+    elif isinstance(prod_labels, dict):
+        label_map = {c: prod_labels.get(c, c) for c in prod_cols}
+    else:
+        # assume list aligned with prod_cols
+        if len(prod_labels) != len(prod_cols):
+            raise ValueError("prod_labels must have same length as prod_cols (or be a dict col->label).")
+        label_map = {c: lab for c, lab in zip(prod_cols, prod_labels)}
+
+    # Spread groups (include ref_col as you wanted)
+    if non_gpm_group is None:
+        non_gpm_group = [ref_col, "ERA5", "GPCP v3.3"]  # add "RACMO 2.4p1" if present
+    if gpm_group is None:
+        gpm_group = [ref_col, "ATMS", "MHS", "DMSP SSMIS", "AMSR2"]  # exclude "GPM Satellites" to avoid double-counting
+
+    if ref_col not in non_gpm_group:
+        non_gpm_group = [ref_col] + list(non_gpm_group)
+    if ref_col not in gpm_group:
+        gpm_group = [ref_col] + list(gpm_group)
+
+    # -----------------------------
+    # prep df
+    # -----------------------------
+    df_plot = df.copy()
+    df_plot[basin_col] = df_plot[basin_col].astype(int)
+    df_plot = df_plot.dropna(subset=[ref_col])
+    df_plot = df_plot.sort_values(basin_col)
+
+    basins = df_plot[basin_col].values
+    x = np.arange(len(basins))
+
+    # one row per basin expected
+    df_plot = df_plot.set_index(basin_col).loc[basins]
+
+    # -----------------------------
+    # figure
+    # -----------------------------
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # P_MB bars (ONLY PMB legend entry)
+    bar_container = ax.bar(
+        x,
+        df_plot[ref_col].values.astype(float),
+        color=pmb_bar_color,
+        edgecolor=pmb_edge_color,
+        linewidth=1.0,
+        label=r"$P_{\mathrm{MB}}$",
+        zorder=1,
+    )
+
+    # -----------------------------
+    # points for products (use product_styles_corr)
+    # -----------------------------
+    fallback_markers = ["o", "s", "D", "^", "v", "P", "X", "*", "h", ">", "<"]
+    fallback_sizes = [8, 8, 8, 8, 8, 8, 8, 9, 8, 8, 8]
+
+    point_handles = []
+
+    for i, col in enumerate(prod_cols):
+        if col not in df_plot.columns:
+            continue
+
+        y = df_plot[col].values.astype(float)
+        mask = np.isfinite(y)
+
+        st = product_styles.get(col, {})
+        color = st.get("color", None)
+        marker = st.get("marker", fallback_markers[i % len(fallback_markers)])
+        ms = st.get("markersize", fallback_sizes[i % len(fallback_sizes)])
+
+        # Hollow ERA5 only (optional)
+        is_hollow = (col == "ERA5")
+        mfc = "white" if is_hollow else (color if color is not None else None)
+
+        h = ax.plot(
+            x[mask],
+            y[mask],
+            linestyle="None",
+            marker=marker,
+            markersize=ms,
+            color=color,
+            markerfacecolor=mfc,
+            markeredgecolor=color,
+            markeredgewidth=1.6,
+            label=label_map.get(col, col),
+            zorder=4,
+        )[0]
+
+        point_handles.append(h)
+
+    # -----------------------------
+    # y-scale
+    # -----------------------------
+    if log_scale:
+        bottom, top = ylim
+        top = top * 1.35  # extra headroom for 2 stacked % labels
+        ax.set_yscale("log")
+        ax.set_ylim(bottom, top)
+
+        log_ticks = [5, 10, 20, 50, 100, 200, 500, 1000, 2000]
+        ax.set_yticks([t for t in log_ticks if bottom <= t <= ylim[1]])
+        ax.get_yaxis().set_major_formatter(mticker.ScalarFormatter())
+
+    ax.tick_params(axis="y", labelsize=12)
+
+    # -----------------------------
+    # spread helpers
+    # -----------------------------
+    def spread_pct_for_group(df_local, cols):
+        arrs = []
+        for c in cols:
+            if c in df_local.columns:
+                arrs.append(df_local[c].values.astype(float))
+        if len(arrs) < 2:
+            return np.full(len(df_local), np.nan)
+
+        vals = np.vstack(arrs)
+        vmin = np.nanmin(vals, axis=0)
+        vmax = np.nanmax(vals, axis=0)
+        vmean = np.nanmean(vals, axis=0)
+
+        out = np.full_like(vmean, np.nan, dtype=float)
+        ok = np.isfinite(vmin) & np.isfinite(vmax) & np.isfinite(vmean) & (vmean != 0)
+        out[ok] = (vmax[ok] - vmin[ok]) / vmean[ok] * 100.0
+        return out
+
+    spread_non_gpm = spread_pct_for_group(df_plot, non_gpm_group)
+    spread_gpm = spread_pct_for_group(df_plot, gpm_group)
+
+    # Use max among all plotted products + ref for label placement
+    cols_for_top = sorted(set([ref_col] + list(prod_cols) + list(non_gpm_group) + list(gpm_group)))
+    top_stack = np.vstack([df_plot[c].values.astype(float) for c in cols_for_top if c in df_plot.columns])
+    top_val_all = np.nanmax(top_stack, axis=0)
+
+    # -----------------------------
+    # annotate spreads (better separation)
+    # -----------------------------
+    y_top_axis = ax.get_ylim()[1]
+    y_bot_axis = ax.get_ylim()[0]
+
+    for xi, top_val, s_ref, s_gpm in zip(x, top_val_all, spread_non_gpm, spread_gpm):
+        if not np.isfinite(top_val) or top_val <= 0:
+            continue
+
+        if log_scale:
+            # clearer separation: non-GPM higher, GPM much lower
+            y1 = min(top_val * 1.45, y_top_axis * 0.985)  # non-GPM
+            y2 = min(top_val * 1.18, y_top_axis * 0.93)   # GPM
+        else:
+            y1 = top_val + 0.09 * (y_top_axis - y_bot_axis)
+            y2 = top_val + 0.03 * (y_top_axis - y_bot_axis)
+
+        if np.isfinite(s_ref):
+            ax.text(xi, y1, f"{int(round(s_ref))}%", ha="center", va="bottom",
+                    fontsize=annotate_fontsize, color=annotate_non_gpm_color, zorder=6)
+
+        if np.isfinite(s_gpm):
+            ax.text(xi, y2, f"{int(round(s_gpm))}%", ha="center", va="bottom",
+                    fontsize=annotate_fontsize, color=annotate_gpm_color, zorder=6)
+
+    # -----------------------------
+    # cosmetics
+    # -----------------------------
+    ax.set_xticks(x)
+    ax.set_xticklabels(basins, ha="center", fontsize=14)
+    ax.set_xlabel("Basin", fontsize=16)
+    ax.set_ylabel("[mm/year]", fontsize=16)
+    ax.grid(axis="y", linestyle="--", alpha=0.4, zorder=0)
+
+    # ---- tiny key (NO title, not busy) ----
+    if place_key:
+        # small white box, two colored lines
+        ax.text(
+            key_loc[0], key_loc[1],
+            "% = spread(P_MB, ERA5, GPCP v3.3)",
+            transform=ax.transAxes,
+            ha="left", va="top",
+            fontsize=key_fontsize,
+            color=annotate_non_gpm_color,
+            # bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="0.75", alpha=0.95),
+            zorder=10,
+        )
+        ax.text(
+            key_loc[0], key_loc[1] - 0.055,
+            "% = spread(P_MB, ATMS, MHS, DMSP SSMIS, AMSR2)",
+            transform=ax.transAxes,
+            ha="left", va="top",
+            fontsize=key_fontsize,
+            color=annotate_gpm_color,
+            zorder=10,
+        )
+
+    # -----------------------------
+    # Legend: force correct handles, avoid any accidental "Pmb" marker entry
+    # -----------------------------
+    handles, labels = ax.get_legend_handles_labels()
+
+    # Deduplicate while preserving order
+    seen = set()
+    new_handles, new_labels = [], []
+    for h, lab in zip(handles, labels):
+        if lab in seen:
+            continue
+        seen.add(lab)
+        new_handles.append(h)
+        new_labels.append(lab)
+
+    ax.legend(
+        new_handles, new_labels,
+        fontsize=14,
+        ncol=legend_ncol,
+        frameon=False,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+    )
+
+    fig.tight_layout(rect=[0, 0.05, 1, 1])
+
+    return fig, ax, spread_non_gpm, spread_gpm
+#-----------------------------------------------------------------
 def _normalize_monthly_df(df):
     """Make df columns consistent: basin, month, precipitation."""
     df = df.copy()
@@ -3891,8 +4403,6 @@ def convert_precip_to_mm_per_month(df, unit, time_col="time", pr_col="precipitat
     return out
 #----------------------------------------------------------------------------
 
-
-
 def _plot_single_polar_precip_panel(
     ax,
     product_name,
@@ -4003,7 +4513,6 @@ def _plot_single_polar_precip_panel(
         lon_spokes=lon_spokes,
         label_size=11
     )
-
 
 #----------------------------------------------------------------------------
 def compare_mean_precip_grid_power(
@@ -4657,4 +5166,54 @@ def plot_weighted_region_interannual(
 
     fig.tight_layout(rect=[0, 0.06, 1, 1])
 
+    return fig, axes
+
+#----------------------------------------------------------------------------
+def plot_region_trend_panels(
+    monthly_df_data_mmmonth,
+    region_defs,
+    basin_weights,
+    product_order,
+    product_styles,
+    regions=("Antarctica", "West Antarctica", "East Antarctica"),
+    use_running_mean=True,
+    show_pmb_trend_only=True,
+    pmb_name=r"$P_{\mathrm{MB}}$",
+):
+    fig, axes = plt.subplots(len(regions), 1, figsize=(12, 10), sharex=True)
+
+    for ax, region in zip(axes, regions):
+        ts = region_monthly_series_from_dict(
+            monthly_df_data_mmmonth, region_defs, basin_weights, region
+        )
+
+        # deseasonalize then optionally smooth
+        ts_anom = deseasonalize_monthly(ts)
+        ts_plot = centered_13mo_rm(ts_anom) if use_running_mean else ts_anom
+
+        # plot lines
+        for prod in product_order:
+            if prod not in ts_plot.columns:
+                continue
+            st = product_styles.get(prod, {})
+            ax.plot(ts_plot.index, ts_plot[prod], label=prod, **{k:v for k,v in st.items() if k in ["color","lw","ls"]})
+
+        # dashed trend line for PMB only (on anomalies, NOT smoothed, safer)
+        if show_pmb_trend_only and pmb_name in ts_anom.columns:
+            slope, p = trend_with_ar1_correction(ts_anom[pmb_name].values, ts_anom.index)
+            # trend line in anomaly space
+            t_years = (ts_anom.index - ts_anom.index[0]).days / 365.25
+            intercept = np.nanmean(ts_anom[pmb_name].values)  # just center-ish
+            trend_line = intercept + slope * t_years
+
+            ax.plot(ts_anom.index, trend_line, "k--", lw=2.0, label=f"{pmb_name} trend")
+
+        ax.set_title(region, fontsize=16, fontweight="bold")
+        ax.grid(True, alpha=0.3)
+        ax.set_ylabel("Deseasonalized P \nanomalies (mm/month)")
+
+    axes[-1].set_xlabel("Year")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, ncol=4, frameon=False, loc="lower center", bbox_to_anchor=(0.5, -0.01))
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
     return fig, axes

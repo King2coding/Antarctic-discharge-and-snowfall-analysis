@@ -13,13 +13,20 @@ end_date   = "2022-12-01"
 #%% Step A — Prepare Full Monthly State Series
 rignot_deltaS = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='Basin_Timeseries (Gt)')
 
-rignot_deltaS["Date"] = rignot_deltaS["Time"].apply(decimal_year_to_date).dt.strftime('%Y-%m-%d')
-rignot_deltaS['Date'] = pd.to_datetime(rignot_deltaS['Date'])
-rignot_deltaS["Year"] = pd.to_datetime(rignot_deltaS["Date"]).dt.year
-rignot_deltaS["Month"] = pd.to_datetime(rignot_deltaS["Date"]).dt.month
+# rignot_deltaS["Date"] = rignot_deltaS["Time"].apply(decimal_year_to_date).dt.strftime('%Y-%m-%d')
+# rignot_deltaS['Date'] = pd.to_datetime(rignot_deltaS['Date'])
+# rignot_deltaS["Year"] = pd.to_datetime(rignot_deltaS["Date"]).dt.year
+# rignot_deltaS["Month"] = pd.to_datetime(rignot_deltaS["Date"]).dt.month
+# 1) build month-start timestamps directly
+rignot_deltaS["date"] = rignot_deltaS["Time"].apply(
+    lambda x: decimal_year_to_month_start(x, mode="nearest")   # or mode="floor"
+)
 
+# 2) derive Year/Month from the date (robust)
+rignot_deltaS["Year"]  = rignot_deltaS["date"].dt.year
+rignot_deltaS["Month"] = rignot_deltaS["date"].dt.month
 
-basin_cols = [c for c in rignot_deltaS.columns if c not in ("Time","Date","Year","Month")]
+basin_cols = [c for c in rignot_deltaS.columns if c not in ("Time","date","Year","Month")]
 
 # ---------------------------------------------------------
 # FULL MONTHLY STATE SERIES (2013–2022)
@@ -64,7 +71,8 @@ for basin in basin_cols:
     deseason = series - series.index.month.map(climatology)
 
     # Linear interpolation (only inside bounds)
-    deseason_interp = deseason.interpolate(method="linear", limit_direction="both")
+    deseason_interp = deseason.interpolate(method="linear", limit_area="inside")
+    # deseason.interpolate(method="linear", limit_direction="both")
 
     # Add seasonal cycle back
     S_tier1[basin] = deseason_interp + deseason_interp.index.month.map(climatology)

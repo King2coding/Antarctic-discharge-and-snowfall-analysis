@@ -306,8 +306,19 @@ plt.tight_layout()
 # plt.show()
 # Save the imbie basin plot
 output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
-plt.savefig(output_path, dpi=300, bbox_inches='tight')
+# plt.savefig(output_path, dpi=300, bbox_inches='tight')
 gc.collect()
+
+all_basin_ids = sorted({
+    bid
+    for _, ids in REGION_DEFS
+    for bid in ids
+})
+
+basin_weights = compute_basin_area_weights_from_mask(
+    basins,
+    basin_ids=all_basin_ids
+)
 #%%
 Pmb_mm_fle = os.path.join(basins_path, 'Monthly_mass_budget_precip_RignotBasin_in_mm_20260226.nc')
 # 'Monthly_mass_budget_precip_RignotBasin_in_mm.nc'
@@ -555,17 +566,6 @@ gc.collect()
 
 
 #%% COMPUTE AND PLOT AREA WEIGHTED MEAN MONTHLY CYCLES
-all_basin_ids = sorted({
-    bid
-    for _, ids in REGION_DEFS
-    for bid in ids
-})
-
-basin_weights = compute_basin_area_weights_from_mask(
-    basins,
-    basin_ids=all_basin_ids
-)
-
 # monthly_df_data = {
 #     r"$P_{\mathrm{MB}}$": p_mm_mean_df.rename(columns={"basin_id": "basin",
 #                                                        "precip_mm_per_month": "precipitation"}),
@@ -741,499 +741,145 @@ svnme = os.path.join(path_to_plots, f'basin_area_weighted_year_to_year_variabili
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
 # For the continent we’ll just use “all basins we see in the dataframe”
-#%%
+#%% BAR CHART WITH SPREAD
+
+# --- Convert each product to tidy DF ---
+df_pmb   = to_df(Pmb_annual)
+df_pmb.rename(columns={'basin_id': 'basin',
+                       'precip_mm_per_month': 'Pmb'}, inplace=True)
+df_era5  = to_df(era5_annual_mean)
+df_era5.rename(columns={'precipitation_annual': 'ERA5'}, inplace=True)
+df_gpcp  = to_df(gpcpv3pt3_annual_mean)
+df_gpcp.rename(columns={'precipitation_annual': 'GPCP v3.3'}, inplace=True)
+# df_racmo = to_df(racmo_pr_annual_mean)
+# df_racmo.rename(columns={'pr_annual': 'RACMO'}, inplace=True)
+df_atms = to_df(atms_annual_mean)
+df_atms.rename(columns={'precipitation_annual': 'ATMS'}, inplace=True)
+df_mhs = to_df(mhs_annual_mean)
+df_mhs.rename(columns={'precipitation_annual': 'MHS'}, inplace=True)
+df_dmsp_ssmis = to_df(dmsp_ssmis_annual_mean)
+df_dmsp_ssmis.rename(columns={'precipitation_annual': 'DMSP SSMIS'}, inplace=True)
+df_amsr2 = to_df(amsr2_annual_mean)
+df_amsr2.rename(columns={'precipitation_annual': 'AMSR2'}, inplace=True)
+
+df_gpm_sat = to_df(gpm_sat_annual_mean)
+df_gpm_sat.rename(columns={'precipitation_annual': 'GPM Satellites'}, inplace=True)
+
+# --- Merge all together on (year, basin) ---
+df = df_pmb.merge(df_era5, on=["year","basin"])
+df = df.merge(df_gpcp, on=["year","basin"])
+# df = df.merge(df_racmo, on=["year","basin"])
+df = df.merge(df_atms, on=["year","basin"])
+df = df.merge(df_mhs, on=["year","basin"])
+df = df.merge(df_dmsp_ssmis, on=["year","basin"])
+df = df.merge(df_amsr2, on=["year","basin"])
+df = df.merge(df_gpm_sat, on=["year","basin"])
+
+# add a "year-basin" key if you like
+df["year_basin"] = df["year"].astype(str) + "-" + df["basin"].astype(str)
+cols = ["Pmb", "ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM Satellites"]
+df_mean_yr_acc = df.groupby("basin")[cols].mean().reset_index()
 
 fig, ax = plot_basin_ranked_bar_overlay(
     df_mean_yr_acc,
     basin_col="basin",
     ref_col="Pmb",
-    prod_cols=["ERA5", "GPCP", "RACMO"],
-    prod_labels=["ERA5", "GPCP v3.3", "RACMO 2.4p1"],
+    prod_cols=cols,
+    prod_labels=cols,
     figsize=(12, 5),
 )
 plt.show()
 
 #----------------------------------------------------------------------------------
+cols = ["ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM Satellites"]
 
-fig, ax, spread, spread_pct = plot_basin_spread_points(
+non_gpm_group = ["Pmb", "ERA5", "GPCP v3.3"]
+gpm_group     = ["Pmb", "ATMS", "MHS", "DMSP SSMIS", "AMSR2"]  # exclude "GPM Satellites" from spread
+
+fig, ax, spread_non_gpm, spread_gpm = plot_basin_spread_points_dual(
     df_mean_yr_acc,
     basin_col="basin",
     ref_col="Pmb",
-    prod_cols=["ERA5", "GPCP", "RACMO"],
-    prod_labels=["ERA5", "GPCP v3.3", "RACMO 2.4p1"],
+    prod_cols=cols,
+    prod_labels=cols,                 # or omit; it will auto-use col names
+    product_styles=product_styles_corr,
+    non_gpm_group=non_gpm_group,
+    gpm_group=gpm_group,
+    log_scale=True,
+    ylim=(5, 2000),
+    annotate_non_gpm_color="black",
+    annotate_gpm_color="dimgray",
+    place_key=True,
 )
 svnme = os.path.join(path_to_plots, f'basin_spread_points_precip_over_imbie_basins_{cde_run_dte}.png')
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
-#%%
 
-Pmb_mean_seas_df = da_season_to_basin_df(Pmb_seasonal, basin_name="basin_id")
-
-era5_mean_df = da_season_to_basin_df(era5_seasonal_mean*30, basin_name="basin")
-
-gpcp_mean_df = da_season_to_basin_df(gpcpv3pt3_seasonal_mean*30, basin_name="basin")
-racmo_mean_df = da_season_to_basin_df(racmo_pr_seasonal_mean, basin_name="basin")
-
-#----------------------------------------------------------------------------------
-plot_dfs = {
-    r"$P_{\mathrm{MB}}$": Pmb_mean_seas_df,
-    "ERA5": era5_mean_df,
-    "GPCP v3.3": gpcp_mean_df,
-    "RACMO 2.4p1": racmo_mean_df,
-}
-
-#----------------------------------------------------------------------------------
-fig, axes = plot_seasonal_cycles_regions_3x1(
-            plot_dfs, 
-            REGION_DEFS)
-svnme = os.path.join(path_to_plots, f'seasonal_cycles_precip_over_imbie_basins_regions_{cde_run_dte}.png')
-plt.savefig(svnme,  dpi=500, bbox_inches='tight')
-gc.collect()
-
-#----------------------------------------------------------------------------------
-fig, axes = plot_seasonal_cycles_regions_1x3(
-            plot_dfs, 
-            REGION_DEFS)
-# plt.show()
-gc.collect()
-#----------------------------------------------------------------------------------
-plot_seasonal_heatmaps_by_basin_v2(
-    plot_dfs,
-    vmin=0,
-    vmax=100  # or whatever range you want
-)
-
-gc.collect()
-
-#----------------------------------------------------------------------------------
-plot_seasonal_by_season_product(
-    plot_dfs,
-    basin_order=list(range(2, 20)),  # or None to infer
-    vmin=0,
-    vmax=100,
-    cmap="jet",
-)
-
-gc.collect()
-
-#----------------------------------------------------------------------------------
-# Yearly cycle
-product_cols = ["Pmb", "ERA5", "GPCP", "RACMO"]
-
-prdt_df = [("Pmb",df_pmb, Pmb_annual), ("ERA5",df_era5, era5_annual_mean), 
-           ("GPCP",df_gpcp, gpcpv3pt3_annual_mean), ("RACMO",df_racmo, racmo_pr_annual_mean)]
-
-# region_data = compute_region_means(df, REGION_DEFS, product_cols)
-# region_data = compute_region_means_from_products(prdt_df, REGION_DEFS)
-region_data = compute_region_means_from_maps(
-    prdt_df,
-    REGION_DEFS
-)
-
-plot_region_time_series(region_data, product_cols)
-svnme = os.path.join(path_to_plots, f'annual_mean_time_series_precip_over_imbie_basins_{cde_run_dte}.png')
-plt.savefig(svnme,  dpi=500, bbox_inches='tight')
-gc.collect()
-# df_mean_yr_acc.plot(kind='box')
-#%%
-
-# ----------- Scatter plot -------------
+#%%  ----------- Scatter plot -------------
 
 # Example usage:
-products = ["ERA5", "GPCP", "RACMO"]
-plot_pmb_scatter(df_mean_yr_acc, "Pmb", products, high_thresh=500.0, scale="linear")
+products = ["ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM Satellites"]
 
-plot_pmb_scatter(df_mean_yr_acc, "Pmb", products, high_thresh=500.0, scale="log")
+fig, axes = plot_pmb_scatter(
+    df_mean_yr_acc,
+    "Pmb",
+    products,
+    high_thresh=500.0,
+    scale="log",
+    log_min=5,                   # <-- show low GPM values
+    ncols=4                      # 2 rows for 7 products
+)
+
 svnme = os.path.join(path_to_plots, f'log_scatterplot_precip_over_imbie_basins_{cde_run_dte}.png')
-plt.savefig(svnme,  dpi=500, bbox_inches='tight')
+plt.savefig(svnme, dpi=500, bbox_inches="tight")
+# plt.close(fig)
 gc.collect()
 
-products = ["GPCP", "RACMO"]
-plot_pmb_scatter(df_mean_yr_acc, "ERA5", products, high_thresh=500.0, scale="linear")
-plot_pmb_scatter(df_mean_yr_acc, "ERA5", products, high_thresh=500.0, scale="log")
 
-products = ["GPCP", "ERA5"]
-plot_pmb_scatter(df_mean_yr_acc, "RACMO", products, high_thresh=500.0, scale="linear")
-plot_pmb_scatter(df_mean_yr_acc, "RACMO", products, high_thresh=500.0, scale="log")
+#%% TREND ANALYSIS
+# if basin_weights is a pandas Series with basin IDs as index:
 
+basin_weights_ = dict(zip(basin_weights["basin"].astype(int),
+                         basin_weights["weight_global"].astype(float)))
 
-
-#%%
-
-# --- Scatterplots ---
-# Non-log-scaled version (commented out for future reference)
-# colors = {2019: "tab:blue", 2020: "tab:red"}
-# products = ["ERA5", "GPCP", "RACMO"]
-# fig, axes = plt.subplots(1, len(products), figsize=(15, 5), sharey=True)
-
-# for ax, prod in zip(axes, products):
-#     for yr in [2019, 2020]:
-#         m = df["year"] == yr
-#         ax.scatter(df.loc[m, "Pmb"], df.loc[m, prod], color=colors[yr], 
-#                    alpha=0.7, s=50, edgecolor='k', label=str(yr))
-
-#     lims = (0, 2000)  # Adjust limits for non-log scale
-#     ax.plot([lims[0], lims[1]], [lims[0], lims[1]], "k--", lw=1)
-#     ax.set_xlim(lims[0], lims[1])
-#     ax.set_ylim(lims[0], lims[1])
-#     ax.set_aspect('equal', adjustable='box')
-
-#     x, y = df["Pmb"], df[prod]
-#     valid = (x > 0) & (y > 0)  # Ensure valid values
-#     cc = np.corrcoef(x[valid], y[valid])[0, 1]
-#     bias = np.nanmean(y[valid]) / np.nanmean(x[valid])
-#     ax.text(0.03, 0.97, f"CC={cc:.2f}\nBias={bias:.2f}", transform=ax.transAxes,
-#             va='top', ha='left', fontsize=15)
-#     ax.set_xlabel("Pmb (mm/yr)", fontsize=15)
-#     if prod == 'GPCP':
-#         prod = 'GPCP v3.3'
-#     elif prod == 'RACMO':
-#         prod = 'RACMO v2.4'
-#     ax.set_ylabel(f"{prod} (mm/yr)", fontsize=15)
-
-#     # Set major and minor ticks
-#     ax.set_xticks(np.arange(0, 2001, 500))
-#     ax.set_yticks(np.arange(0, 2001, 500))
-#     ax.grid(which='major', linestyle='--', linewidth=0.5, alpha=0.7)
-
-# # Legend on the first axis only (to avoid duplicates)
-# axes[0].legend(title="Year", loc='lower right', ncol=2,
-#                fontsize=15, frameon=False)
-
-# plt.tight_layout()
-# plt.show()
-
-# Log-scaled version
-# colors = {2019: "tab:blue", 2020: "tab:red"}
-# products = ["ERA5", "GPCP", "RACMO"]
-# fig, axes = plt.subplots(1, len(products), figsize=(15, 5), sharey=True)
-
-# for ax, prod in zip(axes, products):
-#     for yr in [2019, 2020]:
-#         m = df["year"] == yr
-#         ax.scatter(df.loc[m, "Pmb"], df.loc[m, prod], color=colors[yr], 
-#                    alpha=0.7, s=50, edgecolor='k', label=str(yr))
-
-#     lims = (10, 2000)  # Adjust limits to start from 10
-#     ax.plot([lims[0], lims[1]], [lims[0], lims[1]], "k--", lw=1)
-#     ax.set_xlim(lims[0], lims[1])
-#     ax.set_ylim(lims[0], lims[1])
-#     ax.set_aspect('equal', adjustable='box')
-
-#     x, y = df["Pmb"], df[prod]
-#     valid = (x > 0) & (y > 0)  # Ensure valid values for log scale
-#     cc = np.corrcoef(x[valid], y[valid])[0, 1]
-#     bias = np.nanmean(y[valid]) / np.nanmean(x[valid])
-#     ax.text(0.03, 0.97, f"CC={cc:.2f}\nBias={bias:.2f}", transform=ax.transAxes,
-#             va='top', ha='left', fontsize=15)
-#     ax.set_xlabel("Pmb (mm/yr)", fontsize=15)
-#     if prod == 'GPCP':
-#         prod = 'GPCP v3.3'
-#     elif prod == 'RACMO':
-#         prod = 'RACMO v2.4'
-#     ax.set_ylabel(f"{prod} (mm/yr)", fontsize=15)
-
-#     # Set major and minor ticks
-#     ax.set_xticks([100, 200, 800, 1000, 2000])
-#     ax.set_yticks([100, 200, 800, 1000, 2000])
-#     ax.grid(which='major', linestyle='--', linewidth=0.5, alpha=0.7)
-#     ax.set_xscale('log')
-#     ax.set_yscale('log')
-
-# # Legend on the first axis only (to avoid duplicates)
-# axes[0].legend(title="Year", loc='lower right', ncol=2,
-#                fontsize=15, frameon=False)
-
-# plt.tight_layout()
-# plt.show()
-
-# Log-scaled version
-
-colors = {2019: "tab:blue", 2020: "tab:red"}
-products = ["ERA5", "GPCP", "RACMO"]
-
-fig, axes = plt.subplots(1, len(products), figsize=(15, 5), sharey=True)
-
-# Choose log limits from the actual positive data so points are not clipped.
-# You can also hard-code (10, 2000) if you prefer.
-xmin = 10#np.nanmin(df["Pmb"][df["Pmb"] > 0])
-xmax = 2000#np.nanmax(df["Pmb"])
-# pad a little so markers aren't on the frame
-lims = (max(10, xmin*0.9), xmax*1.1)
-
-for ax, prod in zip(axes, products):
-    x_all = df["Pmb"].values
-    y_all = df[prod].values
-
-    # mask to ONLY points within the plotted box (so linear/log include the same dots)
-    in_box = (x_all > 0) & (y_all > 0) & (x_all >= lims[0]) & (x_all <= lims[1]) \
-             & (y_all >= lims[0]) & (y_all <= lims[1])
-
-    # scatter
-    for yr in [2019, 2020]:
-        m = (df["year"] == yr).values & in_box
-        ax.scatter(x_all[m], y_all[m], color=colors[yr], alpha=0.8, s=50,
-                   edgecolor='k', linewidth=0.5, label=str(yr))
-
-    # log scale + limits
-    ax.set_xscale('log'); ax.set_yscale('log')
-    ax.set_xlim(lims); ax.set_ylim(lims)
-
-    # equal aspect so 1:1 slope is visually 45°
-    ax.set_aspect('equal', adjustable='box')
-
-    # 1:1 line
-    ax.plot(lims, lims, 'k--', lw=1)
-
-    # stats computed on the same points that are actually shown
-    cc = np.corrcoef(x_all[in_box], y_all[in_box])[0, 1]
-    bias = np.nanmean(y_all[in_box]) / np.nanmean(x_all[in_box])
-    ax.text(0.03, 0.97, f"CC={cc:.2f}\nBias={bias:.2f}", transform=ax.transAxes,
-            va='top', ha='left', fontsize=15)
-
-    # labeling
-    label = {'GPCP':'GPCP v3.3', 'RACMO':'RACMO v2.4'}.get(prod, prod)
-    ax.set_xlabel("Pmb (mm/yr)", fontsize=15)
-    ax.set_ylabel(f"{label} (mm/yr)", fontsize=15)
-
-    # log ticks/format
-    from matplotlib.ticker import LogLocator, ScalarFormatter
-    ax.xaxis.set_major_locator(LogLocator(base=10))
-    ax.yaxis.set_major_locator(LogLocator(base=10))
-    ax.xaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2,10)*0.1))
-    ax.yaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2,10)*0.1))
-    ax.xaxis.set_major_formatter(ScalarFormatter())
-    ax.yaxis.set_major_formatter(ScalarFormatter())
-    ax.grid(which='major', linestyle='--', linewidth=0.5, alpha=0.7)
-
-    from matplotlib.ticker import LogLocator, NullFormatter, FixedLocator, FuncFormatter
-
-    # 1) Grid-friendly tick locations (unlabeled minor ticks)
-    ax.xaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10) * 0.1))
-    ax.yaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10) * 0.1))
-    ax.xaxis.set_minor_formatter(NullFormatter())
-    ax.yaxis.set_minor_formatter(NullFormatter())
-
-    # 2) Clean major labels: only a few handpicked values
-    labels_to_show = [10, 100, 500,  1000, 2000]
-    ax.xaxis.set_major_locator(FixedLocator(labels_to_show))
-    ax.yaxis.set_major_locator(FixedLocator(labels_to_show))
-
-    fmt = FuncFormatter(lambda v, _: f"{int(v):d}" if v in labels_to_show else "")
-    ax.xaxis.set_major_formatter(fmt)
-    ax.yaxis.set_major_formatter(fmt)
-
-    # Optional: avoid crowding on the left
-    ax.tick_params(axis="x", which="major", pad=4)
-    ax.tick_params(axis="y", which="major", pad=4)
-
-# Rotate x-axis tick labels
-for ax in axes:
-    ax.tick_params(axis="x", labelrotation=30)  # try 30°, 45°, or 60°
-
-# one legend
-axes[0].legend(title="Year", loc='lower right', ncol=2, fontsize=15, frameon=False)
-plt.tight_layout(); plt.show()
-
-# bring CloudSat into the discusiion
-# read and process CloudSat data
-# ant_data_path = r"/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/miscellaneous"  # Replace with your actual path
-# cs_ant_filename = os.path.join(ant_data_path,"CS_seasonal_climatology-2007-2010.nc")
-# cs_ant = xr.open_dataarray(cs_ant_filename)
-
-# cs_ant_annual_clim = cs_ant.mean(dim='season',skipna=True)#.where(new_mask_ == 1)
-
-# we will fill nan areas in cs ant with era5 data so create that data
-era5_data = xr.open_dataarray(r'/ra1/pubdat/AVHRR_CloudSat_proj/ERA5_0.25deg/ERA5_to_netcdf_files/ERA5_daily_precipitation_2010.nc')
-if 'lon' in era5_data.coords and 'lat' in era5_data.coords:
-    era5_data = era5_data.rename({'lon': 'x', 'lat': 'y'})
-era5_data_ant = era5_data.sel(y=slice(-55, -90), x=slice(-180, 180))
-era5_data_ant = era5_data_ant.mean(dim='time',skipna=True)
-
-era5_data_ant.rio.write_crs(CRS.from_proj4(crs).to_string(), inplace=True)
-# era5_trns = Affine(round(np.unique(np.diff(era5_data_ant['x'].values))[0],2),
-#                    0.0,
-#                    era5_data_ant['x'].min().item(),
-#                    0.0,
-#                    round(np.unique(np.diff(era5_data_ant['y'].values))[0],2),
-#                    era5_data_ant['y'].max().item())
-
-era5_data_ant = era5_data_ant.rio.reproject(
-                                    dst_crs=era5_data_ant.rio.crs,
-                                    shape=(70, 720),                                    
-                                    resampling=Resampling.nearest
+region_ts_wais = region_monthly_series_from_dict(
+    monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    basin_weights=basin_weights_,
+    region_name="West Antarctica",
 )
 
-# Set the fill value to NaN
-# era5_data_ant = era5_data_ant.where(era5_data_ant != era5_data_ant.attrs['_FillValue'], np.nan)
-
-cs_annual_path = r'/ra1/pubdat/Reza_archive/CS_2022_Maps/annual'
-cs_annual_filename = os.path.join(cs_annual_path,"2007_2010.npy")
-raw = np.load(cs_annual_filename, allow_pickle=True)
-cs_annual = np.flip(raw[:,:].transpose(), axis=0)
-cs_annual = xr.DataArray(cs_annual,
-                         dims=['lat', 'lon'],
-                         coords={'lat': np.arange(90,-89.75, -0.5),
-                          'lon': np.arange(-179.75, 180, 0.5)},
-                          name = 'precipitation')
-cs_annual_ant = cs_annual.sel(lat=slice(-55, -90), lon=slice(-180, 180))
-cs_annual_ant = cs_annual_ant*24
-# set areas in cs with na to era5 values
-cs_annual_ant = cs_annual_ant.fillna(era5_data_ant.values)
-
-yshp, xshp = cs_annual_ant.shape
-
-minx = cs_annual_ant['lon'].min().item()
-maxy = cs_annual_ant['lat'].max().item()
-px_sz = round(cs_annual_ant['lon'].diff('lon').mean().item(), 2)
-
-dest_flnme = os.path.join(misc_out, os.path.basename(cs_annual_filename).replace('.npy', '.tif'))
-
-gdal_based_save_array_to_disk(dest_flnme, xshp, yshp, px_sz, minx, maxy, 
-                              crs, crs_format, cs_annual_ant.data)
-
-output_file_stereo = os.path.join(misc_out, os.path.basename(cs_annual_filename).replace('.npy', '_stere.tif'))
-
-gdalwarp_command = f'gdalwarp -t_srs "+proj=stere +lat_0=-90 +lat_ts=-71 +x_0=0 +y_0=0 +lon_0=0 +datum=WGS84" -r near {dest_flnme} {output_file_stereo}'
-
-subprocess.run(gdalwarp_command, shell=True)
-
-# Read the stereographic projection file
-cs_ant_xrr_sh_stereo = xr.open_dataset(output_file_stereo)['band_data']
-
-os.remove(dest_flnme)
-os.remove(output_file_stereo)
-
-# Clip the data to the bounds of the basin dataset
-cs_ant_xrr_clip = cs_ant_xrr_sh_stereo.sel(
-    x=slice(-3333250, 3333250),
-    y=slice(3333250, -3333250)
-).squeeze()
-
-
-# Explicitly set the CRS before reprojecting
-cs_ant_xrr_clip.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
-
-cs_ant_xrr_clip_res = cs_ant_xrr_clip.rio.reproject(
-    cs_ant_xrr_clip.rio.crs,
-    shape=basins.shape,  # set the shape as the basin data shape
-    resampling=Resampling.nearest,
-    transform=basins.rio.transform()
+region_ts_eais = region_monthly_series_from_dict(
+    monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    basin_weights=basin_weights_,
+    region_name="East Antarctica",
 )
 
-cs_ant_xrr_clip_res_arr = cs_ant_xrr_clip_res.values
-cs_ant_xrr_clip_res_arr = np.where(basins.values > 0, cs_ant_xrr_clip_res_arr, np.nan)
-cs_ant_xrr_clip_res = xr.DataArray(
-    cs_ant_xrr_clip_res_arr,  # Use the 2D numpy array directly
-    dims=['y', 'x'],  # Define dimensions
-    coords={'y': cs_ant_xrr_clip_res.coords['y'], 
-            'x': cs_ant_xrr_clip_res.coords['x']},
-    name='precipitation'  # Rename the DataArray to 'precipitation'
+region_ts_ais = region_monthly_series_from_dict(
+    monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    basin_weights=basin_weights_,
+    region_name="Antarctica",
 )
 
-# Create an empty DataArray to store mean precipitation mapped to basins
-cs_ant_precip_xrr_basin_mapped = xr.full_like(basins, np.nan, dtype=float)
+product_order = [
+    r"$P_{\mathrm{MB}}$",
+    "ERA5",
+    "GPCP v3.3",
+    "ATMS",
+    "MHS",
+    "DMSP SSMIS",
+    "AMSR2",
+    "GPM Satellites",
+]
 
-# Loop through each basin ID (Zwally basins are numbered from 1 to 27)
-for basin_id in range(1, 20):
-    # print(f"Processing basin {basin_id}")
-    # Create a mask for the current basin
-    basin_mask = basins == basin_id
-
-    # Mask the precipitation data for the current basin
-    basin_precip = cs_ant_xrr_clip_res.where(basin_mask.data)
-
-    # Calculate the mean precipitation for the current basin across time and spatial dimensions
-    basin_mean_precip = basin_precip.mean(dim=['x', 'y'], skipna=True)
-
-    # Map the calculated mean precipitation back to the basin region
-    cs_ant_precip_xrr_basin_mapped = cs_ant_precip_xrr_basin_mapped.where(~basin_mask, basin_mean_precip)
-
-# Clean up variables to free memory
-del(basin_precip, basin_mean_precip, basin_mask, basin_id)
-
-cs_ant_precip_xrr_basin_mapped_mm_per_year = cs_ant_precip_xrr_basin_mapped * 365
-
-
-# resample the data to the new resolution
-# cs_ant_precip_xrr_basin_mapped.rio.write_crs(CRS.from_proj4(crs_stereo).to_string(), inplace=True)
-
-# cs_ant_precip_xrr_basin_mapped_res_5km = cs_ant_precip_xrr_basin_mapped.rio.reproject(
-#                                     dst_crs=cs_ant_precip_xrr_basin_mapped.rio.crs,
-#                                     shape=(1333, 1333),
-#                                     transform=new_transform,
-#                                     resampling=Resampling.nearest
-# )
-
-gc.collect()
-#%%
-
-# compare_mean_precp_plot(mean_annual_plot_arrs, 
-#                     vmin=0, vmax=350, 
-#                     cbar_tcks=[0,  50, 100, 150, 200, 250, 300, 350])
-# gc.collect()
-
-# for idx, yr in (enumerate(['2019', '2020'])): #[0, 1]:
-       
-#     annual_plot_arrs = [
-#                     (f'Pmb annual\n accumulation_{yr}', Pmb_annual[idx]),
-#                     (f'ERA5 annual\n accumulation_{yr}', era5_annual_mean[idx]), 
-#                     (f'GPCP_v3.3 annual\n accumulation_{yr}', gpcpv3pt3_annual_mean[idx]),
-#                     (f'RACMO_2.4p1 annual\n accumulation_{yr}', racmo_pr_annual_mean[idx]),                    
-#                    ]
-#     compare_mean_precp_plot(annual_plot_arrs, 
-#                         vmin=0, vmax=400, 
-#                         cbar_tcks=[0,  50, 100, 200,300, 400])
-# gc.collect()
-
-#---------------------------------------------------------------------------------
-# compute and plot differences with Pmb
-# diff_annual_plot_arrs = [(r"ERA5 – $P_{MB}$", era5_annual_mean.mean(dim='year') - Pmb_annual.mean(dim='year')),
-#                          (r"GPCP_v3.3 – $P_{MB}$", gpcpv3pt3_annual_mean.mean(dim='year') - Pmb_annual.mean(dim='year')),
-#                          (r"RACMO_2.4p1 – $P_{MB}$", racmo_pr_annual_mean.mean(dim='year') - Pmb_annual.mean(dim='year')),
-#                         ]
-    
-# compare_mean_precp_plot(diff_annual_plot_arrs, 
-#                     vmin=-10, vmax=100, 
-#                     cbar_tcks=[-10, 0, 10, 25, 50, 75, 100])
-# gc.collect()
-# #---------------------------------------------------------------------------------
-
-# SEAS = ["DJF", "MAM", "JJA", "SON"]
-
-
-# year = 2019  # or whatever your idx represents
-
-# products_for_year = [
-#     (r"P$_{MB}$",       ensure_season_index(pick_year(Pmb_seasonal, year),SEAS)),
-#     ("ERA5",      ensure_season_index(pick_year(era5_seasonal_mean*30, year),SEAS)),
-#     ("GPCP_v3.3", ensure_season_index(pick_year(gpcpv3pt3_seasonal_mean*30, year),SEAS)),
-#     ("RACMO_2.4p1", ensure_season_index(pick_year(racmo_pr_seasonal_mean, year),SEAS)),
-
-# ]
-#----------------------------------------------------------------------------------
-
-# seasonal_plot_arrs = [
-#     (f"{name} — {s} mean", da.sel(season=s))
-#     for name, da in products_for_year
-#     for s in SEAS
-# ]
-
-# # compare_mean_precp_plot(seasonal_plot_arrs, 
-# #                         vmin=0, vmax=30, 
-# #                         cbar_tcks=[0, 2.5, 5, 7.5, 10, 15, 20, 25, 30])
-# # gc.collect()
-
-# # SEAS = ("DJF", "MAM", "JJA", "SON")
-
-# fig, axes = plot_seasonal_precip_maps(
-#     products_for_year,
-#     seasons=SEAS,
-#     vmin=0,
-#     vmax=30,
-#     cbar_ticks=[0, 2.5, 5, 7.5, 10, 15, 20, 25, 30]
-# )
-
-# gc.collect()
-#----------------------------------------------------------------------------------
-# plot_monthly_cycle_by_basin_products_precomputed(plot_dfs)
+fig, axes = plot_region_trend_panels(
+    monthly_df_data_mmmonth,
+    REGION_DEFS,
+    basin_weights_,
+    product_order=product_order,
+    product_styles=product_styles_corr,
+    use_running_mean=True,   # 13-mo RM for clean plot
+    show_pmb_trend_only=True
+)
