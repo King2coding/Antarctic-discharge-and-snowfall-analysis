@@ -13,6 +13,7 @@ import calendar
 from functools import reduce
 
 from datetime import datetime, timedelta, date
+from affine import Affine
 from scipy.stats import linregress
 import math
 from collections import Counter
@@ -5216,4 +5217,967 @@ def plot_region_trend_panels(
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, ncol=4, frameon=False, loc="lower center", bbox_to_anchor=(0.5, -0.01))
     fig.tight_layout(rect=[0, 0.06, 1, 1])
+    return fig, axes
+
+#---------------------------------------------------------------------------------
+
+def basin_names_to_ids(basin_names, id2name):
+    name2id = {v: k for k, v in id2name.items()}
+    return [name2id[nm] for nm in basin_names if nm in name2id]
+#---------------------------------------------------------------------------------
+
+def region_def_names_to_cols(REGION_DEFS, id2name, basin_cols):
+    """
+    REGION_DEFS uses basin IDs (2..19). Convert to column names as used in S_full/S_tier1.
+    Returns dict: region -> list of basin column names present in basin_cols.
+    """
+    out = {}
+    for region, ids in REGION_DEFS:
+        names = [id2name[i] for i in ids if i in id2name]
+        # normalize Ep-f vs Ep-F issues if needed:
+        names2 = []
+        for n in names:
+            if n == "Ep-F" and "Ep-f" in basin_cols:
+                names2.append("Ep-f")
+            else:
+                names2.append(n)
+        out[region] = [n for n in names2 if n in basin_cols]
+    return out
+#---------------------------------------------------------------------------------
+
+def compute_filled_counts_by_region(S_full, S_filled, REGION_DEFS, id2name):
+    """
+    Count how many basin-months were filled (i.e., missing in S_full but present in S_filled).
+    Returns:
+      filled_count_df: DataFrame indexed by date with one column per region (int counts)
+      filled_mask: DataFrame of True/False per basin column per month (for optional deeper debugging)
+    """
+    basin_cols = list(S_full.columns)
+
+    # filled if original missing AND filled has value
+    obs_mask    = S_full.notna()
+    filled_mask = S_filled.notna() & (~obs_mask)
+
+    region_cols = region_def_names_to_cols(REGION_DEFS, id2name, basin_cols)
+
+    filled_count_df = pd.DataFrame(index=S_full.index)
+
+    for region, cols in region_cols.items():
+        filled_count_df[region] = filled_mask[cols].sum(axis=1).astype(int)
+
+    return filled_count_df, filled_mask
+#---------------------------------------------------------------------------------
+
+def compute_gapspanning_dS_counts_by_region(S_full, REGION_DEFS, id2name):
+    """
+    A month is "gap-spanning for dS" in a basin if either S_full[t] or S_full[t-1] was missing.
+    This flags months where ΔS is likely influenced by gap-filling.
+    Returns DataFrame indexed by date (same as dS timestamps) with region columns.
+    """
+    basin_cols = list(S_full.columns)
+    region_cols = region_def_names_to_cols(REGION_DEFS, id2name, basin_cols)
+
+    # for each basin, flag months where differencing touches missing
+    miss_now  = S_full.isna()
+    miss_prev = S_full.isna().shift(1)
+    gapspan = (miss_now | miss_prev)  # True means ΔS at month t used at least one filled state
+
+    # ΔS exists from second month onward
+    gapspan = gapspan.iloc[1:].copy()
+
+    out = pd.DataFrame(index=gapspan.index)
+    for region, cols in region_cols.items():
+        out[region] = gapspan[cols].sum(axis=1).astype(int)
+
+    return out
+#---------------------------------------------------------------------------------
+
+def plot_region_anom_with_gapcounts(
+    ts_region_mmmonth,          # DataFrame: index monthly time, columns products (mm/month)
+    region_name,
+    gap_counts,                 # Series indexed by time (monthly)
+    title=None,
+    product_order=None,
+    product_styles=None,
+    show_13mo_rm=True,
+    plot_trend_products=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),  # <-- NEW
+    trend_on_unsmoothed_anoms=True,                                   # <-- NEW
+    pmb_col=r"$P_{\mathrm{MB}}$",
+):
+    """
+    Left axis: deseasonalized anomalies (optionally 13-mo running mean)
+    Right axis: gap counts per month (bars)
+    Also overlays dashed trend lines for selected products.
+    """
+    ts = ts_region_mmmonth.copy()
+
+    # --- anomalies ---
+    ts_anom = deseasonalize_monthly(ts)  # your existing helper
+    ts_plot = centered_13mo_rm(ts_anom) if show_13mo_rm else ts_anom
+
+    fig, ax = plt.subplots(figsize=(14, 4.5))
+    ax2 = ax.twinx()
+
+    if product_order is None:
+        product_order = list(ts_plot.columns)
+
+    if product_styles is None:
+        product_styles = {}
+
+    # --- plot anomaly lines ---
+    for prod in product_order:
+        if prod not in ts_plot.columns:
+            continue
+        st = product_styles.get(prod, {})
+        ax.plot(
+            ts_plot.index, ts_plot[prod],
+            label=prod,
+            color=st.get("color", None),
+            lw=st.get("lw", 2.0),
+            ls=st.get("ls", "-"),
+        )
+
+    # --- dashed trend lines (NEW) ---
+    # trend is computed on UNSMOOTHED anomalies by default (safer)
+    base_for_trend = ts_anom if trend_on_unsmoothed_anoms else ts_plot
+
+    for prod in plot_trend_products:
+        if prod not in base_for_trend.columns:
+            continue
+
+        y = base_for_trend[prod].values
+        idx = base_for_trend.index
+
+        # compute slope + p (your existing function)
+        slope, p = trend_with_ar1_correction(y, idx)
+
+        if not np.isfinite(slope):
+            continue
+
+        t_years = (idx - idx[0]).days / 365.25
+        intercept = np.nanmean(y)
+        trend_line = intercept + slope * t_years
+
+        # color = product color if defined, else let matplotlib pick (but try to match)
+        st = product_styles.get(prod, {})
+        color = st.get("color", None)
+
+        ax.plot(
+            idx,
+            trend_line,
+            ls="--",
+            lw=2.2,
+            color=color,
+            alpha=0.95,
+            label=f"{prod} trend",   # legend entry
+            zorder=3
+        )
+
+    # --- gap counts bars (right axis) ---
+    gc = gap_counts.reindex(ts_plot.index).fillna(0).astype(int)
+    ax2.bar(
+        ts_plot.index, gc.values,
+        width=25, alpha=0.25, align="center",
+        label="Filled basin-months",
+        zorder=0,
+    )
+
+    ax.set_ylabel("Deseasonalized P anomalies (mm/month)")
+    ax2.set_ylabel("# basin-month gaps filled")
+    ax.grid(True, alpha=0.3)
+
+    ttl = title if title is not None else f"{region_name}"
+    ax.set_title(ttl, fontsize=16, fontweight="bold")
+
+    # --- combined legend ---
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, ncol=4, frameon=False, loc="upper left")
+
+    plt.tight_layout()
+    return fig, (ax, ax2)
+
+#---------------------------------------------------------------------------------
+
+def region_weighted_from_basin_series(
+    basin_series,              # xr.DataArray (date, basin_id)
+    region_name,
+    REGION_DEFS,
+    basin_weights_dict,        # dict: basin_id -> weight (already normalized globally OK)
+    renormalize_each_month=True
+):
+    """
+    Weighted regional mean of a basin series.
+    If renormalize_each_month=True, weights are renormalized over available basins each month.
+    Returns pandas.Series indexed by date.
+    """
+    region_ids = dict(REGION_DEFS)[region_name]
+    region_ids = [int(i) for i in region_ids]
+
+    da = basin_series.sel(basin_id=region_ids)
+
+    # build weight array aligned to basin_id
+    w = xr.DataArray(
+        np.array([basin_weights_dict.get(int(b), np.nan) for b in da["basin_id"].values], dtype=float),
+        dims=("basin_id",),
+        coords={"basin_id": da["basin_id"].values},
+        name="w"
+    )
+
+    if renormalize_each_month:
+        # mask weights where data missing and renormalize
+        valid = np.isfinite(da)
+        w_eff = w.where(valid)
+        wsum = w_eff.sum("basin_id", skipna=True)
+        reg = (da * w_eff).sum("basin_id", skipna=True) / wsum
+    else:
+        reg = (da * w).sum("basin_id", skipna=True) / w.sum("basin_id", skipna=True)
+
+    return reg.to_pandas()
+
+#---------------------------------------------------------------------------------
+
+def plot_budget_terms_region(
+    region_name,
+    REGION_DEFS,
+    basin_weights_dict,
+    dS_basin, D_basin, BM_basin, SUB_basin,
+    smooth_13mo=False,
+    title=None
+):
+    # regional series
+    s_dS  = region_weighted_from_basin_series(dS_basin,  region_name, REGION_DEFS, basin_weights_dict)
+    s_D   = region_weighted_from_basin_series(D_basin,   region_name, REGION_DEFS, basin_weights_dict)
+    s_BM  = region_weighted_from_basin_series(BM_basin,  region_name, REGION_DEFS, basin_weights_dict)
+    s_SUB = region_weighted_from_basin_series(SUB_basin, region_name, REGION_DEFS, basin_weights_dict)
+
+    df = pd.DataFrame({"dS": s_dS, "Discharge": s_D, "BasalMelt": s_BM, "Sublimation": s_SUB}).sort_index()
+
+    if smooth_13mo:
+        df = df.rolling(13, center=True, min_periods=7).mean()
+
+    fig, ax = plt.subplots(figsize=(14, 4.2))
+    ax2 = ax.twinx()
+
+    # left axis: dS + sublimation
+    ax.plot(df.index, df["dS"], lw=2.0, color="k", label="ΔS (Gt/mo)")
+    ax.plot(df.index, df["Sublimation"], lw=2.0, color="tab:purple", label="Sublimation (Gt/mo)")
+
+    # right axis: discharge + basal melt
+    ax2.plot(df.index, df["Discharge"], lw=2.2, color="tab:blue", label="Discharge (Gt/mo)")
+    ax2.plot(df.index, df["BasalMelt"], lw=2.2, color="tab:orange", label="Basal melt (Gt/mo)")
+
+    ax.set_ylabel("ΔS / Sublimation (Gt/month)")
+    ax2.set_ylabel("Discharge / Basal melt (Gt/month)")
+
+    ax.grid(True, alpha=0.3)
+
+    ttl = title if title else f"{region_name} — P_MB components"
+    ax.set_title(ttl, fontsize=16, fontweight="bold")
+
+    # combined legend
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, ncol=4, frameon=False, loc="upper left")
+
+    plt.tight_layout()
+    return fig, (ax, ax2), df
+
+#---------------------------------------------------------------------------------
+
+def _as_date_index(da, time_dim="date"):
+    """Ensure the time coordinate is datetime64[ns] and month-start."""
+    if time_dim not in da.dims:
+        raise ValueError(f"Expected dim '{time_dim}' in {da.dims}")
+    t = pd.to_datetime(da[time_dim].values)
+    t = pd.DatetimeIndex(t).to_period("M").to_timestamp(how="start")
+    return da.assign_coords({time_dim: t})
+
+#---------------------------------------------------------------------------------
+
+def _to_month_start_index(idx):
+    idx = pd.to_datetime(idx)
+    return pd.DatetimeIndex(idx).to_period("M").to_timestamp(how="start")
+#---------------------------------------------------------------------------------
+
+def _to_series(obj, time_dim="date"):
+    """
+    Convert obj to pd.Series with a month-start DatetimeIndex.
+    Accepts:
+      - xr.DataArray with coord time_dim
+      - pd.Series already indexed by time
+    """
+    if isinstance(obj, xr.DataArray):
+        if time_dim not in obj.dims:
+            raise ValueError(f"Expected dim '{time_dim}' in DataArray dims={obj.dims}")
+        s = obj.to_series()
+        s.index = _to_month_start_index(s.index)
+        return s.sort_index()
+
+    if isinstance(obj, pd.Series):
+        s = obj.copy()
+        s.index = _to_month_start_index(s.index)
+        return s.sort_index()
+
+    raise TypeError(f"Unsupported type: {type(obj)}")
+#---------------------------------------------------------------------------------
+def plot_budget_terms_region_3x1(
+    region_name,
+    REGION_DEFS,
+    basin_weights_dict,
+    dS_basin, D_basin, BM_basin, SUB_basin,
+    smooth_13mo=False,
+    figsize=(14, 8),
+):
+    """
+    Works whether region_weighted_from_basin_series returns xr.DataArray OR pd.Series.
+    All terms assumed Gt/month.
+    """
+
+    # ---- regional series (could be xr.DataArray OR pd.Series) ----
+    s_dS  = region_weighted_from_basin_series(dS_basin,  region_name, REGION_DEFS, basin_weights_dict)
+    s_D   = region_weighted_from_basin_series(D_basin,   region_name, REGION_DEFS, basin_weights_dict)
+    s_BM  = region_weighted_from_basin_series(BM_basin,  region_name, REGION_DEFS, basin_weights_dict)
+    s_SUB = region_weighted_from_basin_series(SUB_basin, region_name, REGION_DEFS, basin_weights_dict)
+
+    # ---- convert + align in pandas (INNER join on common months) ----
+    S = pd.concat(
+        {
+            "dS_Gtmo":  _to_series(s_dS,  "date"),
+            "D_Gtmo":   _to_series(s_D,   "date"),
+            "BM_Gtmo":  _to_series(s_BM,  "date"),
+            "SUB_Gtmo": _to_series(s_SUB, "date"),
+        },
+        axis=1,
+        join="inner",
+    ).sort_index()
+
+    # optional 13-mo centered RM
+    if smooth_13mo:
+        S_plot = S.rolling(window=13, center=True, min_periods=7).mean()
+    else:
+        S_plot = S
+
+    # ---- plotting ----
+    fig, axes = plt.subplots(3, 1, figsize=figsize, sharex=True)
+    ax1, ax2, ax3 = axes
+
+    # ax1: ΔS
+    ax1.plot(S_plot.index, S_plot["dS_Gtmo"], lw=2.2, label=r"$\Delta S$")
+    ax1.axhline(0, lw=0.8, alpha=0.5)
+    ax1.set_ylabel(r"$\Delta S$ (Gt/month)")
+    ax1.set_title(f"{region_name} — P_MB components", fontsize=16, fontweight="bold")
+    ax1.grid(True, alpha=0.3)
+
+    # ax2: Discharge (left) + Basal melt (right)
+    ax2.plot(S_plot.index, S_plot["D_Gtmo"], lw=2.2, label="Discharge")
+    ax2.set_ylabel("Discharge (Gt/month)")
+    ax2.grid(True, alpha=0.3)
+    ax2.axhline(0, lw=0.8, alpha=0.25)
+
+    ax2b = ax2.twinx()
+    ax2b.plot(S_plot.index, S_plot["BM_Gtmo"], lw=2.2, ls="--", label="Basal melt")
+    ax2b.set_ylabel("Basal melt (Gt/month)")
+
+    h1, l1 = ax2.get_legend_handles_labels()
+    h2, l2 = ax2b.get_legend_handles_labels()
+    ax2.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False)
+
+    # ax3: Sublimation
+    ax3.plot(S_plot.index, S_plot["SUB_Gtmo"], lw=2.2, label="Sublimation")
+    ax3.axhline(0, lw=0.8, alpha=0.5)
+    ax3.set_ylabel("Sublimation (Gt/month)")
+    ax3.grid(True, alpha=0.3)
+    ax3.set_xlabel("Year")
+
+    plt.tight_layout()
+    return fig, axes, S
+
+
+#--------------------------------------------------------------------------------
+
+
+def plot_budget_terms_region_3x1_with_gapcounts(
+    region_name,
+    REGION_DEFS,
+    basin_weights_dict,
+    dS_basin, D_basin, BM_basin, SUB_basin,
+    gap_counts,                 # <-- pd.Series or pd.DataFrame column (monthly index)
+    smooth_13mo=False,
+    figsize=(14, 8),
+    gap_bar_alpha=0.22,
+    gap_bar_width_days=25,
+    gap_label="# basin-month gaps (ΔS)",
+):
+    """
+    Same as plot_budget_terms_region_3x1, but overlays gap-count bars on the ΔS subplot.
+
+    gap_counts:
+      - best: gapspan_df[region_name]  (counts of basins where ΔS uses filled states)
+      - must be indexed by time (monthly). Can be any DatetimeIndex; we coerce to month-start.
+    """
+
+    # ---- regional series (your existing helper returns pandas.Series) ----
+    s_dS  = region_weighted_from_basin_series(dS_basin,  region_name, REGION_DEFS, basin_weights_dict)
+    s_D   = region_weighted_from_basin_series(D_basin,   region_name, REGION_DEFS, basin_weights_dict)
+    s_BM  = region_weighted_from_basin_series(BM_basin,  region_name, REGION_DEFS, basin_weights_dict)
+    s_SUB = region_weighted_from_basin_series(SUB_basin, region_name, REGION_DEFS, basin_weights_dict)
+
+    # ---- align everything on common month-start index ----
+    def _to_ms(s):
+        s = s.copy()
+        s.index = pd.to_datetime(s.index)
+        s.index = pd.DatetimeIndex(s.index).to_period("M").to_timestamp(how="start")
+        return s.sort_index()
+
+    S = pd.concat(
+        {
+            "dS_Gtmo":  _to_ms(s_dS),
+            "D_Gtmo":   _to_ms(s_D),
+            "BM_Gtmo":  _to_ms(s_BM),
+            "SUB_Gtmo": _to_ms(s_SUB),
+        },
+        axis=1,
+        join="inner",
+    ).sort_index()
+
+    # ---- gap counts to month-start + align to S ----
+    if isinstance(gap_counts, pd.DataFrame):
+        raise ValueError("gap_counts should be a Series (e.g., gapspan_df[region_name]) not a DataFrame.")
+
+    gc = gap_counts.copy()
+    gc.index = pd.to_datetime(gc.index)
+    gc.index = pd.DatetimeIndex(gc.index).to_period("M").to_timestamp(how="start")
+    gc = gc.reindex(S.index).fillna(0).astype(int)
+
+    # ---- optional smoothing ----
+    if smooth_13mo:
+        S_plot = S.rolling(window=13, center=True, min_periods=7).mean()
+    else:
+        S_plot = S
+
+    # ---- plotting ----
+    fig, axes = plt.subplots(3, 1, figsize=figsize, sharex=True)
+    ax1, ax2, ax3 = axes
+
+    # =======================
+    # (1) ΔS + gap bars
+    # =======================
+    ax1.plot(S_plot.index, S_plot["dS_Gtmo"], lw=2.2, label=r"$\Delta S$")
+    ax1.axhline(0, lw=0.8, alpha=0.5)
+    ax1.set_ylabel(r"$\Delta S$ (Gt/month)")
+    ax1.set_title(f"{region_name} — P_MB components", fontsize=16, fontweight="bold")
+    ax1.grid(True, alpha=0.3)
+
+    # bars on twin axis (gap counts)
+    ax1b = ax1.twinx()
+    ax1b.bar(
+        S_plot.index,
+        gc.values,
+        width=gap_bar_width_days,
+        alpha=gap_bar_alpha,
+        align="center",
+        label=gap_label,
+    )
+    ax1b.set_ylabel(gap_label)
+
+    # combine legend for ax1
+    h1, l1 = ax1.get_legend_handles_labels()
+    h2, l2 = ax1b.get_legend_handles_labels()
+    ax1.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False, ncol=2)
+
+    # =======================
+    # (2) Discharge + Basal melt
+    # =======================
+    ax2.plot(S_plot.index, S_plot["D_Gtmo"], lw=2.2, label="Discharge")
+    ax2.set_ylabel("Discharge (Gt/month)")
+    ax2.grid(True, alpha=0.3)
+    ax2.axhline(0, lw=0.8, alpha=0.25)
+
+    ax2b = ax2.twinx()
+    ax2b.plot(S_plot.index, S_plot["BM_Gtmo"], lw=2.2, ls="--", label="Basal melt")
+    ax2b.set_ylabel("Basal melt (Gt/month)")
+
+    h1, l1 = ax2.get_legend_handles_labels()
+    h2, l2 = ax2b.get_legend_handles_labels()
+    ax2.legend(h1 + h2, l1 + l2, loc="upper left", frameon=False)
+
+    # =======================
+    # (3) Sublimation
+    # =======================
+    ax3.plot(S_plot.index, S_plot["SUB_Gtmo"], lw=2.2, label="Sublimation")
+    ax3.axhline(0, lw=0.8, alpha=0.5)
+    ax3.set_ylabel("Sublimation (Gt/month)")
+    ax3.grid(True, alpha=0.3)
+    ax3.set_xlabel("Year")
+
+    plt.tight_layout()
+    return fig, axes, S, gc
+
+#------------------------------------------------------------------------------
+# ---------------------------------------------------------
+# 1) Compute annual totals + trend per region/product
+# ---------------------------------------------------------
+def annual_totals_from_monthly(series_mm_month: pd.Series) -> pd.Series:
+    """
+    series_mm_month: monthly (mm/month), indexed by datetime (month-start)
+    returns: annual totals (mm/year), indexed by year (int)
+    """
+    s = series_mm_month.dropna().copy()
+    s.index = pd.to_datetime(s.index)
+    # require month-start but ok if not; group by year
+    annual = s.groupby(s.index.year).sum()
+    return annual
+
+def trend_mm_per_year(annual_mm_year: pd.Series):
+    """
+    annual_mm_year: indexed by year (int), values mm/year
+    returns slope in (mm/year)/year = mm/year, plus p-value (optional)
+    """
+    y = annual_mm_year.dropna()
+    if len(y) < 4:
+        return np.nan, np.nan
+
+    x = y.index.values.astype(float)  # years
+    slope, intercept, r, p, stderr = linregress(x, y.values.astype(float))
+    return slope, p
+
+def compute_region_trends_bars(
+    monthly_df_data_mmmonth,
+    REGION_DEFS,
+    basin_weights,
+    regions=("Antarctica", "West Antarctica", "East Antarctica"),
+    products=(r"$P_{\mathrm{MB}}$", "GPCP v3.3", "ERA5"),
+):
+    """
+    Returns a DataFrame: rows=regions, cols=products, values=trend (mm/year)
+    """
+    out = pd.DataFrame(index=list(regions), columns=list(products), dtype=float)
+
+    for region in regions:
+        ts = region_monthly_series_from_dict(
+            monthly_df_data_mmmonth, REGION_DEFS, basin_weights, region
+        )  # DataFrame indexed by month, columns=products
+
+        for prod in products:
+            if prod not in ts.columns:
+                out.loc[region, prod] = np.nan
+                continue
+
+            annual = annual_totals_from_monthly(ts[prod])     # mm/year per year
+            slope, p = trend_mm_per_year(annual)             # mm/year (per year)
+            out.loc[region, prod] = slope
+
+    return out
+
+# ---------------------------------------------------------
+# 2) Plot grouped bars (like your example)
+# ---------------------------------------------------------
+def plot_region_trend_barchart(
+    trend_df,                 # from compute_region_trends_bars()
+    product_styles=None,      # your product_styles_corr or product_styles
+    title="Regional precipitation trends",
+    ylabel="Trend (mm/year)",
+):
+    if product_styles is None:
+        product_styles = {}
+
+    regions = trend_df.index.tolist()
+    products = trend_df.columns.tolist()
+
+    x = np.arange(len(regions))
+    width = 0.22 if len(products) == 3 else (0.75 / max(1, len(products)))
+
+    fig, ax = plt.subplots(figsize=(9, 3.8))
+
+    for i, prod in enumerate(products):
+        vals = trend_df[prod].values.astype(float)
+
+        color = product_styles.get(prod, {}).get("color", None)
+        ax.bar(
+            x + (i - (len(products)-1)/2) * width,
+            vals,
+            width=width,
+            label=prod,
+            color=color,
+            edgecolor="none",
+        )
+
+    ax.axhline(0, color="k", lw=0.8, alpha=0.7)
+    ax.set_xticks(x)
+    ax.set_xticklabels(regions, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(frameon=False, ncol=len(products), loc="upper center", bbox_to_anchor=(0.5, 1.18))
+
+    plt.tight_layout()
+    return fig, ax
+
+# ---------------------------------------------------------
+# 3) Plot scatter + regression line
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy import stats
+
+# uses your existing functions:
+# deseasonalize_monthly(df)
+# centered_13mo_rm(df)
+
+def _scatter_stats(x, y):
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    m = np.isfinite(x) & np.isfinite(y)
+    x = x[m]; y = y[m]
+
+    if len(x) < 3:
+        return dict(n=len(x), slope=np.nan, intercept=np.nan, r=np.nan, std=np.nan)
+
+    slope, intercept, r, p, stderr = stats.linregress(x, y)
+    yhat = intercept + slope * x
+    resid = y - yhat
+    std = np.nanstd(resid, ddof=1)  # residual scatter about regression
+    return dict(n=len(x), slope=slope, intercept=intercept, r=r, std=std)
+
+
+def plot_region_anom_scatter_panels_consistent(
+    ts_region: pd.DataFrame,
+    region_name: str,
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=("ERA5", "GPCP v3.3"),
+    colors=("blue", "orange"),
+    lims=None,
+    smooth_13mo=False,          # <-- your question
+    title_prefix=None,
+):
+    """
+    Scatter of monthly anomalies: target vs reference.
+    Anomalies computed with your deseasonalize_monthly().
+    Optional 13-mo centered running mean with your centered_13mo_rm().
+    """
+
+    df = ts_region.copy()
+
+    # Robust month-start index (works across pandas versions)
+    idx = pd.to_datetime(df.index)
+    df.index = idx.to_period("M").to_timestamp(how="start")
+
+    # Keep only needed cols (and ensure they exist)
+    need = [ref_col] + list(target_cols)
+    missing = [c for c in need if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {missing}. Available: {list(df.columns)}")
+
+    df_use = df[need].copy()
+
+    # --- anomalies (your function) ---
+    anom = deseasonalize_monthly(df_use)
+
+    # --- optional smoothing (your function) ---
+    if smooth_13mo:
+        anom = centered_13mo_rm(anom)
+
+    # choose axis limits if not provided
+    if lims is None:
+        vals = anom.to_numpy().ravel()
+        vals = vals[np.isfinite(vals)]
+        if len(vals) == 0:
+            lims = (-1, 1)
+        else:
+            q = np.nanpercentile(np.abs(vals), 98)
+            L = max(1.0, float(q))
+            lims = (-L, L)
+
+    n = len(target_cols)
+    fig, axes = plt.subplots(1, n, figsize=(5.2*n, 5.0), sharex=True, sharey=True)
+    if n == 1:
+        axes = [axes]
+
+    for ax, targ, col in zip(axes, target_cols, colors):
+        x = anom[ref_col].values
+        y = anom[targ].values
+
+        st = _scatter_stats(x, y)
+
+        ax.scatter(x, y, s=20, alpha=0.8, edgecolor="none")
+        ax.plot(lims, lims, "k-", lw=1.2)  # 1:1
+
+        # regression
+        if np.isfinite(st["slope"]):
+            xx = np.array(lims)
+            yy = st["intercept"] + st["slope"] * xx
+            ax.plot(xx, yy, color=col, lw=2.0)
+
+        ax.set_xlim(lims); ax.set_ylim(lims)
+        ax.axhline(0, color="k", lw=1.0, ls="--")
+        ax.axvline(0, color="k", lw=1.0, ls="--")
+        ax.grid(True, alpha=0.25)
+
+        ax.text(
+            0.04, 0.96,
+            f"Slope: {st['slope']:.2f}\nStd Dev: {st['std']:.2f}\nCC: {st['r']:.2f}\nN: {st['n']}",
+            transform=ax.transAxes,
+            ha="left", va="top",
+            fontsize=12,
+            color=col,
+            bbox=dict(facecolor="white", alpha=0.65, edgecolor="none"),
+        )
+
+        sm_tag = " (13-mo RM)" if smooth_13mo else ""
+        ax.set_title(f"{targ} vs {ref_col}{sm_tag}", fontsize=14, fontweight="bold")
+        ax.set_xlabel(f"{ref_col} anomaly (mm/month)", fontsize=12)
+        ax.set_ylabel(f"{targ} anomaly (mm/month)", fontsize=12)
+
+    ttl = region_name if title_prefix is None else f"{title_prefix}: {region_name}"
+    fig.suptitle(ttl, fontsize=16, fontweight="bold", y=1.03)
+    plt.tight_layout()
+    return fig, axes, anom
+# ---------------------------------------------------------
+
+# --- helper: month -> season label ---
+def month_to_season(m):
+    if m in (12, 1, 2): return "DJF"
+    if m in (3, 4, 5):  return "MAM"
+    if m in (6, 7, 8):  return "JJA"
+    return "SON"
+# ---------------------------------------------------------
+def seasonal_year(df_monthly):
+    """
+    df_monthly: DataFrame with DatetimeIndex (monthly) and product columns (mm/month).
+    Returns DataFrame indexed by (season_year, season) with seasonal MEAN (mm/month).
+    DJF is assigned to the year of Jan/Feb (Dec goes to next year's DJF).
+    """
+    df = df_monthly.copy()
+    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp(how="start")
+
+    y = df.index.year
+    m = df.index.month
+    season = np.array([month_to_season(mm) for mm in m])
+
+    # "season_year": Dec belongs to next year's DJF
+    season_year = y.copy()
+    season_year[(m == 12)] += 1
+
+    out = df.copy()
+    out["season"] = season
+    out["season_year"] = season_year
+
+    # seasonal mean of the 3 months (still mm/month)
+    seas = (out
+            .groupby(["season_year", "season"], as_index=True)
+            .mean(numeric_only=True)
+           )
+
+    # enforce canonical season order
+    seas = seas.reset_index()
+    seas["season"] = pd.Categorical(seas["season"], ["DJF","MAM","JJA","SON"], ordered=True)
+    seas = seas.sort_values(["season_year","season"]).set_index(["season_year","season"])
+
+    return seas  # columns are the products
+
+# ---------------------------------------------------------
+def scatter_seasonal_panels(
+    ts_region,                    # DataFrame: monthly mm/month, index datetime
+    region_name,
+    ref_col=r"$P_{\mathrm{MB}}$",
+    targets=("GPCP v3.3", "ERA5"),
+    colors=("orange", "blue"),
+    use_anomalies=True,           # deseasonalize first or not
+    seasonal_mode="mean",         # currently mean; could add "sum" if you want
+    lims=None,                    # e.g. (-5,5) for anomalies
+):
+    """
+    Creates 1×len(targets) seasonal scatter panels (seasonal points).
+    Adds 1:1 line and regression line + slope/std/corr.
+    """
+    df = ts_region.copy()
+    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp(how="start")
+
+    need = [ref_col] + list(targets)
+    df = df[need].copy()
+
+    if use_anomalies:
+        df = deseasonalize_monthly(df)   # your existing function
+
+    # seasonal aggregation (mean of months within season)
+    seas = seasonal_year(df)
+
+    n = len(targets)
+    fig, axes = plt.subplots(1, n, figsize=(5.2*n, 4.8), sharex=False, sharey=False)
+    if n == 1:
+        axes = [axes]
+
+    for ax, tgt, col in zip(axes, targets, colors):
+        sub = seas[[ref_col, tgt]].dropna()
+        x = sub[ref_col].values.astype(float)
+        y = sub[tgt].values.astype(float)
+
+        # regression y = a + b x
+        slope, intercept, r, p, stderr = stats.linregress(x, y)
+        yhat = intercept + slope*x
+
+        # "std dev" like the paper often means std of residuals about regression
+        resid_std = np.std(y - yhat, ddof=1)
+
+        # plot points
+        ax.scatter(x, y, s=28, color=col, alpha=0.85, edgecolor="k", linewidth=0.3)
+
+        # 0 lines (nice zoom cue, like the paper)
+        ax.axhline(0, color="k", lw=0.8, ls=":")
+        ax.axvline(0, color="k", lw=0.8, ls=":")
+
+        # 1:1 line
+        xymin = np.nanmin([x.min(), y.min()]) if lims is None else lims[0]
+        xymax = np.nanmax([x.max(), y.max()]) if lims is None else lims[1]
+        ax.plot([xymin, xymax], [xymin, xymax], "k-", lw=1.0)
+
+        # regression line
+        xx = np.linspace(xymin, xymax, 50)
+        ax.plot(xx, intercept + slope*xx, color=col, lw=1.6)
+
+        # stats text
+        ax.text(
+            0.04, 0.96,
+            f"Slope: {slope:.2f}\nStd Dev: {resid_std:.2f}\nCorrelation: {r:.2f}",
+            transform=ax.transAxes,
+            va="top", ha="left",
+            fontsize=12,
+            color=col,
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none")
+        )
+
+        ax.set_title(f"{region_name}: {tgt} vs {ref_col}\n(seasonal points)", fontsize=12, fontweight="bold")
+        ax.set_xlabel(f"{ref_col} ({'anom' if use_anomalies else 'value'})")
+        ax.set_ylabel(f"{tgt} ({'anom' if use_anomalies else 'value'})")
+        ax.grid(True, alpha=0.25)
+
+        if lims is not None:
+            ax.set_xlim(lims); ax.set_ylim(lims)
+
+    plt.tight_layout()
+    return fig, axes
+
+# ---------------------------------------------------------
+
+
+def month_to_season(m):
+    if m in (12, 1, 2): return "DJF"
+    if m in (3, 4, 5):  return "MAM"
+    if m in (6, 7, 8):  return "JJA"
+    return "SON"
+
+def seasonal_year_means(df_monthly):
+    """
+    df_monthly: DataFrame with monthly DatetimeIndex and product columns (e.g., mm/month).
+    Returns DataFrame indexed by (season_year, season) with seasonal MEAN (of the 3 months).
+    DJF is assigned to the year of Jan/Feb (Dec -> next year).
+    """
+    df = df_monthly.copy()
+    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp(how="start")
+
+    y = df.index.year.to_numpy()     # <-- mutable numpy array
+    m = df.index.month.to_numpy()
+
+    season = np.array([month_to_season(mm) for mm in m], dtype=object)
+
+    # season_year: shift Dec into next year's DJF
+    season_year = y.copy()
+    season_year[m == 12] += 1
+
+    out = df.copy()
+    out["season"] = season
+    out["season_year"] = season_year
+
+    seas = (out
+            .groupby(["season_year", "season"], as_index=True)
+            .mean(numeric_only=True))
+
+    # enforce canonical season order
+    seas = seas.reset_index()
+    seas["season"] = pd.Categorical(seas["season"], ["DJF","MAM","JJA","SON"], ordered=True)
+    seas = seas.sort_values(["season_year","season"]).set_index(["season_year","season"])
+
+    return seas
+
+# ---------------------------------------------------------
+def scatter_seasonal_panels_raw(
+    ts_region,                 # DataFrame (monthly), index datetime
+    region_name,
+    ref_col=r"$P_{\mathrm{MB}}$",
+    targets=("GPCP v3.3", "ERA5"),
+    colors=("orange", "blue"),
+    lims=None,                 # e.g. (-10,10) or leave None auto
+):
+    df = ts_region.copy()
+    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp(how="start")
+
+    need = [ref_col] + list(targets)
+    missing = [c for c in need if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns in ts_region: {missing}. Available: {list(df.columns)}")
+
+    df = df[need].copy()
+
+    # seasonal-year means (raw)
+    seas = seasonal_year_means(df)
+
+    n = len(targets)
+    fig, axes = plt.subplots(1, n, figsize=(5.3*n, 4.8), sharex=False, sharey=False)
+    if n == 1:
+        axes = [axes]
+
+    for ax, tgt, col in zip(axes, targets, colors):
+        sub = seas[[ref_col, tgt]].dropna()
+        x = sub[ref_col].values.astype(float)
+        y = sub[tgt].values.astype(float)
+
+        # regression y = a + b x
+        slope, intercept, r, p, stderr = stats.linregress(x, y)
+        yhat = intercept + slope * x
+        resid_std = np.std(y - yhat, ddof=1)
+
+        # limits
+        if lims is None:
+            xymin = np.nanmin([x.min(), y.min()])
+            xymax = np.nanmax([x.max(), y.max()])
+            pad = 0.05 * (xymax - xymin) if xymax > xymin else 1.0
+            xymin -= pad
+            xymax += pad
+        else:
+            xymin, xymax = lims
+
+        # scatter
+        ax.scatter(x, y, s=40, color=col, alpha=0.85, edgecolor="k", linewidth=0.3)
+
+        # 0-lines (like your example)
+        ax.axhline(0, color="k", lw=0.8, ls=":")
+        ax.axvline(0, color="k", lw=0.8, ls=":")
+
+        # 1:1 line
+        ax.plot([xymin, xymax], [xymin, xymax], "k-", lw=1.0)
+
+        # regression line
+        xx = np.linspace(xymin, xymax, 60)
+        ax.plot(xx, intercept + slope*xx, color=col, lw=1.8)
+
+        # stats box
+        ax.text(
+            0.04, 0.96,
+            f"Slope: {slope:.2f}\nStd Dev: {resid_std:.2f}\nCorrelation: {r:.2f}",
+            transform=ax.transAxes,
+            va="top", ha="left",
+            fontsize=12,
+            color=col,
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none")
+        )
+
+        ax.set_title(f"{region_name}: {tgt} vs {ref_col}\n(seasonal-year means)", fontsize=12, fontweight="bold")
+        ax.set_xlabel(f"{ref_col}")
+        ax.set_ylabel(f"{tgt}")
+        ax.set_xlim(xymin, xymax)
+        ax.set_ylim(xymin, xymax)
+        ax.grid(True, alpha=0.25)
+
+    plt.tight_layout()
     return fig, axes
