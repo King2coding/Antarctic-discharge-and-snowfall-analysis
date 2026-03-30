@@ -504,6 +504,22 @@ fig, axes, stats_dict, df_used = plot_anomaly_scatter_multi_product(
     share_lims=False,
 )
 
+plot_anomaly_scatter_single(
+    ts_eais_seasonal_conv_anom,
+    ref_col=r"ERA5",
+    target_col="GPCP v3.3",
+    method="conventional",
+    compute_anomaly_inside=True,
+    ax=None,
+    title=None,
+    xlabel=None,
+    ylabel=None,
+    lims=None,
+    equal_axes=True,
+    marker_size=18,
+    alpha=0.75,
+)
+
 #%% ============================================================
 # APPROACH B: monthly anomaly relative to seasonal climatology
 # ============================================================
