@@ -67,6 +67,7 @@ SEAS_ORDER = ("DJF", "MAM", "JJA", "SON")
 
 color_cycle = ["k", "tab:blue", "tab:orange", "tab:green", "tab:red"]
 marker_cycle = ["o", "s", "D", "^", "v"]
+
 #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 mpl.rcParams['font.family'] = 'serif'
@@ -100,6 +101,44 @@ id2name = {
     19: "K-A"
 }
 
+name2id = {v: k for k, v in id2name.items()}
+
+# --- Region definitions in terms of basin NAMES ---
+
+# West Antarctica proper (RACMO R24)
+wais_core_names = ["H-Hp", "J-Jpp", "G-H", "F-G", "Ep-F"]
+
+# Antarctic Peninsula (RACMO R24) – here we MERGE into WAIS for the 1×4 plot
+ap_names = ["I-Ipp", "Ipp-J", "Hp-I"]
+
+wais_all_names = wais_core_names + ap_names
+
+# East Antarctica = all remaining IMBIE basins (EAIS)
+eais_names = [nm for nm in id2name.values() if nm not in wais_all_names]
+
+# Inland: basins dominated by the interior plateau (approximation)
+inland_names = ["Jpp-K", "K-A", "A-Ap", "Ap-B"]
+
+# Safety: keep inland subset of EAIS
+inland_names = [nm for nm in inland_names if nm in eais_names]
+
+# --- Convert names → IDs ---
+
+WAIS_IDS   = [name2id[nm] for nm in wais_all_names]
+EAIS_IDS   = [name2id[nm] for nm in eais_names]
+INLAND_IDS = [name2id[nm] for nm in inland_names]
+
+print("WAIS basin IDs:", WAIS_IDS)
+print("EAIS basin IDs:", EAIS_IDS)
+print("Inland basin IDs:", INLAND_IDS)
+
+# ---- Region definitions (from our agreed mapping) ----
+REGION_DEFS = [
+    ("Antarctica",      [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
+    ("West Antarctica", [13, 17, 12, 11, 10, 15, 16, 14]),
+    ("East Antarctica", [2, 3, 4, 5, 6, 7, 8, 9, 18, 19]),
+]
+
 #----------------------------------------------------------------------------
 
 MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun",
@@ -112,7 +151,77 @@ ID2COLOR  = dict(zip(BASIN_IDS, PALETTE))
 
 #%%
 def p_corr(obs,model):
+    '''
+    Pearson correlation
+    obs: array-like of observed values
+    model: array-like of modelled values
+    '''
     return he.pearson_r(model,obs)
+
+#----------------------------------------------------------------------------
+
+def slope_linear(obs, model):
+    """
+    Slope of linear regression: model = a + b * obs
+
+    Parameters
+    ----------
+    obs : array-like
+        Reference values (x-axis), e.g. PMB anomalies
+    model : array-like
+        Product values (y-axis)
+
+    Returns
+    -------
+    float
+        Regression slope
+    """
+    obs = np.asarray(obs, dtype=float)
+    model = np.asarray(model, dtype=float)
+
+    m = np.isfinite(obs) & np.isfinite(model)
+    if m.sum() < 2:
+        return np.nan
+
+    slope, intercept, r, p, stderr = linregress(obs[m], model[m])
+    return slope
+
+#----------------------------------------------------------------------------
+def regression_stats(obs, model):
+    """
+    Compute slope, intercept, correlation and sample size.
+
+    Returns
+    -------
+    dict with keys:
+        slope, intercept, cc, pvalue, n
+    """
+    obs = np.asarray(obs, dtype=float)
+    model = np.asarray(model, dtype=float)
+
+    m = np.isfinite(obs) & np.isfinite(model)
+    if m.sum() < 2:
+        return {
+            "slope": np.nan,
+            "intercept": np.nan,
+            "cc": np.nan,
+            "pvalue": np.nan,
+            "n": int(m.sum())
+        }
+
+    x = obs[m]
+    y = model[m]
+
+    slope, intercept, r, p, stderr = linregress(x, y)
+
+    return {
+        "slope": slope,
+        "intercept": intercept,
+        "cc": p_corr(x, y),   # your existing function
+        "pvalue": p,
+        "n": len(x)
+    }
+#----------------------------------------------------------------------------
 
 def rmsqe(obs,model):
     return he.rmse(model,obs)
@@ -1987,6 +2096,22 @@ def region_monthly_series_from_dict(
     return out
 
 #---------------------------------------------------------------------------
+def get_unique_year_month_index(df):
+    return (
+        df[["year", "month"]]
+        .drop_duplicates()
+        .sort_values(["year", "month"])
+        .set_index(["year", "month"])
+        .index
+    )
+
+#---------------------------------------------------------------------------
+def subset_to_common_year_month(df, common_idx):
+    out = df.copy()
+    idx = pd.MultiIndex.from_frame(out[["year", "month"]])
+    return out[idx.isin(common_idx)].copy()
+
+#---------------------------------------------------------------------------
 def deseasonalize_monthly(df):
     """Subtract monthly climatology (calendar-month mean) from each series."""
     out = df.copy()
@@ -2072,6 +2197,245 @@ def to_df(da):
 
 #%%
 # PLOTTING HELPERS
+
+def _get_axis_limits(x, y, pad_frac=0.08, symmetric=True):
+    """
+    Get neat scatter axis limits.
+    """
+    vals = np.r_[np.asarray(x, float), np.asarray(y, float)]
+    vals = vals[np.isfinite(vals)]
+
+    if len(vals) == 0:
+        return (-1, 1)
+
+    vmin = vals.min()
+    vmax = vals.max()
+
+    if symmetric:
+        vmax_abs = np.nanmax(np.abs(vals))
+        vmax_abs = 1.0 if not np.isfinite(vmax_abs) or vmax_abs == 0 else vmax_abs
+        pad = pad_frac * vmax_abs
+        return (-vmax_abs - pad, vmax_abs + pad)
+
+    span = vmax - vmin
+    if span == 0:
+        span = max(abs(vmax), 1.0)
+    pad = pad_frac * span
+    return (vmin - pad, vmax + pad)
+
+# -------------------------------------------------------------------
+# Single scatter panel
+# -------------------------------------------------------------------
+def plot_anomaly_scatter_single(
+    df_in,
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_col="ERA5",
+    method="conventional",
+    compute_anomaly_inside=True,
+    ax=None,
+    title=None,
+    xlabel=None,
+    ylabel=None,
+    lims=None,
+    equal_axes=True,
+    marker_size=18,
+    alpha=0.75,
+):
+    """
+    Single scatter using monthly anomalies.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(5.2, 5.0))
+    else:
+        fig = ax.figure
+
+    sub = df_in[[ref_col, target_col]].dropna().copy()
+    sub.index = pd.to_datetime(sub.index).to_period("M").to_timestamp(how="start")
+
+    if compute_anomaly_inside:
+        sub_use = build_monthly_anomaly_series(sub, method=method)
+    else:
+        sub_use = sub.copy()
+
+    sub_use = sub_use[[ref_col, target_col]].dropna()
+
+    x = sub_use[ref_col].values.astype(float)
+    y = sub_use[target_col].values.astype(float)
+
+    st = regression_stats(x, y)
+
+    if lims is None:
+        lims = _get_axis_limits(x, y, symmetric=True)
+
+    ax.scatter(x, y, s=marker_size, color="k", alpha=alpha, edgecolor="none", zorder=3)
+    ax.plot(lims, lims, color="k", lw=1.0, zorder=2)
+
+    if np.isfinite(st["slope"]):
+        xx = np.linspace(lims[0], lims[1], 100)
+        yy = st["intercept"] + st["slope"] * xx
+        ax.plot(xx, yy, color="red", lw=1.4, zorder=4)
+
+    ax.axhline(0, color="k", lw=0.9, ls=(0, (2, 3)), alpha=0.7, zorder=1)
+    ax.axvline(0, color="k", lw=0.9, ls=(0, (2, 3)), alpha=0.7, zorder=1)
+
+    ax.set_xlim(lims)
+    if equal_axes:
+        ax.set_ylim(lims)
+        ax.set_aspect("equal", adjustable="box")
+
+    if title is None:
+        title = target_col
+    if xlabel is None:
+        xlabel = f"{ref_col} anomaly"
+    if ylabel is None:
+        ylabel = f"{target_col} anomaly"
+
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.grid(False)
+
+    resid_std = np.std(y - (st["intercept"] + st["slope"] * x), ddof=1) if np.isfinite(st["slope"]) else np.nan
+
+    ax.text(
+        0.04, 0.96,
+        f"Slope: {st['slope']:.2f}\nStd Dev: {resid_std:.2f}",
+        transform=ax.transAxes,
+        ha="left", va="top",
+        fontsize=12, fontweight="bold", color="k"
+    )
+
+    ax.text(
+        0.96, 0.06,
+        f"CC: {st['cc']:.2f}",
+        transform=ax.transAxes,
+        ha="right", va="bottom",
+        fontsize=13, fontweight="bold", color="k"
+    )
+
+    return fig, ax, st, sub_use
+
+# -------------------------------------------------------------------
+# Multi-panel scatter plot for several products
+# -------------------------------------------------------------------
+
+def _get_scatter_lims_from_df(df, cols, symmetric=True, pad_frac=0.06):
+    vals = []
+    for c in cols:
+        if c in df.columns:
+            vals.append(np.asarray(df[c].values, dtype=float))
+
+    if len(vals) == 0:
+        return (-1, 1)
+
+    vals = np.concatenate(vals)
+    vals = vals[np.isfinite(vals)]
+
+    if len(vals) == 0:
+        return (-1, 1)
+
+    if symmetric:
+        vmax = np.nanmax(np.abs(vals))
+        vmax = 1.0 if (not np.isfinite(vmax) or vmax == 0) else vmax
+        pad = vmax * pad_frac
+        return (-vmax - pad, vmax + pad)
+
+    vmin = np.nanmin(vals)
+    vmax = np.nanmax(vals)
+    span = vmax - vmin
+    if span == 0:
+        span = 1.0
+    pad = span * pad_frac
+    return (vmin - pad, vmax + pad)
+
+def plot_anomaly_scatter_multi_product(
+    df_in,
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=("ERA5", "GPCP v3.3", "ATMS"),
+    method="conventional",
+    compute_anomaly_inside=True,
+    ncols=3,
+    figsize_per_panel=(4.8, 4.3),
+    share_lims=True,
+    lims=None,
+    equal_axes=True,
+    point_size=18,
+    point_alpha=0.75,
+    panel_titles=None,
+    region_name=None,
+    xlabel=None,
+    ylabel_mode="product",
+):
+    """
+    Multi-panel scatter fully consistent with the single-panel version.
+    """
+    target_cols = list(target_cols)
+    needed = [ref_col] + target_cols
+
+    missing = [c for c in needed if c not in df_in.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {missing}. Available: {list(df_in.columns)}")
+
+    df = df_in[needed].copy()
+    df.index = pd.to_datetime(df.index).to_period("M").to_timestamp(how="start")
+
+    if compute_anomaly_inside:
+        df_plot = build_monthly_anomaly_series(df, method=method)
+    else:
+        df_plot = df.copy()
+
+    if share_lims and lims is None:
+        lims = _get_scatter_lims_from_df(df_plot, needed, symmetric=True)
+
+    n = len(target_cols)
+    nrows = int(np.ceil(n / ncols))
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(figsize_per_panel[0] * ncols, figsize_per_panel[1] * nrows),
+        squeeze=False
+    )
+    axes = axes.ravel()
+
+    stats_dict = {}
+
+    for i, targ in enumerate(target_cols):
+        ax = axes[i]
+        ttl = panel_titles.get(targ, targ) if panel_titles is not None else targ
+        panel_lims = lims if share_lims else None
+
+        _, _, st, _ = plot_anomaly_scatter_single(
+            df_in=df_plot,
+            ref_col=ref_col,
+            target_col=targ,
+            method=method,
+            compute_anomaly_inside=False,
+            ax=ax,
+            title=ttl,
+            xlabel=(f"{ref_col} anomaly" if xlabel is None else xlabel),
+            ylabel=(f"{targ} anomaly" if ylabel_mode == "product" else "Product anomaly"),
+            lims=panel_lims,
+            equal_axes=equal_axes,
+            marker_size=point_size,
+            alpha=point_alpha,
+        )
+        stats_dict[targ] = st
+
+    for ax in axes[n:]:
+        ax.axis("off")
+
+    if region_name is not None:
+        if region_name == 'East Antarctica':
+            ttle = 'EAIS'
+        elif region_name == 'West Antarctica':
+            ttle = 'WAIS'
+        else:
+            ttle = 'AIS'
+        fig.suptitle(ttle, fontsize=16, fontweight="bold", y=1.02)
+
+    plt.tight_layout()
+    return fig, axes, stats_dict, df_plot
+#-------------------------------------------------------------------
 def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
     """
     Plots a multi-row grid of mean precipitation for different products over 27 basins.
@@ -4239,6 +4603,467 @@ def compute_weighted_region_annual_totals(
 
     return region_annual
 #----------------------------------------------------------------------------
+# ============================================================================
+# SEASONAL-SERIES HELPERS
+# Reuses your existing:
+#   - region_monthly_series_from_dict(...)
+#   - deseasonalize_monthly(...)
+#   - trend_with_ar1_correction(...)
+#   - month_to_season(...)
+# ============================================================================
+
+def _ensure_month_start_index(df):
+    """
+    Force a DataFrame/Series index to month-start timestamps.
+    """
+    out = df.copy()
+    out.index = pd.to_datetime(out.index).to_period("M").to_timestamp(how="start")
+    out = out.sort_index()
+    return out
+#----------------------------------------------------------------------------
+def centered_3mo_rm(df, min_periods=3):
+    """
+    3-month centered rolling mean, monthly output.
+    """
+    df = _ensure_month_start_index(df)
+    return df.rolling(window=3, center=True, min_periods=min_periods).mean()
+
+#----------------------------------------------------------------------------
+def seasonal_climatology_monthly(df):
+    """
+    Compute seasonal climatology from monthly data.
+
+    Returns
+    -------
+    clim : dict
+        {"DJF": ..., "MAM": ..., "JJA": ..., "SON": ...}
+        where each value is a Series indexed by product columns.
+    """
+    df = _ensure_month_start_index(df)
+    seasons = pd.Series(df.index.month, index=df.index).map(month_to_season)
+
+    clim = {}
+    for seas in ["DJF", "MAM", "JJA", "SON"]:
+        mask = seasons == seas
+        clim[seas] = df.loc[mask].mean(axis=0)
+    return clim
+
+#----------------------------------------------------------------------------
+def conventional_monthly_anomalies(df):
+    """
+    Monthly anomalies using seasonal climatology.
+
+    For each monthly value:
+        anomaly = value - climatology_of_its_season
+
+    Output remains monthly.
+    """
+    df = _ensure_month_start_index(df)
+    seasons = pd.Series(df.index.month, index=df.index).map(month_to_season)
+    clim = seasonal_climatology_monthly(df)
+
+    out = df.copy()
+    for seas in ["DJF", "MAM", "JJA", "SON"]:
+        mask = seasons == seas
+        if mask.any():
+            out.loc[mask] = df.loc[mask] - clim[seas]
+    return out
+
+#----------------------------------------------------------------------------
+def rolling_monthly_anomalies(df, min_periods=3):
+    """
+    Monthly anomalies after 3-month centered rolling mean.
+
+    Steps:
+      1) 3-month centered rolling mean
+      2) compute monthly climatology from rolled series
+      3) anomaly = rolled value - monthly climatology
+
+    Output remains monthly.
+    """
+    df = _ensure_month_start_index(df)
+    rolled = centered_3mo_rm(df, min_periods=min_periods)
+
+    out = rolled.copy()
+    months = rolled.index.month
+
+    for c in rolled.columns:
+        clim = rolled[c].groupby(months).mean()
+        out[c] = rolled[c] - months.map(clim).values
+
+    return out
+#----------------------------------------------------------------------------
+def build_monthly_anomaly_series(df, method="seasonal_clim_monthly", min_periods=3):
+    df = _ensure_month_start_index(df)
+
+    if method == "seasonal_clim_monthly":
+        return conventional_monthly_anomalies(df)
+
+    elif method == "rolling":
+        return rolling_monthly_anomalies(df, min_periods=min_periods)
+
+    else:
+        raise ValueError("method must be 'seasonal_clim_monthly' or 'rolling'")
+#----------------------------------------------------------------------------
+def build_region_monthly_series(
+    monthly_df_data_mmmonth,
+    region_defs,
+    basin_weights,
+    region_name,
+    time_col="time",
+    basin_col="basin",
+    val_col="precipitation",
+):
+    """
+    Just a thin alias to your existing function for clarity.
+    """
+    return region_monthly_series_from_dict(
+        monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+        region_defs=region_defs,
+        basin_weights=basin_weights,
+        region_name=region_name,
+        time_col=time_col,
+        basin_col=basin_col,
+        val_col=val_col,
+    )
+#----------------------------------------------------------------
+def build_region_monthly_anomalies(
+    monthly_df_data_mmmonth,
+    region_defs,
+    basin_weights,
+    region_name,
+    method="seasonal_clim_monthly",
+    min_periods=3,
+    time_col="time",
+    basin_col="basin",
+    val_col="precipitation",
+):
+    """
+    Build monthly regional series, then convert to anomalies using the chosen method.
+    """
+    ts_region = build_region_monthly_series(
+        monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+        region_defs=region_defs,
+        basin_weights=basin_weights,
+        region_name=region_name,
+        time_col=time_col,
+        basin_col=basin_col,
+        val_col=val_col,
+    )
+
+    ts_anom = build_monthly_anomaly_series(
+        ts_region,
+        method=method,
+        min_periods=min_periods,
+    )
+    return ts_region, ts_anom
+#----------------------------------------------------------------
+def _season_year_and_label_from_index(dt_index):
+    """
+    Given a monthly DatetimeIndex, return:
+      - season labels: DJF/MAM/JJA/SON
+      - season_year: year assigned to the season
+        (DJF belongs to Jan/Feb year, so Dec is shifted to next year)
+    """
+    idx = pd.to_datetime(dt_index)
+    months = idx.month.to_numpy()
+    years = idx.year.to_numpy().copy()
+
+    seasons = np.array([month_to_season(m) for m in months], dtype=object)
+
+    # DJF belongs to Jan/Feb year
+    years[months == 12] += 1
+
+    return seasons, years
+#----------------------------------------------------------------------------
+
+def _season_rep_timestamp(season_year, season_label):
+    """
+    Representative timestamp for each seasonal point.
+    Uses the middle month of the season-year:
+      DJF -> Jan 1 of season_year
+      MAM -> Apr 1
+      JJA -> Jul 1
+      SON -> Oct 1
+    """
+    month_map = {"DJF": 1, "MAM": 4, "JJA": 7, "SON": 10}
+    return pd.Timestamp(year=int(season_year), month=month_map[season_label], day=1)
+
+def deseasonalize_seasonal_series(df_seasonal):
+    """
+    Deseasonalize a conventional seasonal time series by subtracting
+    the climatological mean for each season.
+
+    Input:
+      DataFrame indexed by representative seasonal timestamps
+      with columns = products.
+
+    Output:
+      Same shape, but anomalies relative to season climatology.
+    """
+    out = df_seasonal.copy()
+    out = _ensure_month_start_index(out)
+
+    # Map representative timestamp month -> season
+    month_to_seas = {1: "DJF", 4: "MAM", 7: "JJA", 10: "SON"}
+    seas = out.index.month.map(month_to_seas)
+
+    for c in out.columns:
+        clim = out[c].groupby(seas).mean()
+        out[c] = out[c] - seas.map(clim).values
+
+    return out
+
+
+def build_conventional_seasonal_series_from_region_monthly(
+    ts_region_monthly,
+    seasonal_mode="mean",
+    drop_incomplete=True,
+):
+    """
+    Build conventional seasonal time series from monthly regional series.
+
+    Parameters
+    ----------
+    ts_region_monthly : DataFrame
+        Monthly regional series, index=time, columns=products
+        Units typically mm/month.
+    seasonal_mode : {"mean", "sum"}
+        - "mean" -> seasonal mean of the 3 months
+        - "sum"  -> seasonal total of the 3 months
+    drop_incomplete : bool
+        If True, require all 3 months in a season for each product.
+        If False, pandas aggregation will use available months.
+
+    Returns
+    -------
+    seasonal_df : DataFrame
+        Index = representative seasonal timestamps
+        Columns = products
+        Length ≈ 4 * number_of_years
+    """
+    if seasonal_mode not in {"mean", "sum"}:
+        raise ValueError("seasonal_mode must be 'mean' or 'sum'")
+
+    ts = _ensure_month_start_index(ts_region_monthly)
+
+    seasons, season_years = _season_year_and_label_from_index(ts.index)
+
+    work = ts.copy()
+    work["season"] = seasons
+    work["season_year"] = season_years
+
+    pieces = []
+
+    for prod in ts.columns:
+        sub = work[[prod, "season", "season_year"]].copy()
+
+        g = sub.groupby(["season_year", "season"])[prod]
+
+        if drop_incomplete:
+            counts = g.count()
+            valid_keys = counts[counts == 3].index
+
+            if seasonal_mode == "mean":
+                agg = g.mean().loc[valid_keys]
+            else:
+                agg = g.sum().loc[valid_keys]
+        else:
+            if seasonal_mode == "mean":
+                agg = g.mean()
+            else:
+                agg = g.sum()
+
+        agg = agg.reset_index(name=prod)
+        agg["time"] = agg.apply(
+            lambda r: _season_rep_timestamp(r["season_year"], r["season"]),
+            axis=1
+        )
+        agg = agg[["time", prod]].set_index("time").sort_index()
+        pieces.append(agg)
+
+    seasonal_df = pd.concat(pieces, axis=1).sort_index()
+    seasonal_df.index.name = "time"
+
+    return seasonal_df
+#-----------------------------------------------------------------------------
+
+def build_rolling_seasonal_mean_from_region_monthly(
+    ts_region_monthly,
+    window=3,
+    min_periods=3,
+    center=True,
+    seasonal_mode="mean",
+):
+    """
+    Build rolling/window seasonal series DIRECTLY from monthly regional series.
+
+    This preserves the monthly number of points.
+
+    Examples
+    --------
+    - window=3, center=True, seasonal_mode="mean"
+      gives a 3-month rolling seasonal mean aligned to the middle month.
+
+    - For Jan 2015, with center=True, the value represents Dec2014-Jan2015-Feb2015 mean.
+
+    Parameters
+    ----------
+    ts_region_monthly : DataFrame
+        Monthly regional series, index=time, columns=products
+    window : int
+        Rolling window length in months, usually 3 for seasonal mean
+    min_periods : int
+        Minimum number of months needed
+    center : bool
+        Whether rolling window is centered
+    seasonal_mode : {"mean", "sum"}
+        - "mean" -> 3-month rolling mean
+        - "sum"  -> 3-month rolling sum
+
+    Returns
+    -------
+    rolling_df : DataFrame
+        Same monthly time axis length as input
+    """
+    if seasonal_mode not in {"mean", "sum"}:
+        raise ValueError("seasonal_mode must be 'mean' or 'sum'")
+
+    ts = _ensure_month_start_index(ts_region_monthly)
+
+    roll = ts.rolling(window=window, min_periods=min_periods, center=center)
+
+    if seasonal_mode == "mean":
+        out = roll.mean()
+    else:
+        out = roll.sum()
+
+    out.index.name = "time"
+    return out
+
+
+def build_region_seasonal_series_from_dict(
+    monthly_df_data_mmmonth,
+    region_defs,
+    basin_weights,
+    region_name,
+    method="conventional",
+    seasonal_mode="mean",
+    drop_incomplete=True,
+    rolling_window=3,
+    rolling_min_periods=3,
+    rolling_center=True,
+    time_col="time",
+    basin_col="basin",
+    val_col="precipitation",
+):
+    """
+    Wrapper that starts from your monthly_df_data_mmmonth dictionary,
+    computes the regional monthly series using your existing function,
+    then builds the requested seasonal series.
+
+    method:
+      - "conventional" : 4 seasonal values per year
+      - "rolling"      : rolling seasonal mean on monthly axis
+    """
+    ts_region_monthly = region_monthly_series_from_dict(
+        monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+        region_defs=region_defs,
+        basin_weights=basin_weights,
+        region_name=region_name,
+        time_col=time_col,
+        basin_col=basin_col,
+        val_col=val_col,
+    )
+
+    if method == "conventional":
+        return build_conventional_seasonal_series_from_region_monthly(
+            ts_region_monthly=ts_region_monthly,
+            seasonal_mode=seasonal_mode,
+            drop_incomplete=drop_incomplete,
+        )
+
+    elif method == "rolling":
+        return build_rolling_seasonal_mean_from_region_monthly(
+            ts_region_monthly=ts_region_monthly,
+            window=rolling_window,
+            min_periods=rolling_min_periods,
+            center=rolling_center,
+            seasonal_mode=seasonal_mode,
+        )
+
+    else:
+        raise ValueError("method must be 'conventional' or 'rolling'")
+
+#-----------------------------------------------------------------------------
+def build_all_regions_seasonal_series_from_dict(
+    monthly_df_data_mmmonth,
+    region_defs,
+    basin_weights,
+    method="conventional",
+    seasonal_mode="mean",
+    drop_incomplete=True,
+    rolling_window=3,
+    rolling_min_periods=3,
+    rolling_center=True,
+    time_col="time",
+    basin_col="basin",
+    val_col="precipitation",
+):
+    """
+    Convenience wrapper for all regions in REGION_DEFS.
+
+    Returns
+    -------
+    out : dict
+        {
+          "Antarctica": seasonal_df,
+          "West Antarctica": seasonal_df,
+          "East Antarctica": seasonal_df
+        }
+    """
+    out = {}
+
+    for region_name, _ in region_defs:
+        out[region_name] = build_region_seasonal_series_from_dict(
+            monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+            region_defs=region_defs,
+            basin_weights=basin_weights,
+            region_name=region_name,
+            method=method,
+            seasonal_mode=seasonal_mode,
+            drop_incomplete=drop_incomplete,
+            rolling_window=rolling_window,
+            rolling_min_periods=rolling_min_periods,
+            rolling_center=rolling_center,
+            time_col=time_col,
+            basin_col=basin_col,
+            val_col=val_col,
+        )
+
+    return out
+#-----------------------------------------------------------------------------
+# ============================================================================
+# ANOMALY WRAPPERS
+# ============================================================================
+
+def seasonal_anomalies_from_method(ts_seasonal, method):
+    """
+    Apply the correct anomaly method depending on how the seasonal series was built.
+
+    method:
+      - "conventional" -> deseasonalize by season
+      - "rolling"      -> deseasonalize by month (still monthly timestamps)
+    """
+    if method == "conventional":
+        return deseasonalize_seasonal_series(ts_seasonal)
+
+    elif method == "rolling":
+        return deseasonalize_monthly(ts_seasonal)
+
+    else:
+        raise ValueError("method must be 'conventional' or 'rolling'")
+#-----------------------------------------------------------------------------
 def add_scalar_bias_corrected_products_to_region_clim(
     region_monthly_clim,
     reference_col=r"$P_{\mathrm{MB}}$",
@@ -4403,7 +5228,95 @@ def convert_precip_to_mm_per_month(df, unit, time_col="time", pr_col="precipitat
     out[pr_col] = out[pr_col].astype(float) * factor
     return out
 #----------------------------------------------------------------------------
+def plot_region_input_timeseries(
+    ts_input,
+    region_name,
+    method="conventional",
+    product_order=None,
+    product_styles=None,
+    title=None,
+    ylabel="Precipitation",
+    figsize=(14, 4.5),
+):
+    """
+    Plot the INPUT time series used before anomaly calculation.
 
+    Works for either:
+      - old conventional seasonal series
+      - new monthly / rolling workflow input series
+
+    Parameters
+    ----------
+    ts_input : pd.DataFrame
+        Time-indexed dataframe with product columns.
+    region_name : str
+        Region name for title.
+    method : {"conventional", "rolling", "monthly", "raw"}
+        Only used for title wording.
+    product_order : list or None
+        Order of products to plot.
+    product_styles : dict or None
+        Example:
+        {
+            "ERA5": {"color": "tab:blue", "lw": 2.0, "ls": "-"},
+            ...
+        }
+    title : str or None
+        Custom title.
+    ylabel : str
+        Y-axis label.
+    figsize : tuple
+        Figure size.
+
+    Returns
+    -------
+    fig, ax
+    """
+    ts_plot = ts_input.copy()
+    ts_plot.index = pd.to_datetime(ts_plot.index).to_period("M").to_timestamp(how="start")
+    ts_plot = ts_plot.sort_index()
+
+    if product_order is None:
+        product_order = list(ts_plot.columns)
+
+    if product_styles is None:
+        product_styles = {}
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for prod in product_order:
+        if prod not in ts_plot.columns:
+            continue
+
+        st = product_styles.get(prod, {})
+        ax.plot(
+            ts_plot.index,
+            ts_plot[prod],
+            label=prod,
+            color=st.get("color", None),
+            lw=st.get("lw", 2.0),
+            ls=st.get("ls", "-"),
+            marker=st.get("marker", None),
+            markersize=st.get("markersize", None),
+        )
+
+    ax.grid(True, alpha=0.3)
+
+    if title is None:
+        if method == "conventional":
+            title = f"{region_name} — input seasonal time series"
+        elif method in ["rolling", "monthly", "raw"]:
+            title = f"{region_name} — input monthly time series"
+        else:
+            title = f"{region_name} — input time series"
+
+    ax.set_title(title, fontsize=16, fontweight="bold")
+    ax.set_ylabel(ylabel)
+    ax.legend(frameon=False, ncol=4, loc="upper left")
+
+    plt.tight_layout()
+    return fig, ax
+#----------------------------------------------------------------------------
 def _plot_single_polar_precip_panel(
     ax,
     product_name,
@@ -4515,6 +5428,140 @@ def _plot_single_polar_precip_panel(
         label_size=11
     )
 
+#----------------------------------------------------------------------------
+def plot_region_monthly_anomaly_timeseries(
+    ts_anom,
+    region_name,
+    method="conventional",
+    product_order=None,
+    product_styles=None,
+    title=None,
+    figsize=(14, 4.8),
+):
+    """
+    Plot monthly anomaly time series.
+    """
+    ts_anom = _ensure_month_start_index(ts_anom)
+
+    if product_order is None:
+        product_order = list(ts_anom.columns)
+
+    if product_styles is None:
+        product_styles = {}
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for prod in product_order:
+        if prod not in ts_anom.columns:
+            continue
+
+        st = product_styles.get(prod, {})
+        ax.plot(
+            ts_anom.index,
+            ts_anom[prod],
+            label=prod,
+            color=st.get("color", None),
+            lw=st.get("lw", 2.0),
+            ls=st.get("ls", "-"),
+        )
+
+    ax.axhline(0, color="k", lw=0.8, alpha=0.6)
+    ax.grid(True, alpha=0.3)
+
+    if title is None:
+        if method == "conventional":
+            title = f"{region_name} — conventional monthly anomalies"
+        else:
+            title = f"{region_name} — rolling monthly anomalies"
+
+    ax.set_title(title, fontsize=16, fontweight="bold")
+    ax.set_ylabel("Precipitation anomaly")
+    ax.legend(frameon=False, ncol=4, loc="upper left")
+
+    plt.tight_layout()
+    return fig, ax
+
+#----------------------------------------------------------------------------
+
+#----------------------------------------------------------------------------
+# ============================================================================
+# PLOT SEASONAL-SERIES ANOMALIES
+# ============================================================================
+
+def plot_region_seasonal_anomaly_timeseries(
+    ts_seasonal,
+    region_name,
+    method,
+    product_order=None,
+    product_styles=None,
+    plot_trend_products=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
+    title=None,
+):
+    """
+    Plot anomaly time series for either:
+      - conventional seasonal series
+      - rolling seasonal-mean monthly series
+    """
+    product_styles = {} if product_styles is None else product_styles
+    ts_anom = seasonal_anomalies_from_method(ts_seasonal, method=method)
+
+    if product_order is None:
+        product_order = list(ts_anom.columns)
+
+    fig, ax = plt.subplots(figsize=(14, 4.5))
+
+    for prod in product_order:
+        if prod not in ts_anom.columns:
+            continue
+        st = product_styles.get(prod, {})
+        ax.plot(
+            ts_anom.index,
+            ts_anom[prod],
+            label=prod,
+            color=st.get("color", None),
+            lw=st.get("lw", 2.0),
+            ls=st.get("ls", "-"),
+        )
+
+    # trend lines
+    # for prod in plot_trend_products:
+    #     if prod not in ts_anom.columns:
+    #         continue
+
+    #     slope, p = trend_with_ar1_correction(ts_anom[prod].values, ts_anom.index)
+    #     if not np.isfinite(slope):
+    #         continue
+
+    #     t_years = (pd.to_datetime(ts_anom.index) - pd.to_datetime(ts_anom.index)[0]).days / 365.25
+    #     intercept = np.nanmean(ts_anom[prod].values)
+    #     trend_line = intercept + slope * t_years
+
+    #     st = product_styles.get(prod, {})
+    #     ax.plot(
+    #         ts_anom.index,
+    #         trend_line,
+    #         ls="--",
+    #         lw=2.0,
+    #         color=st.get("color", None),
+    #         alpha=0.95,
+    #         label=f"{prod} trend",
+    #     )
+
+    ax.axhline(0, color="k", lw=0.8, alpha=0.6)
+    ax.grid(True, alpha=0.3)
+
+    ttl = title if title is not None else f"{region_name} — {method} seasonal anomalies"
+    ax.set_title(ttl, fontsize=16, fontweight="bold")
+
+    if method == "conventional":
+        ax.set_ylabel("Seasonal anomaly")
+    else:
+        ax.set_ylabel("Rolling seasonal-mean anomaly")
+
+    ax.legend(frameon=False, ncol=4, loc="upper left")
+    plt.tight_layout()
+
+    return fig, ax, ts_anom
 #----------------------------------------------------------------------------
 def compare_mean_precip_grid_power(
     arr_lst_mean,
@@ -4828,7 +5875,6 @@ def plot_weighted_region_monthly_climatology(
     fig.tight_layout(rect=[0, 0.05, 1, 1])
 
     return fig, axes
-
 
 #-----------------------------------------------------------------------------
 def plot_region_time_series(region_data, product_cols):

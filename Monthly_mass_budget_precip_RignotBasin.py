@@ -111,7 +111,7 @@ rignot_deltaS_err = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasi
 
 # - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
 # Year window
-YEARS = np.arange(2013,2023)#[2019, 2020]
+YEARS = np.arange(2013,2021)#[2019, 2020]
 #%% - - - - - - - - - - Plot basins - - - - - - - - - - - - - - - - - - - - - - - 
 
 # Set up colormap and norm for 27 discrete basins
@@ -268,7 +268,7 @@ plt.savefig(output_path, dpi=300, bbox_inches='tight')
 
 #%% 1) Read David's Excel and compute ΔS (Gt/month) for 2013–2020
 # rignot_deltaS = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='Basin_Timeseries (Gt)')
-rignot_deltaS = pd.read_pickle(os.path.join(basin_path, 'DataCombo_RignotBasins_LI_tier1_20260226.pkl'))
+rignot_deltaS = pd.read_pickle(os.path.join(basin_path, 'DataCombo_RignotBasins_LI_tier1_20260325.pkl'))
 
 # rignot_deltaS["Date"] = rignot_deltaS["Time"].apply(decimal_year_to_date).dt.strftime('%Y-%m-%d')
 # rignot_deltaS['Date'] = pd.to_datetime(rignot_deltaS['Date'])
@@ -342,8 +342,8 @@ vals = dS_raster['basin_name'].values.ravel()
 non_nan = vals[pd.notna(vals)]
 np.unique(non_nan)
 # save to disk
-# out_flnme = os.path.join(basin_path, 'rignot_deltaS_monthly_2019_2020.nc')
-# dS_raster.to_netcdf(out_flnme)
+out_flnme = os.path.join(basin_path, f'rignot_deltaS_monthly_2013_2020_LI_gap_filled_Grace_tier1_{cde_run_dte}.nc')
+dS_raster.to_netcdf(out_flnme)
 # print(f"[David] ΔS raster saved to {out_flnme}")
 #%% 2) Read Chad's discharge & basal melt (annual Gt/yr) and spread to months
 discharge_data = pd.read_excel(os.path.join(basin_path, 'antarctic_discharge_2013-2022_imbie.xlsx'), sheet_name=['Discharge (Gt yr^-1)', 'Summary'])
@@ -556,7 +556,7 @@ encoding = {
 }
 
 # (7) Write to netCDF
-out_nc = os.path.join(racmo_path, "subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022.nc")
+out_nc = os.path.join(racmo_path, f"subltot_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022_{cde_run_dte}.nc")
 da.to_netcdf(out_nc, encoding=encoding)
 print("wrote:", out_nc)
 
@@ -574,6 +574,8 @@ subl = racmo_on_imbie.rename(time="date")
 subl = subl.assign_coords(date=pd.DatetimeIndex(subl.date.values).to_period("M").to_timestamp(how="start"))
 
 common_dates = np.intersect1d(discharge_raster.date, np.intersect1d(basal_melt_raster.date, subl.date))
+common_dates = np.intersect1d(common_dates, dS_raster.date)
+
 D  = discharge_raster.sel(date=common_dates)
 BM = basal_melt_raster.sel(date=common_dates)
 SUB = subl.sel(date=common_dates)
@@ -685,7 +687,7 @@ Pmm_ann_maps = paint_basin_series_to_grid(Pmm_basin_ann, template)  # (year, y, 
 Pmm_ann_maps.attrs.update(dict(units="mm/year", description="Annual mass-budget precipitation"))
 
 # 4) (optional) Save & quick plots
-Pmm_ann_maps.to_netcdf(os.path.join(basin_path, "Pmb_annual_2013_2022_mm.nc"))
+Pmm_ann_maps.to_netcdf(os.path.join(basin_path, f"Pmb_annual_{YEARS[0]}_{YEARS[-1]}_mm_{cde_run_dte}.nc"))
 
 # for yr in [2019, 2020]:
 #     Pmm_ann_maps.sel(year=yr).plot(
@@ -709,7 +711,7 @@ Pmm_season = Pmm.groupby('date.season').mean(dim="date")
 Pmm_season = Pmm_season.assign_coords(season=["DJF", "MAM", "JJA", "SON"])
 
 # save to disk
-Pmm_season.to_netcdf(os.path.join(basin_path, "Pmb_seasonal_mm_2013_2022.nc"))
+Pmm_season.to_netcdf(os.path.join(basin_path, f"Pmb_seasonal_mm_2013_2022_{cde_run_dte}.nc"))
 
 # make array for plot
 Pmm_season_arrs = [(f'P_MB seasonal mean — {s}', Pmm_season.sel(season=s)) for s in ["DJF", "MAM", "JJA", "SON"]]
@@ -728,3 +730,4 @@ compare_mean_precp_plot(Pmm_clim_arrs,
                         vmin=0, vmax=30, 
                         cbar_tcks=[0, 2.5, 5, 7.5,10, 15, 20, 25, 30])
 gc.collect()
+

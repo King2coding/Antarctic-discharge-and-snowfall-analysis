@@ -8,28 +8,29 @@ basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data
 #%% Floating Variables
 
 start_date = "2013-01-01"
-end_date   = "2022-12-01"
+end_date   = "2020-12-01"
 
 #%% Step A — Prepare Full Monthly State Series
 rignot_deltaS = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='Basin_Timeseries (Gt)')
 
-rignot_deltaS["Date"] = rignot_deltaS["Time"].apply(decimal_year_to_date).dt.strftime('%Y-%m-%d')
-rignot_deltaS['Date'] = pd.to_datetime(rignot_deltaS['Date'])
-rignot_deltaS["Year"] = pd.to_datetime(rignot_deltaS["Date"]).dt.year
-rignot_deltaS["Month"] = pd.to_datetime(rignot_deltaS["Date"]).dt.month
-# 1) build month-start timestamps directly
-# rignot_deltaS["date"] = rignot_deltaS["Time"].apply(
-#     lambda x: decimal_year_to_month_start(x, mode="nearest")   # or mode="floor"
-# )
+# rignot_deltaS["Date"] = rignot_deltaS["Time"].apply(decimal_year_to_date).dt.strftime('%Y-%m-%d')
+# rignot_deltaS['Date'] = pd.to_datetime(rignot_deltaS['Date'])
+# rignot_deltaS["Year"] = pd.to_datetime(rignot_deltaS["Date"]).dt.year
+# rignot_deltaS["Month"] = pd.to_datetime(rignot_deltaS["Date"]).dt.month
 
-# # 2) derive Year/Month from the date (robust)
-# rignot_deltaS["Year"]  = rignot_deltaS["date"].dt.year
-# rignot_deltaS["Month"] = rignot_deltaS["date"].dt.month
+# 1) build month-start timestamps directly
+rignot_deltaS["date"] = rignot_deltaS["Time"].apply(
+    lambda x: decimal_year_to_month_start(x, mode="nearest")   # or mode="floor"
+)
+
+# 2) derive Year/Month from the date (robust)
+rignot_deltaS["Year"]  = rignot_deltaS["date"].dt.year
+rignot_deltaS["Month"] = rignot_deltaS["date"].dt.month
 
 basin_cols = [c for c in rignot_deltaS.columns if c not in ("Time","date","Year","Month")]
 
 # ---------------------------------------------------------
-# FULL MONTHLY STATE SERIES (2013–2022)
+# FULL MONTHLY STATE SERIES (2013–2020)
 # ---------------------------------------------------------
 
 full_index = pd.date_range(start=start_date, end=end_date, freq="MS")
@@ -71,8 +72,8 @@ for basin in basin_cols:
     deseason = series - series.index.month.map(climatology)
 
     # Linear interpolation (only inside bounds)
-    # deseason_interp = deseason.interpolate(method="linear", limit_area="inside")
-    deseason_interp = deseason.interpolate(method="linear", limit_direction="both")
+    deseason_interp = deseason.interpolate(method="linear", limit_area="inside")
+    # deseason_interp = deseason.interpolate(method="linear", limit_direction="both")
 
     # Add seasonal cycle back
     S_tier1[basin] = deseason_interp + deseason_interp.index.month.map(climatology)
@@ -133,6 +134,33 @@ dS_tier2 = S_tier2.diff().dropna()
 #%% Visual Comparison of Tiers
 test_basins = ["H-Hp", "Ep-f", "A-Ap", "Jpp-K", "C-Cp", "I-Ipp"]  # example names
 for basin in test_basins:
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+
+    # -------- Panel 1: State --------
+    axes[0].plot(S_full.index, S_full[basin], color= 'k', ls = '--', lw = 4, label="Observed", markersize=8)
+    axes[0].plot(S_tier1.index, S_tier1[basin], label="Tier 1 (Interp)",color = 'tab:blue')
+    axes[0].plot(S_tier2.index, S_tier2[basin], label="Tier 2 (Harmonic)", color='tab:orange')
+    axes[0].set_ylabel("Mass Anomaly (Gt)")
+    axes[0].set_title(f"GRACE State Reconstruction — {basin}")
+    axes[0].legend()
+
+    # -------- Panel 2: ΔS --------
+    dS_obs = S_full[basin].diff()
+
+    axes[1].plot(dS_obs.index, dS_obs, color='k', ls = '--', lw = 4, label="Observed ΔS", markersize=8)
+    axes[1].plot(dS_tier1.index, dS_tier1[basin], label="Tier 1 ΔS", color='tab:blue')
+    axes[1].plot(dS_tier2.index, dS_tier2[basin], label="Tier 2 ΔS", color='tab:orange')
+    axes[1].set_ylabel("ΔS (Gt/month)")
+    # axes[1].legend()
+
+    plt.tight_layout()
+    plt.show()
+
+#%%
+#%% Visual Comparison of Tiers: EAIS version
+eais_basins = ["A-Ap", "Ap-B", "B-C", "C-Cp", "Cp-D", "D-Dp", "Dp-E", "E-Ep", "Jpp-K", "K-A"]  # example names
+for basin in eais_basins:
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
 

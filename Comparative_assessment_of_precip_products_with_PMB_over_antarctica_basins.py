@@ -46,43 +46,6 @@ cde_run_dte = str(date.today().strftime('%Y%m%d'))
 # id2name must already exist, e.g.
 # id2name = {1: "F-G", 2: "A-Ap", 3: "Ap-B", 4: "B-C", ...}
 
-name2id = {v: k for k, v in id2name.items()}
-
-# --- Region definitions in terms of basin NAMES ---
-
-# West Antarctica proper (RACMO R24)
-wais_core_names = ["H-Hp", "J-Jpp", "G-H", "F-G", "Ep-F"]
-
-# Antarctic Peninsula (RACMO R24) – here we MERGE into WAIS for the 1×4 plot
-ap_names = ["I-Ipp", "Ipp-J", "Hp-I"]
-
-wais_all_names = wais_core_names + ap_names
-
-# East Antarctica = all remaining IMBIE basins (EAIS)
-eais_names = [nm for nm in id2name.values() if nm not in wais_all_names]
-
-# Inland: basins dominated by the interior plateau (approximation)
-inland_names = ["Jpp-K", "K-A", "A-Ap", "Ap-B"]
-
-# Safety: keep inland subset of EAIS
-inland_names = [nm for nm in inland_names if nm in eais_names]
-
-# --- Convert names → IDs ---
-
-WAIS_IDS   = [name2id[nm] for nm in wais_all_names]
-EAIS_IDS   = [name2id[nm] for nm in eais_names]
-INLAND_IDS = [name2id[nm] for nm in inland_names]
-
-print("WAIS basin IDs:", WAIS_IDS)
-print("EAIS basin IDs:", EAIS_IDS)
-print("Inland basin IDs:", INLAND_IDS)
-
-# ---- Region definitions (from our agreed mapping) ----
-REGION_DEFS = [
-    ("Antarctica",      [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
-    ("West Antarctica", [13, 17, 12, 11, 10, 15, 16, 14]),
-    ("East Antarctica", [2, 3, 4, 5, 6, 7, 8, 9, 18, 19]),
-]
 #----------------------------------------------------------------------------------
 
 product_order_corr = [
