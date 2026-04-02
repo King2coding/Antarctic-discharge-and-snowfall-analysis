@@ -6242,7 +6242,7 @@ def plot_weighted_region_monthly_climatology(
         ax.grid(True, alpha=0.3)
         ax.set_xlim(1, 12)
         ax.set_xticks(np.arange(1, 13))
-        ax.set_xticklabels(month_labels, fontsize=14)
+        ax.set_xticklabels(month_labels, fontsize=15)
 
     fig.supylabel(ylabel, fontsize=16, fontweight="bold")
 
@@ -6252,7 +6252,7 @@ def plot_weighted_region_monthly_climatology(
         loc="lower center",
         ncol=min(len(legend_labels), 5),
         frameon=False,
-        fontsize=12,
+        fontsize=15,
         bbox_to_anchor=(0.5, -0.03)
     )
 

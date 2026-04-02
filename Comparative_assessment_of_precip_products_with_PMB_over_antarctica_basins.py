@@ -378,7 +378,7 @@ racmo_pr_annual_mean, racmo_pr_seasonal_mean, racmo_pr_b_mean = process_precipit
 racmo_basin_mnth_mean = racmo_pr_b_mean.to_dataframe().reset_index()
 racmo_basin_mnth_mean['year'] = racmo_basin_mnth_mean['time'].dt.year
 racmo_basin_mnth_mean['month'] = racmo_basin_mnth_mean['time'].dt.month
-racmo_basin_mnth_mean = racmo_basin_mnth_mean.groupby(['year','month','basin'])['pr'].sum().reset_index()
+racmo_basin_mnth_mean = racmo_basin_mnth_mean.groupby(['year','month','basin'])['precipitation'].sum().reset_index()
 racmo_basin_mnth_mean['time'] = pd.to_datetime(dict(year=racmo_basin_mnth_mean['year'], month=racmo_basin_mnth_mean['month'], day=1))
 racmo_mnth_mean = racmo_basin_mnth_mean[racmo_basin_mnth_mean['year'].isin(YEARS)].copy()
 # racmo_pr_annual_mean = racmo_pr_annual_mean * 365
@@ -496,60 +496,6 @@ amsr2_annual_mean_mean = amsr2_annual_mean_mean.mean(dim='year')
 
 gpm_sat_annual_mean_mean = gpm_sat_annual_mean.sel(year=slice(2013,2020)).copy()
 gpm_sat_annual_mean_mean = gpm_sat_annual_mean_mean.mean(dim='year')
-
-
-#----------------------------------------------------------------------------------
-era5_mm = convert_precip_to_mm_per_month(era5_basin_mean, unit="mm/day")
-era5_mm = era5_mm[era5_mm['year'].isin(YEARS)].copy()
-
-gpcpv33_mm = convert_precip_to_mm_per_month(gpcpv3pt3_basin_mean, unit="mm/day")
-gpcpv33_mm = gpcpv33_mm[gpcpv33_mm['year'].isin(YEARS)].copy()
-
-atms_mm = convert_precip_to_mm_per_month(atms_basin_mean, unit="mm/hr")
-atms_mm = atms_mm[atms_mm['year'].isin(YEARS)].copy()
-
-mhs_mm = convert_precip_to_mm_per_month(mhs_basin_mean, unit="mm/hr")
-mhs_mm = mhs_mm[mhs_mm['year'].isin(YEARS)].copy()
-
-dmsp_ssmis_mm = convert_precip_to_mm_per_month(dmsp_ssmis_basin_mean, unit="mm/hr")
-dmsp_ssmis_mm = dmsp_ssmis_mm[dmsp_ssmis_mm['year'].isin(YEARS)].copy()
-
-amsr2_mm = convert_precip_to_mm_per_month(amsr2_basin_mean, unit="mm/hr")
-amsr2_mm = amsr2_mm[amsr2_mm['year'].isin(YEARS)].copy()
-
-gpm_sat_mm = convert_precip_to_mm_per_month(gpm_sat_basin_mean, unit="mm/hr")
-gpm_sat_mm = gpm_sat_mm[gpm_sat_mm['year'].isin(YEARS)].copy()
-
-pmb_mm = convert_precip_to_mm_per_month(
-        p_mm_mean_df.rename(columns={"basin_id": "basin", "precip_mm_per_month": "precipitation"}),
-        unit="mm/month",
-    )
-
-# do seasonal mean
-
-
-common_year_mnth_idx = (
-    get_unique_year_month_index(era5_mm)
-    .intersection(get_unique_year_month_index(gpcpv33_mm))
-    .intersection(get_unique_year_month_index(atms_mm))
-    .intersection(get_unique_year_month_index(mhs_mm))
-    .intersection(get_unique_year_month_index(dmsp_ssmis_mm))
-    .intersection(get_unique_year_month_index(amsr2_mm))
-    .intersection(get_unique_year_month_index(gpm_sat_mm))
-    .intersection(get_unique_year_month_index(pmb_mm))
-)
-
-era5_mm       = subset_to_common_year_month(era5_mm, common_year_mnth_idx)
-gpcpv33_mm    = subset_to_common_year_month(gpcpv33_mm, common_year_mnth_idx)
-atms_mm       = subset_to_common_year_month(atms_mm, common_year_mnth_idx)
-mhs_mm        = subset_to_common_year_month(mhs_mm, common_year_mnth_idx)
-dmsp_ssmis_mm = subset_to_common_year_month(dmsp_ssmis_mm, common_year_mnth_idx)
-amsr2_mm      = subset_to_common_year_month(amsr2_mm, common_year_mnth_idx)
-gpm_sat_mm    = subset_to_common_year_month(gpm_sat_mm, common_year_mnth_idx)
-pmb_mm        = subset_to_common_year_month(pmb_mm, common_year_mnth_idx)
-
-# align the dates by the coomon year months
-
 
 monthly_df_data_mmmonth = {
     r"$P_{\mathrm{MB}}$": p_mnth_mean_df,
@@ -673,22 +619,22 @@ product_order = [
 ]
 
 product_styles = {
-    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.0},
-    "ERA5": {"color": "tab:blue", "marker": "s", "lw": 1.8},
-    "GPCP v3.3": {"color": "tab:orange", "marker": "D", "lw": 1.8},
+    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 3.5},
+    "ERA5": {"color": "tab:blue", "marker": "s", "lw": 3.5},
+    "GPCP v3.3": {"color": "tab:orange", "marker": "D", "lw": 3.5},
     # "RACMO 2.4p1": {"color": "tab:green", "marker": "^", "lw": 1.8},
     # "ATMS": {"lw": 1.5},
     # "MHS": {"lw": 1.5},
     # "DMSP SSMIS": {"lw": 1.5},
     # "AMSR2": {"lw": 1.5},
-    "GPM PMW V07": {"lw": 1.5},
+    "GPM PMW V07": {"lw": 3.5},
 }
 
 fig, axes = plot_weighted_region_monthly_climatology(
     region_monthly_clim,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
     product_order=product_order,
-    product_styles=product_styles,
+    product_styles=product_styles_corr,
     ylabel="Precipitation [mm/month]",
     figsize=(10, 10),
 )

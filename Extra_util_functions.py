@@ -1,7 +1,7 @@
 import math
 import pandas as pd
 import matplotlib.pyplot as plt
-
+from scipy.io import loadmat
 def make_basin_annual_from_monthly_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     Input df columns expected:
@@ -318,3 +318,308 @@ def plot_basin_metric_ranked(
 
     plt.tight_layout()
     return fig, ax
+
+
+    import math
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.colors import BoundaryNorm, LogNorm, PowerNorm
+from matplotlib.cm import ScalarMappable
+import cartopy.crs as ccrs
+
+
+def plot_antarctic_precip_dual_discrete(
+    arr_lst,
+    basins_da=None,
+    basin_label_ids=True,
+    basin_id_offsets=None,
+    extent=(-180, 180, -90, -60),
+    figsize=(12, 6),
+    dpi=300,
+    cmap="Spectral_r",
+    levels=None,
+    norm_type="log",         # "log", "power", or "linear"
+    gamma=0.6,               # used if norm_type="power"
+    vmin=None,
+    vmax=None,
+    cbar_ticks=None,
+    cbar_label="mm/year",
+    title_fontsize=14,
+    label_fontsize=12,
+    basin_linecolor="gray",
+    basin_linewidth=0.7,
+    panel_letters=False,
+    letter_fontsize=14,
+    show_panel_mean=True,
+    mean_xy=(0.04, 0.96),
+    mean_fontsize=12,
+    mean_fmt="{:.0f}",
+    mean_box_alpha=0.70,
+    add_coastline=False,
+    facecolor="white",
+):
+    """
+    Plot side-by-side Antarctic polar precipitation maps with:
+      - discrete colormap
+      - discrete colorbar
+      - optional log / power / linear normalization
+      - optional basin boundaries + basin IDs
+
+    Parameters
+    ----------
+    arr_lst : list of tuples
+        [(title, dataarray), ...]
+        Each dataarray should already be 2D with lat/lon coords or x/y coords.
+    basins_da : xarray.DataArray, optional
+        Basin mask on SouthPolarStereo x/y grid (e.g. IMBIE basins).
+        Used for boundaries and basin labels.
+    basin_label_ids : bool
+        Whether to annotate basin IDs.
+    basin_id_offsets : dict, optional
+        Offsets for small basins, e.g. {11: (-4e5, -1e5), ...}
+    levels : sequence, optional
+        Discrete colorbar bin edges. Example:
+        [1, 5, 10, 20, 40, 80, 120, 160, 220, 300]
+    norm_type : str
+        "log", "power", or "linear"
+    """
+
+    if len(arr_lst) == 0:
+        raise ValueError("arr_lst is empty.")
+
+    proj = ccrs.SouthPolarStereo()
+    pc = ccrs.PlateCarree()
+    n = len(arr_lst)
+
+    if levels is None:
+        raise ValueError("Please provide discrete `levels` for the precipitation bins.")
+
+    levels = np.asarray(levels, dtype=float)
+    if np.any(np.diff(levels) <= 0):
+        raise ValueError("`levels` must be strictly increasing.")
+
+    if vmin is None:
+        vmin = levels[0]
+    if vmax is None:
+        vmax = levels[-1]
+
+    cmap_obj = plt.get_cmap(cmap, len(levels) - 1)
+    cmap_disc = mcolors.ListedColormap(cmap_obj(np.arange(cmap_obj.N)))
+    cmap_disc.set_bad("white")
+
+    # ---- norm ----
+    if norm_type == "log":
+        if vmin <= 0:
+            raise ValueError("For norm_type='log', vmin must be > 0.")
+        base_norm = LogNorm(vmin=vmin, vmax=vmax)
+    elif norm_type == "power":
+        base_norm = PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax)
+    elif norm_type == "linear":
+        base_norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    else:
+        raise ValueError("norm_type must be one of: 'log', 'power', 'linear'")
+
+    # discrete bins mapped through the chosen scaling
+    level_positions = base_norm(levels)
+    norm_disc = BoundaryNorm(level_positions, cmap_disc.N, clip=True)
+
+    ncols = n
+    fig, axes = plt.subplots(
+        1, ncols,
+        figsize=figsize,
+        dpi=dpi,
+        subplot_kw={"projection": proj}
+    )
+    axes = np.atleast_1d(axes).ravel()
+
+    fig.subplots_adjust(left=0.03, right=0.90, bottom=0.08, top=0.92, wspace=0.03)
+
+    letters = list("abcdefghijklmnopqrstuvwxyz")
+    basin_id_offsets = {} if basin_id_offsets is None else basin_id_offsets
+
+    for i, (ax, (title, da)) in enumerate(zip(axes, arr_lst)):
+        ax.set_extent(extent, crs=pc)
+        ax.set_facecolor(facecolor)
+
+        # ---- choose transform based on coords ----
+        if {"latitude", "longitude"}.issubset(set(da.coords)):
+            x = da["longitude"].values
+            y = da["latitude"].values
+            transform = pc
+        elif {"lat", "lon"}.issubset(set(da.coords)):
+            x = da["lon"].values
+            y = da["lat"].values
+            transform = pc
+        elif {"x", "y"}.issubset(set(da.coords)):
+            x = da["x"].values
+            y = da["y"].values
+            transform = proj
+        else:
+            raise ValueError(
+                f"Could not determine coordinates for panel '{title}'. "
+                "Expected coords like (lat, lon), (latitude, longitude), or (x, y)."
+            )
+
+        arr = da.values.astype(float)
+        arr = np.where(arr <= 0, np.nan, arr) if norm_type == "log" else arr
+
+        # map scaled values to discrete bins
+        scaled_arr = base_norm(arr)
+
+        ax.pcolormesh(
+            x, y, scaled_arr,
+            cmap=cmap_disc,
+            norm=norm_disc,
+            shading="auto",
+            transform=transform,
+            zorder=1,
+        )
+
+        if add_coastline:
+            ax.coastlines(linewidth=0.5, color="black")
+
+        # ---- basin boundaries ----
+        if basins_da is not None:
+            bda = basins_da
+            if "band" in bda.dims:
+                bda = bda.isel(band=0)
+
+            bvals = bda.fillna(0).values
+            bx = bda["x"].values
+            by = bda["y"].values
+
+            boundary_levels = np.arange(0.5, np.nanmax(bvals) + 0.5, 1.0)
+
+            ax.contour(
+                bx, by, bvals,
+                levels=boundary_levels,
+                colors=basin_linecolor,
+                linewidths=basin_linewidth,
+                transform=proj,
+                zorder=5,
+            )
+
+            # ---- basin labels ----
+            if basin_label_ids:
+                max_basin = int(np.nanmax(bvals))
+                for basin_id in range(1, max_basin + 1):
+                    mask = (bda == basin_id)
+                    yy, xx = np.where(mask.values)
+                    if len(xx) == 0:
+                        continue
+
+                    cx = bx[xx].mean()
+                    cy = by[yy].mean()
+                    label = str(basin_id)
+
+                    if basin_id in basin_id_offsets:
+                        dx, dy = basin_id_offsets[basin_id]
+                        lx, ly = cx + dx, cy + dy
+                        ax.annotate(
+                            label,
+                            xy=(cx, cy),
+                            xytext=(lx, ly),
+                            textcoords="data",
+                            xycoords="data",
+                            ha="center",
+                            va="center",
+                            fontsize=label_fontsize,
+                            transform=proj,
+                            arrowprops=dict(
+                                arrowstyle="-",
+                                lw=0.8,
+                                color=basin_linecolor
+                            ),
+                            bbox=dict(
+                                boxstyle="round,pad=0.2",
+                                fc="white",
+                                ec="none",
+                                alpha=0.75
+                            ),
+                            zorder=8,
+                        )
+                    else:
+                        ax.text(
+                            cx, cy, label,
+                            color="black",
+                            fontsize=label_fontsize,
+                            ha="center",
+                            va="center",
+                            transform=proj,
+                            zorder=8,
+                            bbox=dict(
+                                boxstyle="round,pad=0.2",
+                                fc="white",
+                                ec="none",
+                                alpha=0.65
+                            ),
+                        )
+
+        # ---- panel title ----
+        ax.set_title(title, fontsize=title_fontsize, fontweight="bold", pad=10)
+
+        # ---- panel letter ----
+        if panel_letters and i < len(letters):
+            ax.text(
+                0.02, 0.98, f"({letters[i]})",
+                transform=ax.transAxes,
+                ha="left", va="top",
+                fontsize=letter_fontsize,
+                fontweight="bold",
+                bbox=dict(
+                    boxstyle="round,pad=0.18",
+                    facecolor="white",
+                    edgecolor="none",
+                    alpha=0.70
+                ),
+                zorder=20,
+            )
+
+        # ---- panel mean ----
+        if show_panel_mean:
+            panel_mean = float(np.nanmean(arr))
+            ax.text(
+                mean_xy[0], mean_xy[1],
+                f"Mean = {mean_fmt.format(panel_mean)}",
+                transform=ax.transAxes,
+                ha="left", va="top",
+                fontsize=mean_fontsize,
+                fontweight="bold",
+                color="black",
+                bbox=dict(
+                    boxstyle="round,pad=0.20",
+                    facecolor="white",
+                    edgecolor="none",
+                    alpha=mean_box_alpha
+                ),
+                zorder=20,
+            )
+
+        ax.axis("off")
+
+    # ---- discrete colorbar ----
+    cax = fig.add_axes([0.92, 0.18, 0.018, 0.62])
+    sm = ScalarMappable(norm=norm_disc, cmap=cmap_disc)
+    sm.set_array([])
+
+    cb = fig.colorbar(
+        sm,
+        cax=cax,
+        orientation="vertical",
+        boundaries=level_positions,
+        spacing="proportional",
+    )
+
+    if cbar_ticks is None:
+        tick_vals = levels
+    else:
+        tick_vals = np.asarray(cbar_ticks, dtype=float)
+
+    cb.set_ticks(base_norm(tick_vals))
+    cb.set_ticklabels([f"{t:g}" for t in tick_vals])
+    cb.ax.tick_params(labelsize=11)
+    cb.ax.minorticks_off()
+    cb.ax.set_title(cbar_label, fontsize=12, pad=10)
+
+    return fig, axes, cb
