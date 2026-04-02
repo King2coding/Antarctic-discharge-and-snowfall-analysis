@@ -467,6 +467,7 @@ ts_ais_raw = build_region_monthly_series(
 # APPROACH A: conventional seasonal anomaly
 # ============================================================
 
+# EAIS
 ts_eais_seasonal_conv = build_conventional_seasonal_series_from_region_monthly(
     ts_region_monthly=ts_eais_raw,
     seasonal_mode="mean",
@@ -508,16 +509,94 @@ plot_anomaly_scatter_single(
     ts_eais_seasonal_conv_anom,
     ref_col=r"ERA5",
     target_col="GPCP v3.3",
-    method="conventional",
+    method="seasonal_clim_monthly",
     compute_anomaly_inside=True,
     ax=None,
     title=None,
     xlabel=None,
     ylabel=None,
-    lims=None,
+    lims=[-2, 2],
     equal_axes=True,
     marker_size=18,
     alpha=0.75,
+)
+
+#-------------------------------------------------------------------------------------------------------
+# WAIS
+ts_wais_seasonal_conv = build_conventional_seasonal_series_from_region_monthly(
+    ts_region_monthly=ts_wais_raw,
+    seasonal_mode="mean",
+    drop_incomplete=True,
+)
+
+ts_wais_seasonal_conv_anom = deseasonalize_seasonal_series(ts_wais_seasonal_conv)
+
+fig, ax = plot_region_input_timeseries(
+    ts_input=ts_wais_seasonal_conv,
+    region_name="West Antarctica",
+    method="conventional",
+    product_order=product_order,
+    product_styles=product_styles_corr,
+    title="WAIS — conventional seasonal input",
+    ylabel="Precipitation [mm/month]",
+)
+
+fig, ax, _ = plot_region_seasonal_anomaly_timeseries(
+    ts_seasonal=ts_wais_seasonal_conv,
+    region_name="West Antarctica",
+    method="conventional",
+    product_order=product_order,
+    product_styles=product_styles_corr,
+    title="WAIS — conventional seasonal anomalies",
+)
+fig, axes, stats_dict, df_used = plot_anomaly_scatter_multi_product(
+    df_in=ts_wais_seasonal_conv_anom,
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=["ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM Satellites"],
+    compute_anomaly_inside=False,
+    ncols=3,
+    region_name="West Antarctica",
+    share_lims=False,
+    lims=[-10, 10],
+)
+
+#-------------------------------------------------------------------------------------------------------
+# AIS
+ts_ais_seasonal_conv = build_conventional_seasonal_series_from_region_monthly(
+    ts_region_monthly=ts_ais_raw,
+    seasonal_mode="mean",
+    drop_incomplete=True,
+)
+ts_ais_seasonal_conv_anom = deseasonalize_seasonal_series(ts_ais_seasonal_conv)
+
+fig, ax = plot_region_input_timeseries(
+    ts_input=ts_ais_seasonal_conv,
+    region_name="Antarctica",
+    method="conventional",
+    product_order=product_order,
+    product_styles=product_styles_corr,
+    title="AIS — conventional seasonal input",
+    ylabel="Precipitation [mm/month]",
+)
+
+fig, ax, _ = plot_region_seasonal_anomaly_timeseries(
+    ts_seasonal=ts_ais_seasonal_conv,
+    region_name="Antarctica",
+    method="conventional",
+    product_order=product_order,
+    product_styles=product_styles_corr,
+    title="AIS — conventional seasonal anomalies",
+)
+
+fig, axes, stats_dict, df_used = plot_anomaly_scatter_multi_product(
+    df_in=ts_ais_seasonal_conv_anom,
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=["ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM Satellites"],
+    compute_anomaly_inside=False,
+    ncols=3,
+    region_name="Antarctica",
+    share_lims=False,
+    lims=[-3, 3],
 )
 
 #%% ============================================================

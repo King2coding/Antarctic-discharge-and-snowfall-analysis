@@ -52,16 +52,16 @@ product_order_corr = [
     r"$P_{\mathrm{MB}}$",
     "ERA5",
     "GPCP v3.3",
-    "ATMS",
-    "ATMS (corr.)",
-    "MHS",
-    "MHS (corr.)",
-    "DMSP SSMIS",
-    "DMSP SSMIS (corr.)",
-    "AMSR2",
-    "AMSR2 (corr.)",
-    "GPM Satellites",
-    "GPM Satellites (corr.)",
+    # "ATMS",
+    # "ATMS (corr.)",
+    # "MHS",
+    # "MHS (corr.)",
+    # "DMSP SSMIS",
+    # "DMSP SSMIS (corr.)",
+    # "AMSR2",
+    # "AMSR2 (corr.)",   
+    "GPM PMW V07 (corr.)",
+    "GPM PMW V07",
 ]
 
 product_styles_corr = {
@@ -82,16 +82,16 @@ product_styles_corr = {
     "AMSR2": {"color": "red", "lw": 1.5},
     "AMSR2 (corr.)": {"color": "red", "ls": "--", "lw": 2},
 
-    "GPM Satellites": {"color": "cyan", "lw": 1.5},
-    "GPM Satellites (corr.)": {"color": "cyan", "ls": "--", "lw": 2},
+    "GPM PMW V07": {"color": "cyan", "lw": 3.5},
+    "GPM PMW V07 (corr.)": {"color": "cyan", "ls": "--", "lw": 3.5},
 }
 
 corr_targets = [
-    "ATMS",
-    "MHS",
-    "DMSP SSMIS",
-    "AMSR2",
-    "GPM Satellites",
+    # "ATMS",
+    # "MHS",
+    # "DMSP SSMIS",
+    # "AMSR2",
+    "GPM PMW V07",
 ]
 
 product_order = [
@@ -103,7 +103,7 @@ product_order = [
     "MHS",
     "DMSP SSMIS",
     "AMSR2",
-    "GPM Satellites",
+    "GPM PMW V07",
 ]
 
 product_styles = {
@@ -115,7 +115,7 @@ product_styles = {
     "MHS": {"lw": 1.5},
     "DMSP SSMIS": {"lw": 1.5},
     "AMSR2": {"lw": 1.5},
-    "GPM Satellites": {"lw": 1.5},
+    "GPM PMW V07": {"lw": 1.5},
 }
 
 #----------------------------------------------------------------------------------
@@ -275,6 +275,10 @@ basin_weights = compute_basin_area_weights_from_mask(
     basins,
     basin_ids=all_basin_ids
 )
+
+
+basin_weights_ = dict(zip(basin_weights["basin"].astype(int),
+                         basin_weights["weight_global"].astype(float)))
 #%%
 Pmb_mm_fle = os.path.join(basins_path, 'Monthly_mass_budget_precip_RignotBasin_in_mm_20260226.nc')
 # 'Monthly_mass_budget_precip_RignotBasin_in_mm.nc'
@@ -288,7 +292,10 @@ p_mm_df['month'] = p_mm_df['date'].dt.month
 p_mm_mean_df = p_mm_df.groupby(['year','month','basin_id'])['precip_mm_per_month'].mean().reset_index()
 p_mm_mean_df['time'] = pd.to_datetime(dict(year=p_mm_mean_df['year'], month=p_mm_mean_df['month'], day=1))
 p_mm_mean_df['basin_id'] = p_mm_mean_df['basin_id'].astype(int)
-
+p_mnth_mean_df = p_mm_mean_df[p_mm_mean_df['year'].isin(YEARS)].copy()
+p_mnth_mean_df.rename(columns={'basin_id': 'basin',
+                               'precip_mm_per_month': 'precipitation'}, 
+                               inplace=True)
 Pmb_annual = xr.open_dataarray(os.path.join(basins_path, "Pmb_annual_2013_2022_mm.nc"))
 Pmb_seasonal = xr.open_dataarray(os.path.join(basins_path, "Pmb_seasonal_mm_2013_2022.nc"))
 img_fle_lst = sorted([os.path.join(imerg_basin_path, x) for x in os.listdir(imerg_basin_path) if 'imbie_basin' in x])
@@ -334,9 +341,11 @@ era5_basin_mean['year'] = era5_basin_mean['time'].dt.year
 era5_basin_mean['month'] = era5_basin_mean['time'].dt.month
 
 era5_basin_mnth_mean = era5_basin_mean.groupby(['year','month','basin'])['precipitation'].sum().reset_index()
+# era5_basin_mnth_mean = era5_basin_mean.groupby(['year','month','basin'])['precipitation'].mean().reset_index()
+
 era5_basin_mnth_mean['time'] = pd.to_datetime(dict(year=era5_basin_mnth_mean['year'], month=era5_basin_mnth_mean['month'], day=1))
-
-
+era5_mnth_mean = era5_basin_mnth_mean[era5_basin_mnth_mean['year'].isin(YEARS)].copy()
+# era5_mnth_mean['precipitation'] = era5_mnth_mean['precipitation'] * 30
 gc.collect()
 
 
@@ -356,7 +365,7 @@ gpcpv3pt3_basin_mean['month'] = gpcpv3pt3_basin_mean['time'].dt.month
 
 gpcpv3pt3_basin_mnth_mean = gpcpv3pt3_basin_mean.groupby(['year','month','basin'])['precipitation'].sum().reset_index()
 gpcpv3pt3_basin_mnth_mean['time'] = pd.to_datetime(dict(year=gpcpv3pt3_basin_mnth_mean['year'], month=gpcpv3pt3_basin_mnth_mean['month'], day=1))
-
+gpcpv3pt3_mnth_mean = gpcpv3pt3_basin_mnth_mean[gpcpv3pt3_basin_mnth_mean['year'].isin(YEARS)].copy()
 
 gc.collect()
 
@@ -369,6 +378,9 @@ racmo_pr_annual_mean, racmo_pr_seasonal_mean, racmo_pr_b_mean = process_precipit
 racmo_basin_mnth_mean = racmo_pr_b_mean.to_dataframe().reset_index()
 racmo_basin_mnth_mean['year'] = racmo_basin_mnth_mean['time'].dt.year
 racmo_basin_mnth_mean['month'] = racmo_basin_mnth_mean['time'].dt.month
+racmo_basin_mnth_mean = racmo_basin_mnth_mean.groupby(['year','month','basin'])['pr'].sum().reset_index()
+racmo_basin_mnth_mean['time'] = pd.to_datetime(dict(year=racmo_basin_mnth_mean['year'], month=racmo_basin_mnth_mean['month'], day=1))
+racmo_mnth_mean = racmo_basin_mnth_mean[racmo_basin_mnth_mean['year'].isin(YEARS)].copy()
 # racmo_pr_annual_mean = racmo_pr_annual_mean * 365
 gc.collect()
 
@@ -388,6 +400,7 @@ atms_basin_mean['month'] = atms_basin_mean['time'].dt.month
 
 atms_basin_mnth_mean = atms_basin_mean.groupby(['year','month','basin'])['precipitation'].sum().reset_index()
 atms_basin_mnth_mean['time'] = pd.to_datetime(dict(year=atms_basin_mnth_mean['year'], month=atms_basin_mnth_mean['month'], day=1))
+atms_mnth_mean = atms_basin_mnth_mean[atms_basin_mnth_mean['year'].isin(YEARS)].copy()
 gc.collect()
 
 print('Processing MHS data')
@@ -403,7 +416,7 @@ mhs_basin_mean['month'] = mhs_basin_mean['time'].dt.month
 
 mhs_basin_mnth_mean = mhs_basin_mean.groupby(['year','month','basin'])['precipitation'].sum().reset_index()
 mhs_basin_mnth_mean['time'] = pd.to_datetime(dict(year=mhs_basin_mnth_mean['year'], month=mhs_basin_mnth_mean['month'], day=1))
-
+mhs_mnth_mean = mhs_basin_mnth_mean[mhs_basin_mnth_mean['year'].isin(YEARS)].copy()
 gc.collect()
 
 print('Processing DMSP-SSMIS data')
@@ -419,7 +432,7 @@ dmsp_ssmis_basin_mean['month'] = dmsp_ssmis_basin_mean['time'].dt.month
 
 dmsp_ssmis_basin_mnth_mean = dmsp_ssmis_basin_mean.groupby(['year','month','basin'])['precipitation'].sum().reset_index()
 dmsp_ssmis_basin_mnth_mean['time'] = pd.to_datetime(dict(year=dmsp_ssmis_basin_mnth_mean['year'], month=dmsp_ssmis_basin_mnth_mean['month'], day=1))
-
+dmsp_ssmis_mnth_mean = dmsp_ssmis_basin_mnth_mean[dmsp_ssmis_basin_mnth_mean['year'].isin(YEARS)].copy()
 gc.collect()
 
 print('Processing AMSR2 data')
@@ -435,7 +448,7 @@ amsr2_basin_mean['month'] = amsr2_basin_mean['time'].dt.month
 
 amsr2_basin_mnth_mean = amsr2_basin_mean.groupby(['year','month','basin'])['precipitation'].sum().reset_index()
 amsr2_basin_mnth_mean['time'] = pd.to_datetime(dict(year=amsr2_basin_mnth_mean['year'], month=amsr2_basin_mnth_mean['month'], day=1))
-
+amsr2_mnth_mean = amsr2_basin_mnth_mean[amsr2_basin_mnth_mean['year'].isin(YEARS)].copy()
 gc.collect()
 
 print('Processing Mean GPM Satellite Data')
@@ -452,20 +465,127 @@ gpm_sat_basin_mean['month'] = gpm_sat_basin_mean['time'].dt.month
 
 gpm_sat_basin_mnth_mean = gpm_sat_basin_mean.groupby(['year','month','basin'])['precipitation'].sum().reset_index()
 gpm_sat_basin_mnth_mean['time'] = pd.to_datetime(dict(year=gpm_sat_basin_mnth_mean['year'], month=gpm_sat_basin_mnth_mean['month'], day=1))
-
+gpm_sat_mnth_mean = gpm_sat_basin_mnth_mean[gpm_sat_basin_mnth_mean['year'].isin(YEARS)].copy()
 gc.collect()
 
 
 #----------------------------------------------------------------------------------
-Pmb_annual_mean = Pmb_annual.mean(dim='year')
-era5_annual_mean_mean = era5_annual_mean.mean(dim='year')
-gpcpv3pt3_annual_mean_mean = gpcpv3pt3_annual_mean.mean(dim='year')
-racmo_pr_annual_mean_mean = racmo_pr_annual_mean.mean(dim='year')
-atms_annual_mean_mean = atms_annual_mean.mean(dim='year')
-mhs_annual_mean_mean = mhs_annual_mean.mean(dim='year')
-dmsp_ssmis_annual_mean_mean = dmsp_ssmis_annual_mean.mean(dim='year')
-amsr2_annual_mean_mean = amsr2_annual_mean.mean(dim='year')
-gpm_sat_annual_mean_mean = gpm_sat_annual_mean.mean(dim='year')
+Pmb_annual_mean = Pmb_annual.sel(year=slice(2013,2020)).copy()
+Pmb_annual_mean = Pmb_annual_mean.mean(dim='year')
+
+era5_annual_mean_mean = era5_annual_mean.sel(year=slice(2013,2020)).copy()
+era5_annual_mean_mean = era5_annual_mean_mean.mean(dim='year')
+
+gpcpv3pt3_annual_mean_mean = gpcpv3pt3_annual_mean.sel(year=slice(2013,2020)).copy()
+gpcpv3pt3_annual_mean_mean = gpcpv3pt3_annual_mean_mean.mean(dim='year')
+
+racmo_pr_annual_mean_mean = racmo_pr_annual_mean.sel(year=slice(2013,2020)).copy()
+racmo_pr_annual_mean_mean = racmo_pr_annual_mean_mean.mean(dim='year')
+
+atms_annual_mean_mean = atms_annual_mean.sel(year=slice(2013,2020)).copy()
+atms_annual_mean_mean = atms_annual_mean_mean.mean(dim='year')
+
+mhs_annual_mean_mean = mhs_annual_mean.sel(year=slice(2013,2020)).copy()
+mhs_annual_mean_mean = mhs_annual_mean_mean.mean(dim='year')
+
+dmsp_ssmis_annual_mean_mean = dmsp_ssmis_annual_mean.sel(year=slice(2013,2020)).copy()
+dmsp_ssmis_annual_mean_mean = dmsp_ssmis_annual_mean_mean.mean(dim='year')
+
+amsr2_annual_mean_mean = amsr2_annual_mean.sel(year=slice(2013,2020)).copy()
+amsr2_annual_mean_mean = amsr2_annual_mean_mean.mean(dim='year')
+
+gpm_sat_annual_mean_mean = gpm_sat_annual_mean.sel(year=slice(2013,2020)).copy()
+gpm_sat_annual_mean_mean = gpm_sat_annual_mean_mean.mean(dim='year')
+
+
+#----------------------------------------------------------------------------------
+era5_mm = convert_precip_to_mm_per_month(era5_basin_mean, unit="mm/day")
+era5_mm = era5_mm[era5_mm['year'].isin(YEARS)].copy()
+
+gpcpv33_mm = convert_precip_to_mm_per_month(gpcpv3pt3_basin_mean, unit="mm/day")
+gpcpv33_mm = gpcpv33_mm[gpcpv33_mm['year'].isin(YEARS)].copy()
+
+atms_mm = convert_precip_to_mm_per_month(atms_basin_mean, unit="mm/hr")
+atms_mm = atms_mm[atms_mm['year'].isin(YEARS)].copy()
+
+mhs_mm = convert_precip_to_mm_per_month(mhs_basin_mean, unit="mm/hr")
+mhs_mm = mhs_mm[mhs_mm['year'].isin(YEARS)].copy()
+
+dmsp_ssmis_mm = convert_precip_to_mm_per_month(dmsp_ssmis_basin_mean, unit="mm/hr")
+dmsp_ssmis_mm = dmsp_ssmis_mm[dmsp_ssmis_mm['year'].isin(YEARS)].copy()
+
+amsr2_mm = convert_precip_to_mm_per_month(amsr2_basin_mean, unit="mm/hr")
+amsr2_mm = amsr2_mm[amsr2_mm['year'].isin(YEARS)].copy()
+
+gpm_sat_mm = convert_precip_to_mm_per_month(gpm_sat_basin_mean, unit="mm/hr")
+gpm_sat_mm = gpm_sat_mm[gpm_sat_mm['year'].isin(YEARS)].copy()
+
+pmb_mm = convert_precip_to_mm_per_month(
+        p_mm_mean_df.rename(columns={"basin_id": "basin", "precip_mm_per_month": "precipitation"}),
+        unit="mm/month",
+    )
+
+# do seasonal mean
+
+
+common_year_mnth_idx = (
+    get_unique_year_month_index(era5_mm)
+    .intersection(get_unique_year_month_index(gpcpv33_mm))
+    .intersection(get_unique_year_month_index(atms_mm))
+    .intersection(get_unique_year_month_index(mhs_mm))
+    .intersection(get_unique_year_month_index(dmsp_ssmis_mm))
+    .intersection(get_unique_year_month_index(amsr2_mm))
+    .intersection(get_unique_year_month_index(gpm_sat_mm))
+    .intersection(get_unique_year_month_index(pmb_mm))
+)
+
+era5_mm       = subset_to_common_year_month(era5_mm, common_year_mnth_idx)
+gpcpv33_mm    = subset_to_common_year_month(gpcpv33_mm, common_year_mnth_idx)
+atms_mm       = subset_to_common_year_month(atms_mm, common_year_mnth_idx)
+mhs_mm        = subset_to_common_year_month(mhs_mm, common_year_mnth_idx)
+dmsp_ssmis_mm = subset_to_common_year_month(dmsp_ssmis_mm, common_year_mnth_idx)
+amsr2_mm      = subset_to_common_year_month(amsr2_mm, common_year_mnth_idx)
+gpm_sat_mm    = subset_to_common_year_month(gpm_sat_mm, common_year_mnth_idx)
+pmb_mm        = subset_to_common_year_month(pmb_mm, common_year_mnth_idx)
+
+# align the dates by the coomon year months
+
+
+monthly_df_data_mmmonth = {
+    r"$P_{\mathrm{MB}}$": p_mnth_mean_df,
+    "ERA5": era5_mnth_mean,
+    "GPCP v3.3": gpcpv3pt3_mnth_mean,
+    "ATMS": atms_mnth_mean,
+    "MHS": mhs_mnth_mean,
+    "DMSP SSMIS": dmsp_ssmis_mnth_mean,
+    "AMSR2": amsr2_mnth_mean,
+    "GPM PMW V07": gpm_sat_mnth_mean,
+}
+
+# ============================================================
+# STEP 1: build raw monthly regional series once per region
+# ============================================================
+
+ts_eais_raw = build_region_monthly_series(
+    monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    basin_weights=basin_weights_,
+    region_name="East Antarctica",
+)
+
+ts_wais_raw = build_region_monthly_series(
+    monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    basin_weights=basin_weights_,
+    region_name="West Antarctica",
+)
+
+ts_ais_raw = build_region_monthly_series(
+    monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    basin_weights=basin_weights_,
+    region_name="Antarctica",
+)
 
 #%% Annual Means - Spatial
 # calculate and plot the mean across years
@@ -478,7 +598,7 @@ mean_annual_plot_arrs = [
                     (f'MHS', mhs_annual_mean_mean),
                     (f'DMSP-SSMIS', dmsp_ssmis_annual_mean_mean),
                     (f'AMSR2', amsr2_annual_mean_mean),                    
-                   (f'GPM Satellites', gpm_sat_annual_mean_mean),
+                   (f'GPM PMW V07', gpm_sat_annual_mean_mean),
                    ]
 
 
@@ -497,24 +617,20 @@ svnme = f'annual_snowfall_accumulation_over_imbie_basins_{cde_run_dte}_sharedplo
 svnme = os.path.join(path_to_plots, svnme)
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
 gc.collect()
+
 #----------------------------------------------------------------------------------
+
 fig, axes, cb1, cb2 = compare_mean_precip_grid_power_dual_cbar(
     mean_annual_plot_arrs,
-    group1_idx=[0, 1, 2],          # P_MB, ERA5, GPCP
-    group2_idx=[3, 4, 5, 6, 7],    # ATMS, MHS, DMSP-SSMIS, AMSR2, GPM Satellite
-    ncols=4,
-    # upper / high-range products
-    gamma1=0.6,
-    vmin1=0,
-    vmax1=400,
+    group1_idx=[0, 1, 2,],
+    group2_idx=[3, 4, 5, 6, 7],
     cbar_tcks1=[0, 25, 50, 100, 200, 300, 400],
-    # lower / low-range products
-    gamma2=0.6,
-    vmin2=0,
-    vmax2=80,
     cbar_tcks2=[0, 5, 10, 20, 40, 60, 80],
-    panel_letters=True,
+    ncols=4,
+    panel_letters=True,    
+    mean_fmt="Mean: {:d}"
 )
+
 svnme = os.path.join(path_to_plots, 
                      f'annual_snowfall_accumulation_over_imbie_basins_log_{cde_run_dte}_diff_cbar.png')
 plt.savefig(svnme,  dpi=500, bbox_inches='tight')
@@ -532,22 +648,8 @@ gc.collect()
 #     "MHS": mhs_basin_mean,
 #     "DMSP SSMIS": dmsp_ssmis_basin_mean,
 #     "AMSR2": amsr2_basin_mean,
-#     "GPM Satellites": gpm_sat_basin_mean,
+#     "GPM PMW V07": gpm_sat_basin_mean,
 # }
-
-monthly_df_data_mmmonth = {
-    r"$P_{\mathrm{MB}}$": convert_precip_to_mm_per_month(
-        p_mm_mean_df.rename(columns={"basin_id": "basin", "precip_mm_per_month": "precipitation"}),
-        unit="mm/month",
-    ),
-    "ERA5": convert_precip_to_mm_per_month(era5_basin_mean, unit="mm/day"),
-    "GPCP v3.3": convert_precip_to_mm_per_month(gpcpv3pt3_basin_mean, unit="mm/day"),
-    "ATMS": convert_precip_to_mm_per_month(atms_basin_mean, unit="mm/hr"),
-    "MHS": convert_precip_to_mm_per_month(mhs_basin_mean, unit="mm/hr"),
-    "DMSP SSMIS": convert_precip_to_mm_per_month(dmsp_ssmis_basin_mean, unit="mm/hr"),
-    "AMSR2": convert_precip_to_mm_per_month(amsr2_basin_mean, unit="mm/hr"),
-    "GPM Satellites": convert_precip_to_mm_per_month(gpm_sat_basin_mean, unit="mm/hr"),
-}
 
 region_monthly_clim = compute_weighted_region_monthly_climatologies(
     monthly_df_data=monthly_df_data_mmmonth,
@@ -563,11 +665,11 @@ product_order = [
     "ERA5",
     "GPCP v3.3",
     # "RACMO 2.4p1",
-    "ATMS",
-    "MHS",
-    "DMSP SSMIS",
-    "AMSR2",
-    "GPM Satellites",
+    # "ATMS",
+    # "MHS",
+    # "DMSP SSMIS",
+    # "AMSR2",
+    "GPM PMW V07",
 ]
 
 product_styles = {
@@ -575,11 +677,11 @@ product_styles = {
     "ERA5": {"color": "tab:blue", "marker": "s", "lw": 1.8},
     "GPCP v3.3": {"color": "tab:orange", "marker": "D", "lw": 1.8},
     # "RACMO 2.4p1": {"color": "tab:green", "marker": "^", "lw": 1.8},
-    "ATMS": {"lw": 1.5},
-    "MHS": {"lw": 1.5},
-    "DMSP SSMIS": {"lw": 1.5},
-    "AMSR2": {"lw": 1.5},
-    "GPM Satellites": {"lw": 1.5},
+    # "ATMS": {"lw": 1.5},
+    # "MHS": {"lw": 1.5},
+    # "DMSP SSMIS": {"lw": 1.5},
+    # "AMSR2": {"lw": 1.5},
+    "GPM PMW V07": {"lw": 1.5},
 }
 
 fig, axes = plot_weighted_region_monthly_climatology(
@@ -700,26 +802,26 @@ gc.collect()
 #%% BAR CHART WITH SPREAD
 
 # --- Convert each product to tidy DF ---
-df_pmb   = to_df(Pmb_annual)
+df_pmb   = to_df(Pmb_annual.sel(year=slice(2013,2020)).copy())
 df_pmb.rename(columns={'basin_id': 'basin',
                        'precip_mm_per_month': 'Pmb'}, inplace=True)
-df_era5  = to_df(era5_annual_mean)
+df_era5  = to_df(era5_annual_mean.sel(year=slice(2013,2020)).copy())
 df_era5.rename(columns={'precipitation_annual': 'ERA5'}, inplace=True)
-df_gpcp  = to_df(gpcpv3pt3_annual_mean)
+df_gpcp  = to_df(gpcpv3pt3_annual_mean.sel(year=slice(2013,2020)).copy())
 df_gpcp.rename(columns={'precipitation_annual': 'GPCP v3.3'}, inplace=True)
 # df_racmo = to_df(racmo_pr_annual_mean)
 # df_racmo.rename(columns={'pr_annual': 'RACMO'}, inplace=True)
-df_atms = to_df(atms_annual_mean)
+df_atms = to_df(atms_annual_mean.sel(year=slice(2013,2020)).copy())
 df_atms.rename(columns={'precipitation_annual': 'ATMS'}, inplace=True)
-df_mhs = to_df(mhs_annual_mean)
+df_mhs = to_df(mhs_annual_mean.sel(year=slice(2013,2020)).copy())
 df_mhs.rename(columns={'precipitation_annual': 'MHS'}, inplace=True)
-df_dmsp_ssmis = to_df(dmsp_ssmis_annual_mean)
+df_dmsp_ssmis = to_df(dmsp_ssmis_annual_mean.sel(year=slice(2013,2020)).copy())
 df_dmsp_ssmis.rename(columns={'precipitation_annual': 'DMSP SSMIS'}, inplace=True)
-df_amsr2 = to_df(amsr2_annual_mean)
+df_amsr2 = to_df(amsr2_annual_mean.sel(year=slice(2013,2020)).copy())
 df_amsr2.rename(columns={'precipitation_annual': 'AMSR2'}, inplace=True)
 
-df_gpm_sat = to_df(gpm_sat_annual_mean)
-df_gpm_sat.rename(columns={'precipitation_annual': 'GPM Satellites'}, inplace=True)
+df_gpm_sat = to_df(gpm_sat_annual_mean.sel(year=slice(2013,2020)).copy())
+df_gpm_sat.rename(columns={'precipitation_annual': 'GPM PMW V07'}, inplace=True)
 
 # --- Merge all together on (year, basin) ---
 df = df_pmb.merge(df_era5, on=["year","basin"])
@@ -732,8 +834,9 @@ df = df.merge(df_amsr2, on=["year","basin"])
 df = df.merge(df_gpm_sat, on=["year","basin"])
 
 # add a "year-basin" key if you like
+# "ATMS", "MHS", "DMSP SSMIS", "AMSR2",
 df["year_basin"] = df["year"].astype(str) + "-" + df["basin"].astype(str)
-cols = ["Pmb", "ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM Satellites"]
+cols = ["Pmb", "ERA5", "GPCP v3.3",  "GPM PMW V07"]
 df_mean_yr_acc = df.groupby("basin")[cols].mean().reset_index()
 
 fig, ax = plot_basin_ranked_bar_overlay(
@@ -747,10 +850,12 @@ fig, ax = plot_basin_ranked_bar_overlay(
 plt.show()
 
 #----------------------------------------------------------------------------------
-cols = ["ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM Satellites"]
+# cols = ["ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM PMW V07"]
+cols = ["ERA5", "GPCP v3.3", "GPM PMW V07"]
 
 non_gpm_group = ["Pmb", "ERA5", "GPCP v3.3"]
-gpm_group     = ["Pmb", "ATMS", "MHS", "DMSP SSMIS", "AMSR2"]  # exclude "GPM Satellites" from spread
+gpm_group     = ["Pmb", "GPM PMW V07"]
+#  "ATMS", "MHS", "DMSP SSMIS", "AMSR2"]  # exclude  from spread
 
 fig, ax, spread_non_gpm, spread_gpm = plot_basin_spread_points_dual(
     df_mean_yr_acc,
@@ -762,7 +867,7 @@ fig, ax, spread_non_gpm, spread_gpm = plot_basin_spread_points_dual(
     non_gpm_group=non_gpm_group,
     gpm_group=gpm_group,
     log_scale=True,
-    ylim=(5, 2000),
+    ylim=(2, 2000),
     annotate_non_gpm_color="black",
     annotate_gpm_color="dimgray",
     place_key=True,
@@ -774,16 +879,16 @@ gc.collect()
 #%%  ----------- Scatter plot -------------
 
 # Example usage:
-products = ["ERA5", "GPCP v3.3", "ATMS", "MHS", "DMSP SSMIS", "AMSR2", "GPM Satellites"]
-
+products = ["ERA5", "GPCP v3.3",  "GPM PMW V07"]
+# "ATMS", "MHS", "DMSP SSMIS", "AMSR2",
 fig, axes = plot_pmb_scatter(
     df_mean_yr_acc,
     "Pmb",
     products,
     high_thresh=500.0,
     scale="log",
-    log_min=5,                   # <-- show low GPM values
-    ncols=4                      # 2 rows for 7 products
+    log_min=2,                   # <-- show low GPM values
+    ncols=3                     # 2 rows for 7 products
 )
 
 svnme = os.path.join(path_to_plots, f'log_scatterplot_precip_over_imbie_basins_{cde_run_dte}.png')
@@ -792,11 +897,95 @@ plt.savefig(svnme, dpi=500, bbox_inches="tight")
 gc.collect()
 
 
+#%% Anomal Time Series
+
+# APPROACH A: conventional seasonal anomaly
+# ============================================================
+
+# EAIS
+ts_eais_seasonal_conv = build_conventional_seasonal_series_from_region_monthly(
+    ts_region_monthly=ts_eais_raw,
+    seasonal_mode="mean",
+    drop_incomplete=True,
+)
+
+ts_eais_seasonal_conv_anom = deseasonalize_seasonal_series(ts_eais_seasonal_conv)
+
+#-------------------------------------------------------------------------------------------------------
+# WAIS
+ts_wais_seasonal_conv = build_conventional_seasonal_series_from_region_monthly(
+    ts_region_monthly=ts_wais_raw,
+    seasonal_mode="mean",
+    drop_incomplete=True,
+)
+
+ts_wais_seasonal_conv_anom = deseasonalize_seasonal_series(ts_wais_seasonal_conv)
+#-------------------------------------------------------------------------------------------------------
+# AIS
+ts_ais_seasonal_conv = build_conventional_seasonal_series_from_region_monthly(
+    ts_region_monthly=ts_ais_raw,
+    seasonal_mode="mean",
+    drop_incomplete=True,
+)
+ts_ais_seasonal_conv_anom = deseasonalize_seasonal_series(ts_ais_seasonal_conv)
+
+# the plots
+ts_seasonal_dict = {
+    "Antarctica": ts_ais_seasonal_conv,
+    "West Antarctica": ts_wais_seasonal_conv,
+    "East Antarctica": ts_eais_seasonal_conv,
+}
+
+ts_seasonal_anom_dict = {
+    "Antarctica": ts_ais_seasonal_conv_anom,
+    "West Antarctica": ts_wais_seasonal_conv_anom,
+    "East Antarctica": ts_eais_seasonal_conv_anom,
+}
+
+# 3by1 anomaly ts
+fig_ts, axes_ts, anom_dict_used = plot_seasonal_anomaly_timeseries_regions_3x1(
+    ts_seasonal_dict=ts_seasonal_dict,
+    method="conventional",
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=("ERA5", "GPCP v3.3", "GPM PMW V07"),
+    product_styles=product_styles_corr,
+    figsize=(10, 10),
+    y_nbins=3,
+    ylabel="[mm/season]",
+    legend_ncol=4,
+)
+
+# 3by3 anomaly scatter
+lims_by_region = {
+    "Antarctica": (-3, 3),
+    "West Antarctica": (-10, 10),
+    "East Antarctica": (-3, 3),
+}
+
+fig_sc, axes_sc, stats_sc = plot_seasonal_anomaly_scatter_regions_3x3(
+    region_anom_dict=ts_seasonal_anom_dict,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=("ERA5", "GPCP v3.3", "GPM PMW V07"),
+    figsize=(13.5, 12),
+    share_lims=False,
+    lims=lims_by_region,
+    equal_axes=True,
+    point_size=70,
+)
+
+stats_table_wide = seasonal_scatter_stats_to_wide_table(
+    stats_out=stats_sc,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    target_cols=("ERA5", "GPCP v3.3", "GPM PMW V07"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+)
+
+print(stats_table_wide)
 #%% TREND ANALYSIS
 # if basin_weights is a pandas Series with basin IDs as index:
 
-basin_weights_ = dict(zip(basin_weights["basin"].astype(int),
-                         basin_weights["weight_global"].astype(float)))
 
 region_ts_wais = region_monthly_series_from_dict(
     monthly_df_data_mmmonth,
@@ -827,7 +1016,7 @@ product_order = [
     "MHS",
     "DMSP SSMIS",
     "AMSR2",
-    "GPM Satellites",
+    "GPM PMW V07",
 ]
 
 fig, axes = plot_region_trend_panels(
@@ -839,3 +1028,135 @@ fig, axes = plot_region_trend_panels(
     use_running_mean=True,   # 13-mo RM for clean plot
     show_pmb_trend_only=True
 )
+
+#%% A DIAGNOSIS OF EAIS PRECIP
+from Extra_util_functions import *
+REGION_DEFS_EAIS = [('Interior EAIS', [8, 9, 18, 19]),
+                    ('Coastal EAIS', [2, 3, 4, 5, 6, 7])]
+
+monthly_df_data_mmmonth_fixed = {
+    name: ensure_monthly_basin_totals(df)
+    for name, df in monthly_df_data_mmmonth.items()
+}
+
+region_annual = compute_weighted_region_annual_totals(
+    monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS_EAIS,
+    basin_weights=basin_weights,
+    annual_mode="sum",  # mm/year
+)
+
+fig, axes = plot_weighted_region_interannual(
+    region_annual,
+    region_order=("Interior EAIS", "Coastal EAIS"),
+    product_order=product_order_corr,
+    product_styles=product_styles_corr,
+    ylabel="[mm/year]",
+    figsize=(11, 10),
+)
+
+#----------------------------------------------------------------------------------
+region_annual_corr, annual_corr_factors = add_scalar_bias_corrected_products_to_region_annual(
+    region_annual,
+    reference_col=r"$P_{\mathrm{MB}}$",
+    target_products=corr_targets,
+    suffix=" (corr.)",
+    clip_factor=None,   # or e.g. (0.25, 10.0)
+)
+
+fig, axes = plot_weighted_region_interannual(
+    region_annual_corr,
+    region_order=("Interior EAIS", "Coastal EAIS"),
+    product_order=product_order_corr,
+    product_styles=product_styles_corr,
+    ylabel="[mm/year]",
+    figsize=(11, 10),
+)
+
+#----------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------
+#----------------------------------basin by basin annual plot------------------------------------------------
+basins_eais = [2, 3, 4, 5, 6, 7, 8, 9, 18, 19]
+products_to_plot = [r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3", "GPM PMW V07"]
+
+fig, axes = plot_eais_basin_interannual(
+    monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+    basin_list=basins_eais,
+    products_to_plot=products_to_plot,
+    basin_weights=basin_weights,   # optional
+    ncols=2,
+    figsize=(14, 20),
+    ylabel="[mm/year]",
+)
+plt.show()
+
+
+#----------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------
+bias_tab = basin_mean_bias_table(
+    monthly_df_data_mmmonth,
+    ref_name=r"$P_{\mathrm{MB}}$",
+    test_name="ERA5",
+    basin_list=basins_eais
+)
+
+print(bias_tab)
+
+interior_basins = [8, 9, 18, 19]
+coastal_basins = [2, 3, 4, 5, 6, 7]
+
+fig, ax = plot_basin_bias_ranked(
+    bias_tab,
+    interior_basins=interior_basins,
+    coastal_basins=coastal_basins,
+    figsize=(8, 6)
+)
+plt.show()
+
+eais_basins = [2, 3, 4, 5, 6, 7, 8, 9, 18, 19]
+
+eais_weights = (
+    basin_weights[basin_weights["basin"].isin(eais_basins)][["basin", "area_km2"]]
+    .copy()
+)
+
+eais_weights["weight_eais"] = eais_weights["area_km2"] / eais_weights["area_km2"].sum()
+
+bias_tab_w = bias_tab.merge(
+    eais_weights[["basin", "weight_eais"]],
+    on="basin",
+    how="left"
+)
+
+bias_tab_w["weighted_contribution"] = (
+    bias_tab_w["mean_bias"] * bias_tab_w["weight_eais"]
+)
+
+bias_tab_w = bias_tab_w.sort_values("weighted_contribution", ascending=False)
+bias_tab_w
+
+fig, ax = plot_basin_bias_ranked(
+    bias_tab_w,
+    interior_basins=[8, 9, 18, 19],
+    coastal_basins=[2, 3, 4, 5, 6, 7],
+    figsize=(8, 6),
+    title="Weighted basin contribution to EAIS ERA5 bias",
+    xlabel="Weighted contribution [mm/year]",
+)
+plt.show()
+
+
+fig, ax = plot_basin_metric_ranked(
+    bias_tab_w,
+    metric_col="mean_bias",
+    interior_basins=[8, 9, 18, 19],
+    coastal_basins=[2, 3, 4, 5, 6, 7],
+    title="ERA5 - P_MB mean annual bias by basin",
+    xlabel="Bias [mm/year]",
+)
+plt.show()

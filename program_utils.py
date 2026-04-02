@@ -28,6 +28,7 @@ from matplotlib.colors import LogNorm, Normalize
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import PowerNorm
 from matplotlib.ticker import MaxNLocator, FuncFormatter
+
 from matplotlib.cm import get_cmap
 import matplotlib.gridspec as gridspec
 
@@ -53,6 +54,8 @@ import h5py
 
 #%%
 # floating variables
+YEARS = np.arange(2013,2021)#[2019, 2020]
+
 cde_run_dte = date.today().strftime('%Y%m%d')
 misc_out = r'/ra1/pubdat/AVHRR_CloudSat_proj/miscelaneous_outs'
 
@@ -2194,7 +2197,57 @@ def to_df(da):
     df_grp = df.groupby(["year", bsn_col]).mean().reset_index()
     return df_grp
 
+#---------------------------------------------------------------------------
+def seasonal_scatter_stats_to_wide_table(
+    stats_out,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    target_cols=("ERA5", "GPCP v3.3", "GPM Satellites"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+    comparison_name_fmt="{target} vs {ref}",
+    decimals=2,
+):
+    """
+    Convert stats_out from plot_seasonal_anomaly_scatter_regions_3x3()
+    into a tidy table.
 
+    Returns
+    -------
+    pd.DataFrame
+        Columns:
+          product comparison | slope of regression | standard deviation | correlation
+    """
+
+    rows = []
+
+    for targ in target_cols:
+        slope_vals = []
+        std_vals = []
+        cc_vals = []
+
+        for region_name in region_order:
+            st = stats_out.get(region_name, {}).get(targ, {})
+
+            slope_vals.append(st.get("slope", np.nan))
+            std_vals.append(st.get("std", np.nan))
+            cc_vals.append(st.get("cc", np.nan))
+
+        def _fmt_list(vals):
+            out = []
+            for v in vals:
+                if pd.isna(v):
+                    out.append("/")
+                else:
+                    out.append(f"{v:.{decimals}f}")
+            return "/".join(out)
+
+        rows.append({
+            "product comparison": comparison_name_fmt.format(target=targ, ref=ref_col),
+            "slope of regression": _fmt_list(slope_vals),
+            "standard deviation": _fmt_list(std_vals),
+            "correlation": _fmt_list(cc_vals),
+        })
+
+    return pd.DataFrame(rows)
 #%%
 # PLOTTING HELPERS
 
@@ -2435,6 +2488,313 @@ def plot_anomaly_scatter_multi_product(
 
     plt.tight_layout()
     return fig, axes, stats_dict, df_plot
+#-------------------------------------------------------------------
+def plot_seasonal_anomaly_timeseries_regions_3x1(
+    ts_seasonal_dict,
+    method="conventional",
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=("ERA5", "GPCP v3.3", "GPM Satellites"),
+    product_styles=None,
+    figsize=(10, 10),
+    sharex=True,
+    y_nbins=3,
+    ylabel="Anomaly [mm/season]",
+    legend_ncol=4,
+    legend_y=-0.035,
+):
+    """
+    Plot seasonal anomaly time series for 3 regions in a 3x1 layout.
+
+    Parameters
+    ----------
+    ts_seasonal_dict : dict
+        {
+            "Antarctica": ts_ais_seasonal_conv,
+            "West Antarctica": ts_wais_seasonal_conv,
+            "East Antarctica": ts_eais_seasonal_conv,
+        }
+        Each value is a seasonal time series DataFrame.
+
+    method : {"conventional", "rolling"}
+        Passed to seasonal_anomalies_from_method().
+
+    region_order : tuple/list
+        Order of subplot rows.
+
+    ref_col : str
+        Reference column, usually P_MB.
+
+    target_cols : tuple/list
+        Products to compare against ref_col in the time series.
+
+    product_styles : dict or None
+        Styling dict.
+
+    Returns
+    -------
+    fig, axes, anom_dict
+    """
+
+    if product_styles is None:
+        product_styles = {}
+
+    # only these columns will be plotted
+    cols_to_plot = [ref_col] + [c for c in target_cols if c != ref_col]
+
+    nrows = len(region_order)
+    fig, axes = plt.subplots(nrows, 1, figsize=figsize, sharex=sharex)
+    axes = np.atleast_1d(axes)
+
+    legend_handles = []
+    legend_labels = []
+    anom_dict = {}
+
+    for ax, region_name in zip(axes, region_order):
+        if region_name not in ts_seasonal_dict:
+            raise ValueError(f"{region_name} not found in ts_seasonal_dict")
+
+        ts_seasonal = ts_seasonal_dict[region_name].copy()
+        ts_anom = seasonal_anomalies_from_method(ts_seasonal, method=method)
+        anom_dict[region_name] = ts_anom.copy()
+
+        for prod in cols_to_plot:
+            if prod not in ts_anom.columns:
+                continue
+
+            st = product_styles.get(prod, {})
+            line, = ax.plot(
+                ts_anom.index,
+                ts_anom[prod],
+                label=prod,
+                color=st.get("color", None),
+                lw=st.get("lw", 2.5),
+                ls=st.get("ls", "-"),
+                marker=st.get("marker", None),
+                markersize=st.get("markersize", None),
+            )
+
+            if prod not in legend_labels:
+                legend_handles.append(line)
+                legend_labels.append(prod)
+
+        ax.axhline(0, color="k", lw=0.9, alpha=0.7)
+        ax.grid(True, alpha=0.3)
+        ax.set_title(region_name, fontsize=18, fontweight="bold", pad=8)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=y_nbins, min_n_ticks=3))
+        ax.tick_params(axis="y", labelsize=18)
+
+    axes[-1].tick_params(axis="x", labelsize=18)
+
+    fig.supylabel(ylabel, fontsize=20, fontweight="bold")
+
+    fig.legend(
+        legend_handles,
+        legend_labels,
+        loc="lower center",
+        ncol=legend_ncol,
+        frameon=False,
+        fontsize=18,
+        bbox_to_anchor=(0.5, legend_y),
+    )
+
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
+
+    return fig, axes, anom_dict
+
+#-------------------------------------------------------------------
+def _nice_symmetric_ticks(panel_lims):
+    lo, hi = panel_lims
+    vmax = max(abs(lo), abs(hi))
+
+    if np.isclose(vmax, 3):
+        return np.arange(-3, 4, 1)
+    elif np.isclose(vmax, 10):
+        return np.arange(-10, 11, 5)
+    else:
+        return MaxNLocator(nbins=5, symmetric=True).tick_values(lo, hi)
+#-----------------------------------------------------------------
+def plot_seasonal_anomaly_scatter_regions_3x3(
+    region_anom_dict,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=("ERA5", "GPCP v3.3", "GPM Satellites"),
+    panel_titles=None,
+    figsize=(13.5, 12.0),
+    share_lims=False,
+    lims=None,
+    equal_axes=True,
+    point_size=70,
+    point_alpha=0.85,
+    add_regression=True,
+    add_one_to_one=True,
+    add_zero_lines=True,
+    show_stats_text=True,
+):
+    """
+    3x3 scatter plot:
+      rows = regions
+      cols = products
+    using seasonal anomaly data already computed.
+
+    lims can be:
+      - None
+      - tuple/list like (-3, 3) applied to all panels
+      - dict keyed by region_name, e.g.
+            {
+              "Antarctica": (-3, 3),
+              "West Antarctica": (-10, 10),
+              "East Antarctica": (-3, 3),
+            }
+    """
+
+    target_cols = list(target_cols)
+    region_order = list(region_order)
+
+    if panel_titles is None:
+        panel_titles = {c: c for c in target_cols}
+
+    # ----- global limits only if requested -----
+    global_lims = None
+    if share_lims and lims is None:
+        vals = []
+        for region_name in region_order:
+            df = region_anom_dict[region_name]
+            use_cols = [ref_col] + [c for c in target_cols if c in df.columns]
+            arr = df[use_cols].to_numpy(dtype=float).ravel()
+            vals.append(arr)
+
+        vals = np.concatenate(vals)
+        vals = vals[np.isfinite(vals)]
+
+        if len(vals) == 0:
+            global_lims = (-1, 1)
+        else:
+            vmax = np.nanmax(np.abs(vals))
+            vmax = 1.0 if (not np.isfinite(vmax) or vmax == 0) else vmax
+            pad = 0.06 * vmax
+            global_lims = (-vmax - pad, vmax + pad)
+
+    nrows = len(region_order)
+    ncols = len(target_cols)
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=figsize,
+        squeeze=False,
+        sharex=False,
+        sharey=False,
+    )
+
+    stats_out = {}
+
+    for i, region_name in enumerate(region_order):
+        df = region_anom_dict[region_name].copy()
+        stats_out[region_name] = {}
+
+        for j, targ in enumerate(target_cols):
+            ax = axes[i, j]
+
+            if ref_col not in df.columns or targ not in df.columns:
+                ax.axis("off")
+                continue
+
+            sub = df[[ref_col, targ]].dropna().copy()
+
+            x = sub[ref_col].values.astype(float)
+            y = sub[targ].values.astype(float)
+
+            st = regression_stats(x, y)
+
+            # residual std
+            if np.isfinite(st["slope"]) and len(x) >= 2:
+                yhat = st["intercept"] + st["slope"] * x
+                resid_std = np.std(y - yhat, ddof=1) if len(x) > 2 else np.nan
+            else:
+                resid_std = np.nan
+
+            st["std"] = resid_std
+            stats_out[region_name][targ] = st
+
+            # ----- choose limits -----
+            if share_lims:
+                panel_lims = global_lims if global_lims is not None else lims
+            else:
+                if isinstance(lims, dict):
+                    panel_lims = lims.get(region_name, None)
+                elif isinstance(lims, (tuple, list, np.ndarray)) and len(lims) == 2:
+                    panel_lims = tuple(lims)
+                else:
+                    panel_lims = None
+
+                if panel_lims is None:
+                    panel_lims = _get_axis_limits(x, y, pad_frac=0.08, symmetric=True)
+
+            # scatter
+            ax.scatter(
+                x, y,
+                s=point_size,
+                alpha=point_alpha,
+                color="k",
+                edgecolor="b",
+                linewidth=0.5,
+                zorder=3
+            )
+
+            # 1:1 line
+            if add_one_to_one:
+                ax.plot(panel_lims, panel_lims, color="k", lw=1.0, ls="--", zorder=2)
+
+            # regression
+            if add_regression and np.isfinite(st["slope"]):
+                xx = np.linspace(panel_lims[0], panel_lims[1], 100)
+                yy = st["intercept"] + st["slope"] * xx
+                ax.plot(xx, yy, color="red", lw=1.6, zorder=4)
+
+            # zero lines
+            if add_zero_lines:
+                ax.axhline(0, color="k", lw=0.8, ls=":", alpha=0.8, zorder=1)
+                ax.axvline(0, color="k", lw=0.8, ls=":", alpha=0.8, zorder=1)
+
+            ax.set_xlim(panel_lims)
+            ax.set_ylim(panel_lims)
+
+            ticks = _nice_symmetric_ticks(panel_lims)
+            ax.set_xticks(ticks)
+            ax.set_yticks(ticks)
+
+            if equal_axes:
+                ax.set_aspect("equal", adjustable="box")
+
+            ax.grid(True, alpha=0.25)
+
+            # titles
+            if i == 0:
+                ax.set_title(panel_titles.get(targ, targ), fontsize=16, fontweight="bold", pad=8)
+
+            # labels
+            if j == 0:
+                ax.set_ylabel(f"{region_name}\n{targ} anomaly", fontsize=14, fontweight="bold")
+            else:
+                ax.set_ylabel(f"{targ} anomaly", fontsize=13)
+
+            if i == nrows - 1:
+                ax.set_xlabel(f"{ref_col} anomaly", fontsize=13)
+
+            # stats text
+            if show_stats_text:
+                ax.text(
+                    0.04, 0.96,
+                    f"Slope={st['slope']:.2f}\nCC={st['cc']:.2f}",
+                    transform=ax.transAxes,
+                    ha="left", va="top",
+                    fontsize=12,
+                    fontweight="bold",
+                    bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+                )
+
+    plt.tight_layout()
+    return fig, axes, stats_out
 #-------------------------------------------------------------------
 def compare_mean_precp_plot(arr_lst_mean, vmin=0, vmax=300, cbar_tcks=None):
     """
@@ -3029,8 +3389,8 @@ def plot_pmb_scatter(
     ncols=4,                # <-- controls layout; 4 gives 2x4 for 7 products
     figsize_per_col=4.6,    # <-- minimal tuning knobs
     figsize_per_row=4.2,
-    share_axes=True,        # keep comparability
-    show_ylabel_only_left=True,
+    share_axes=False,        # keep comparability
+    show_ylabel_only_left=False,
 ):
     """
     Scatter of product vs ref (Pmb) by IMBIE basin with consistent colors (IDs 2..19).
@@ -3580,13 +3940,13 @@ def plot_basin_spread_points_dual(
         )
         ax.text(
             key_loc[0], key_loc[1] - 0.055,
-            "% = spread(P_MB, ATMS, MHS, DMSP SSMIS, AMSR2)",
+            "% = spread(P_MB, GPM PMW V07)",
             transform=ax.transAxes,
             ha="left", va="top",
             fontsize=key_fontsize,
             color=annotate_gpm_color,
             zorder=10,
-        )
+        ) # ,ATMS, MHS, DMSP SSMIS, AMSR2
 
     # -----------------------------
     # Legend: force correct handles, avoid any accidental "Pmb" marker entry
@@ -5676,16 +6036,20 @@ def compare_mean_precip_grid_power_dual_cbar(
     # group 1 norm (higher-range products)
     gamma1=0.6,
     vmin1=0,
-    vmax1=300,
+    vmax1=400,
     cbar_tcks1=None,
-    cbar_label1="Precipitation [mm/year]",
+    cbar_label1="axes (a, b, c)",
     # group 2 norm (lower-range GPM-like products)
     gamma2=0.6,
     vmin2=0,
     vmax2=80,
     cbar_tcks2=None,
-    cbar_label2="Precipitation [mm/year]",
+    cbar_label2="axes (d, e, f, g, h)",
     panel_letters=False,
+    show_panel_mean=True,
+    mean_fmt="{:d}",
+    mean_xy=(0.14, 0.88),   # upper-left interior
+    mean_fontsize=12,
 ):
     """
     Multi-panel polar plot with TWO PowerNorm colorbars.
@@ -5733,7 +6097,7 @@ def compare_mean_precip_grid_power_dual_cbar(
     fig.subplots_adjust(
         left=0.04, right=0.87,
         top=0.96, bottom=0.06,
-        wspace=0.05, hspace=0.20
+        wspace=0.08, hspace=0.20
     )
 
     letters = list("abcdefghijklmnopqrstuvwxyz")
@@ -5752,6 +6116,26 @@ def compare_mean_precip_grid_power_dual_cbar(
             panel_label=panel_label,
         )
 
+        # ---- add panel-wide mean value ----
+        if show_panel_mean:
+            panel_mean = int(data.mean().values.round(0))
+            ax.text(
+                mean_xy[0], mean_xy[1],
+                mean_fmt.format(panel_mean),
+                transform=ax.transAxes,
+                ha="left", va="top",
+                fontsize=mean_fontsize,
+                fontweight="bold",
+                color="black",
+                bbox=dict(
+                    boxstyle="round,pad=0.20",
+                    facecolor="white",
+                    edgecolor="none",
+                    alpha=0.75
+                ),
+                zorder=20,
+            )
+
     # Hide unused axes
     for ax in axes[len(arr_lst_mean):]:
         ax.set_visible(False)
@@ -5768,7 +6152,7 @@ def compare_mean_precip_grid_power_dual_cbar(
     cb1.ax.tick_params(labelsize=11)
     cb1.ax.minorticks_off()
     cb1.ax.set_title("mm/year", fontsize=12, pad=12)
-    cb1.set_label(cbar_label1, fontsize=0)  # keep clean; title already says mm/year
+    cb1.set_label(cbar_label1, fontsize=10)
 
     # lower colorbar
     cax2 = fig.add_axes([0.89, 0.12, 0.016, 0.28])
@@ -5781,7 +6165,7 @@ def compare_mean_precip_grid_power_dual_cbar(
     cb2.ax.tick_params(labelsize=11)
     cb2.ax.minorticks_off()
     cb2.ax.set_title("mm/year", fontsize=12, pad=12)
-    cb2.set_label(cbar_label2, fontsize=0)
+    cb2.set_label(cbar_label2, fontsize=10)
 
     return fig, axes, cb1, cb2
 
@@ -6072,6 +6456,7 @@ def plot_weighted_region_seasonal_climatology(
     ylabel="Precipitation [mm/season]",
     figsize=(8, 9),
     sharex=True,
+    y_nbins=3,   # target number of major y tick labels
 ):
     """
     Plot seasonal climatology by region.
@@ -6133,18 +6518,22 @@ def plot_weighted_region_seasonal_climatology(
         ax.grid(True, alpha=0.3)
         ax.set_xlim(-0.15, len(season_labels) - 0.85)
         ax.set_xticks(x)
-        ax.set_xticklabels(season_labels, fontsize=15, fontweight="bold")
+        ax.set_xticklabels(season_labels, fontsize=18, fontweight="bold")
 
-    fig.supylabel(ylabel, fontsize=18, fontweight="bold")
+        # improved y-axis ticks
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=y_nbins, min_n_ticks=3))
+        ax.tick_params(axis="y", labelsize=18)
+
+    fig.supylabel(ylabel, fontsize=20, fontweight="bold")
 
     fig.legend(
         legend_handles,
         legend_labels,
         loc="lower center",
-        ncol=min(len(legend_labels), 4),
+        ncol=3,#min(len(legend_labels), 4),
         frameon=False,
-        fontsize=12,
-        bbox_to_anchor=(0.5, -0.05)
+        fontsize=17,
+        bbox_to_anchor=(0.55, -0.04)
     )
 
     fig.tight_layout(rect=[0, 0.06, 1, 1])
@@ -6161,6 +6550,7 @@ def plot_weighted_region_interannual(
     ylabel="Precipitation [mm/year]",
     figsize=(10, 10),
     sharex=True,
+    y_nbins=3,   # target number of major y tick labels
 ):
     """
     Plot interannual variability (annual totals) for each region.
@@ -6196,19 +6586,23 @@ def plot_weighted_region_interannual(
         ax.set_title(region_name, fontsize=18, fontweight="bold", pad=8)
         ax.grid(True, alpha=0.3)
 
-    axes[-1].set_xticks(sorted(region_annual[region_order[0]]["year"].unique()))
-    axes[-1].tick_params(axis="x", labelsize=12)
+        # ---- improved y-axis ticks ----
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=y_nbins, min_n_ticks=3))
+        ax.tick_params(axis="y", labelsize=18)
 
-    fig.supylabel(ylabel, fontsize=18, fontweight="bold")
+    axes[-1].set_xticks(sorted(region_annual[region_order[0]]["year"].unique()))
+    axes[-1].tick_params(axis="x", labelsize=18)
+
+    fig.supylabel(ylabel, fontsize=20, fontweight="bold")
 
     fig.legend(
         legend_handles,
         legend_labels,
         loc="lower center",
-        ncol=min(len(legend_labels), 4),
+        ncol=3,#min(len(legend_labels), 4),
         frameon=False,
-        fontsize=12,
-        bbox_to_anchor=(0.5, -0.04),
+        fontsize=18,
+        bbox_to_anchor=(0.55, -0.04),
     )
 
     fig.tight_layout(rect=[0, 0.06, 1, 1])
