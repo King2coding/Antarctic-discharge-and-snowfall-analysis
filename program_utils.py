@@ -46,6 +46,9 @@ from scipy.interpolate import griddata
 import xarray as xr
 # import xesmf as xe
 from rasterio.warp import Resampling
+import rioxarray
+from rasterio.enums import Resampling
+from rasterio.crs import CRS
 from pyproj import CRS, Transformer
 
 from osgeo import gdal, osr

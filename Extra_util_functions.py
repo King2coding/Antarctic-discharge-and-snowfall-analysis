@@ -2,6 +2,7 @@ import math
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.io import loadmat
+from program_utils import *
 def make_basin_annual_from_monthly_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     Input df columns expected:
@@ -438,7 +439,7 @@ def plot_antarctic_precip_dual_discrete(
     letters = list("abcdefghijklmnopqrstuvwxyz")
     basin_id_offsets = {} if basin_id_offsets is None else basin_id_offsets
 
-    for i, (ax, (title, da)) in enumerate(zip(axes, arr_lst)):
+    for i, (ax, (title, da, arr_mean)) in enumerate(zip(axes, arr_lst)):
         ax.set_extent(extent, crs=pc)
         ax.set_facecolor(facecolor)
 
@@ -578,10 +579,10 @@ def plot_antarctic_precip_dual_discrete(
 
         # ---- panel mean ----
         if show_panel_mean:
-            panel_mean = float(np.nanmean(arr))
+            # panel_mean = float(np.nanmean(arr))
             ax.text(
                 mean_xy[0], mean_xy[1],
-                f"Mean = {mean_fmt.format(panel_mean)}",
+                f"Mean = {mean_fmt.format(arr_mean)}",
                 transform=ax.transAxes,
                 ha="left", va="top",
                 fontsize=mean_fontsize,
@@ -623,3 +624,474 @@ def plot_antarctic_precip_dual_discrete(
     cb.ax.set_title(cbar_label, fontsize=12, pad=10)
 
     return fig, axes, cb
+
+def get_zonal(spatial_product, mask, y, axis=(0, 1)):
+    cosines = np.cos(np.radians(y))[:, np.newaxis]  # Broadcast to match mask shape
+    cosines = np.where(mask, cosines, 0)
+    weights = cosines / np.nansum(cosines)
+
+    return np.nansum(weights * spatial_product, axis=axis)
+
+def cosine_weighted_mean_2d(data, region_mask, lat_vals):
+    """
+    Cosine-weighted mean over a 2D lat-lon field.
+
+    Parameters
+    ----------
+    data : 2D ndarray (lat, lon)
+        Field to average.
+    region_mask : 2D boolean ndarray (lat, lon)
+        True where region is included.
+    lat_vals : 1D ndarray
+        Latitude values matching data.shape[0].
+
+    Returns
+    -------
+    float
+        Cosine-weighted regional mean.
+    """
+    lat_weights = np.cos(np.deg2rad(lat_vals)).reshape(-1, 1)
+    weights = lat_weights * np.ones_like(data)
+
+    valid = np.isfinite(data) & region_mask
+    if valid.sum() == 0:
+        return np.nan
+
+    return np.nansum(data * weights * valid) / np.nansum(weights * valid)
+
+def cosine_weighted_mean_timeseries(data, region_mask, lat_vals):
+    """
+    Cosine-weighted mean over a 3D field (time, lat, lon).
+
+    Returns
+    -------
+    1D ndarray
+        Regional mean time series.
+    """
+    out = []
+    for t in range(data.shape[0]):
+        # out.append(cosine_weighted_mean_2d(data[t], region_mask, lat_vals))
+        out.append(get_zonal(data[t], region_mask, lat_vals))
+    return np.array(out)
+
+
+def make_region_mask_from_basin_ids(basin_id_grid, basin_ids):
+    """
+    basin_id_grid : 2D ndarray of basin IDs
+    basin_ids : list of ints
+
+    Returns
+    -------
+    2D boolean mask
+    """
+    return np.isin(basin_id_grid, basin_ids)
+
+
+import xarray as xr
+
+def regrid_basin_ids_to_product_grid(basin_da, target_lat, target_lon,
+                                     basin_lat_name="y", basin_lon_name="x"):
+    """
+    Regrid categorical basin IDs to product lat-lon grid using nearest neighbor.
+    """
+    if basin_lat_name != "lat" or basin_lon_name != "lon":
+        basin_da = basin_da.rename({basin_lat_name: "lat", basin_lon_name: "lon"})
+
+    basin_on_target = basin_da.sel(
+        lat=xr.DataArray(target_lat, dims="lat"),
+        lon=xr.DataArray(target_lon, dims="lon"),
+        method="nearest"
+    )
+    return basin_on_target
+
+
+import xarray as xr
+import numpy as np
+import rioxarray
+from rasterio.enums import Resampling
+
+def prepare_latlon_template(da, lat_name="lat", lon_name="lon", crs="EPSG:4326"):
+    """
+    Prepare a 2D lat-lon DataArray as a template for rioxarray reproject_match.
+    """
+    if lat_name != "y" or lon_name != "x":
+        da = da.rename({lat_name: "y", lon_name: "x"})
+    da = da.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=False)
+    da = da.rio.write_crs(crs, inplace=False)
+    return da
+
+def reproject_basin_ids_to_match(basin_da, target_da):
+    """
+    Reproject categorical basin IDs to the target grid using nearest-neighbor.
+    """
+    basin2d = basin_da.squeeze(drop=True)
+
+    if not basin2d.rio.crs:
+        raise ValueError("Source basin raster has no CRS.")
+
+    basin_on_target = basin2d.rio.reproject_match(
+        target_da,
+        resampling=Resampling.nearest
+    )
+    return basin_on_target
+
+
+
+def annual_regional_means_from_daily_xr(
+    da_daily,
+    region_masks,
+    lat_name="lat",
+    lon_name="lon",
+    annual_mode="sum"
+):
+    """
+    Compute annual regional means from daily lat-lon xarray data.
+
+    Parameters
+    ----------
+    da_daily : xr.DataArray
+        Daily precipitation field with dims (time, lat, lon) or (time, latitude, longitude)
+    region_masks : dict
+        {"Antarctica": mask2d, "West Antarctica": mask2d, "East Antarctica": mask2d}
+    annual_mode : str
+        "sum" -> annual accumulation [mm/year]
+        "mean" -> annual mean daily precipitation [mm/day]
+
+    Returns
+    -------
+    pd.DataFrame with columns [year, region, precipitation]
+    """
+    if lat_name not in da_daily.dims or lon_name not in da_daily.dims:
+        raise ValueError(f"Expected dims including {lat_name} and {lon_name}")
+    # if annual_mode == "sum":
+    #     da_annual = da_daily.groupby("time.year").sum("time", skipna=True)
+    # elif annual_mode == "mean":
+    #     da_annual = da_daily.groupby("time.year").mean("time", skipna=True)
+    # else:
+    #     raise ValueError("annual_mode must be 'sum' or 'mean'")  
+
+    rows = []
+    yrs = np.unique(da_daily.time.dt.year.values)
+    for yr in yrs:
+
+        arr = da_daily.where(da_daily.time.dt.year == yr, drop=True)
+
+        if annual_mode == "sum":
+            arr = arr.sum(dim="time", skipna=True)
+        elif annual_mode == "mean":
+            arr = arr.mean(dim="time", skipna=True)
+        else:
+            raise ValueError("annual_mode must be 'sum' or 'mean'")
+        lat_vals = arr[lat_name].values
+        # arr = da_annual.sel(year=yr).values
+        for region_name, region_mask in region_masks.items():
+            # mean_val = cosine_weighted_mean_2d(arr, region_mask, lat_vals)
+            mean_val = get_zonal(arr, region_mask, lat_vals)
+            if annual_mode == "mean":
+                mean_val *= 365
+            rows.append({
+                "year": int(yr),
+                "region": region_name,
+                "precipitation": float(mean_val)
+            })
+
+    return pd.DataFrame(rows)
+
+
+def plot_regional_annual_timeseries(
+    df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=("ERA5", "GPCP v3.3", r"$P_{\mathrm{MB}}$"),
+    product_styles=None,
+    figsize=(11, 12),
+    ylabel="[mm/year]"
+):
+    if product_styles is None:
+        product_styles = {
+            "ERA5": dict(color="blue", marker="s", lw=2.3),
+            "GPCP v3.3": dict(color="orange", marker="D", lw=2.3),
+            r'$P_{\mathrm{MB}}$': dict(color="black", marker="o", lw=2.3),
+        }
+
+    fig, axes = plt.subplots(len(region_order), 1, figsize=figsize, sharex=True)
+    axes = np.atleast_1d(axes)
+
+    for ax, region in zip(axes, region_order):
+        sub = df[df["region"] == region]
+
+        for prod in product_order:
+            s = sub[sub["product"] == prod].sort_values("year")
+            if len(s) == 0:
+                continue
+            style = product_styles.get(prod, {})
+            ax.plot(
+                s["year"], s["precipitation"],
+                label=prod,
+                **style
+            )
+
+        ax.set_title(region, fontsize=18, fontweight="bold")
+        ax.grid(True, alpha=0.25)
+        ax.tick_params(labelsize=12)
+
+    axes[-1].set_xlabel("Year", fontsize=16, fontweight="bold")
+    fig.text(0.04, 0.5, ylabel, va="center", rotation="vertical",
+             fontsize=18, fontweight="bold")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=len(product_order),
+               frameon=False, fontsize=14)
+
+    plt.tight_layout(rect=[0.06, 0.06, 1, 1])
+    return fig, axes
+
+
+def plot_multiyear_mean_bar_by_region(
+    df_mean,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$","ERA5", "GPCP v3.3"),
+    colors=None,
+    figsize=(9, 6),
+    ylabel="[mm/year]",
+    title="2013–2020 mean annual precipitation"
+):
+    if colors is None:
+        colors = {
+            "ERA5": "blue",
+            "GPCP v3.3": "orange",
+            r"$P_{\mathrm{MB}}$": "black",
+        }
+
+    x = np.arange(len(region_order))
+    nprod = len(product_order)
+    width = 0.35 if nprod == 2 else 0.8 / nprod
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for i, prod in enumerate(product_order):
+        vals = []
+        for reg in region_order:
+            sub = df_mean[(df_mean["region"] == reg) & (df_mean["product"] == prod)]
+            vals.append(sub["precipitation"].iloc[0] if len(sub) else np.nan)
+
+        xpos = x + (i - (nprod - 1) / 2) * width
+        bars = ax.bar(xpos, vals, width=width, color=colors.get(prod, None), label=prod)
+
+        for b, v in zip(bars, vals):
+            if np.isfinite(v):
+                ax.text(
+                    b.get_x() + b.get_width() / 2,
+                    b.get_height() + 1.8,
+                    f"{v:.0f}",
+                    ha="center", va="bottom", fontsize=10
+                )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(region_order, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=14, fontweight="bold")
+    ax.set_title(title, fontsize=16, fontweight="bold")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(frameon=False, fontsize=12)
+
+    plt.tight_layout()
+    return fig, ax
+
+
+def regional_dict_to_tidy_df(region_dict):
+    rows = []
+    for region, df in region_dict.items():
+        product_cols = [c for c in df.columns if c != "year"]
+        for _, row in df.iterrows():
+            for product in product_cols:
+                rows.append({
+                    "year": int(row["year"]),
+                    "region": region,
+                    "product": product,
+                    "precipitation": float(row[product]),
+                })
+    return pd.DataFrame(rows)
+
+
+import pandas as pd
+import numpy as np
+
+def compute_relative_differences(df, ref_product, target_products):
+    """
+    Compute target - reference by year and region.
+
+    Parameters
+    ----------
+    df : tidy DataFrame
+        Columns: year, region, product, precipitation
+    ref_product : str
+        Reference product name
+    target_products : list of str
+        Products to subtract from reference
+
+    Returns
+    -------
+    diff_df : tidy DataFrame
+        Columns: year, region, product, precipitation
+        where 'product' is e.g. 'ERA5 - PMB'
+    """
+    rows = []
+
+    for region in df["region"].unique():
+        for year in sorted(df["year"].unique()):
+            sub = df[(df["region"] == region) & (df["year"] == year)]
+
+            ref_row = sub[sub["product"] == ref_product]
+            if len(ref_row) == 0:
+                continue
+            ref_val = ref_row["precipitation"].iloc[0]
+
+            for prod in target_products:
+                prod_row = sub[sub["product"] == prod]
+                if len(prod_row) == 0:
+                    continue
+                prod_val = prod_row["precipitation"].iloc[0]
+
+                rows.append({
+                    "year": int(year),
+                    "region": region,
+                    "product": f"{prod} - {ref_product}",
+                    "precipitation": float(prod_val - ref_val),
+                })
+
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------
+# 4. Compute annual regional P_MB using cosine weighting
+# --------------------------------------------------------
+REGION_BASINS = {
+    "Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+    "West Antarctica": [10, 11, 12, 13, 14, 15, 16, 17],
+    "East Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 18, 19],
+}
+
+def make_region_mask_from_basin_ids_xr(basin_mask, basin_ids):
+    return xr.DataArray(
+        np.isin(basin_mask.values, basin_ids),
+        coords=basin_mask.coords,
+        dims=basin_mask.dims,
+    )
+
+def cosine_weighted_mean_timeseries_xr(da, region_mask, lat_name="lat", lon_name="lon"):
+    """
+    da         : xr.DataArray(date, lat, lon)
+    region_mask: xr.DataArray(lat, lon) boolean
+    returns    : xr.DataArray(date)
+    """
+    lat_weights = xr.DataArray(
+        np.cos(np.deg2rad(da[lat_name].values)),
+        coords={lat_name: da[lat_name].values},
+        dims=(lat_name,),
+    )
+
+    # broadcast lat weights to 2D
+    w2d = lat_weights.broadcast_like(region_mask)
+
+    valid = region_mask & da.notnull()
+
+    num = (da.where(valid) * w2d.where(valid)).sum(dim=(lat_name, lon_name), skipna=True)
+    den = w2d.where(valid).sum(dim=(lat_name, lon_name), skipna=True)
+
+    return num / den
+
+def get_zonal_timeseries(data_3d, mask, y):
+    """
+    Apply get_zonal over time.
+
+    Parameters
+    ----------
+    data_3d : 3D ndarray
+        Shape (time, lat, lon)
+    mask : 2D boolean ndarray
+        Shape (lat, lon)
+    y : 1D ndarray
+        Latitude values in degrees
+
+    Returns
+    -------
+    1D ndarray
+        Cosine-weighted regional mean time series
+    """
+    out = np.full(data_3d.shape[0], np.nan, dtype=float)
+
+    for t in range(data_3d.shape[0]):
+        out[t] = get_zonal(data_3d[t], mask, y)
+
+    return out
+REGION_BASINS = {
+    "Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+    "West Antarctica": [10, 11, 12, 13, 14, 15, 16, 17],
+    "East Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 18, 19],
+}
+
+def compute_pmb_cosine_weighted_annual(
+    pmb_monthly_latlon,
+    basin_mask_latlon,
+    region_basins=REGION_BASINS,
+    time_name="date",
+    lat_name="lat",
+    lon_name="lon",
+    annual_mode="sum",
+):
+    """
+    Compute regional annual P_MB using the same cosine-weighted logic as get_zonal.
+
+    Parameters
+    ----------
+    pmb_monthly_latlon : xr.DataArray
+        Monthly P_MB on lat-lon grid, dims (time/date, lat, lon), units mm/month
+    basin_mask_latlon : xr.DataArray
+        Basin IDs on same lat-lon grid
+    annual_mode : str
+        'sum' -> annual total [mm/year]
+        'mean' -> mean monthly value [mm/month]
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: year, region, P_MB
+    """
+    if time_name != "time":
+        da = pmb_monthly_latlon.rename({time_name: "time"})
+    else:
+        da = pmb_monthly_latlon.copy()
+
+    y = da[lat_name].values
+    data = da.values
+    basin_ids_2d = basin_mask_latlon.values
+
+    out = []
+
+    for region_name, basin_ids in region_basins.items():
+        region_mask = np.isin(basin_ids_2d, basin_ids)
+
+        monthly_ts = get_zonal_timeseries(data, region_mask, y)
+
+        ts_df = pd.DataFrame({
+            "time": pd.to_datetime(da["time"].values),
+            "P_MB": monthly_ts
+        })
+        ts_df["year"] = ts_df["time"].dt.year
+        ts_df["region"] = region_name
+
+        if annual_mode == "sum":
+            ann = (
+                ts_df.groupby(["year", "region"], as_index=False)["P_MB"]
+                .sum()
+            )
+        elif annual_mode == "mean":
+            ann = (
+                ts_df.groupby(["year", "region"], as_index=False)["P_MB"]
+                .mean()
+            )
+        else:
+            raise ValueError("annual_mode must be 'sum' or 'mean'")
+
+        out.append(ann)
+
+    return pd.concat(out, ignore_index=True)

@@ -1,38 +1,574 @@
 #%%
-# packages
+# =============================================================================
+# SECTION 1. IMPORTS AND BASIC SETUP
+# =============================================================================
 
 from program_utils import *
-
-
-# from concurrent.futures import ProcessPoolExecutor
-# from functools import partial
-# from multiprocessing import Pool
-
+from Extra_util_functions import *
+from program_utile_13Apr2026 import *
 #%%
-# file paths
-basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
-
-# paths to put satellite precip over basins data
-imerg_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/imerg_precip'
-
-era5_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/era5_precip'
-gpcpv3pt3_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpcpv3pt3'
-racmo_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/RACMO2pt4p1'
-
-atms_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites/ATMS'
-dmsp_ssmis_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites/DMSP-SSMIS'
-amsr2_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites/AMSR2'
-mhs_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites/MHS'
-all_gpm_basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/gpm_constellation_satellites'
-annual_precip_in_basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/precip_in_basins/annual'
-seasonal_precip_in_basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/precip_in_basins/seasonal'
+# =============================================================================
+# SECTION 2. PATHS AND FILE LISTS
+# =============================================================================
 
 # path to put outs e.g. plots, dfs
 path_to_plots = r'/home/kkumah/Projects/Antarctic_discharge_work/plots'
 path_to_dfs = r'/home/kkumah/Projects/Antarctic_discharge_work/dfs'
+gpm_satellites_path = r'/ra1/pubdat/GPM-Constellation-Satellites_MI_and_Sounders'
+
+# --- Precipitation products ---
+gpcp_v3pt3_mnthly_ds_path = r'/ra1/pubdat/Satellite_eval_over_Oceans/data/GPCP/GPCP_v3_pnt_3_monthly_1983_2024'
+era5_mnhtly_file = r'/ra1/pubdat/GPCP/GPCP_Reproduce_GJ/era5_tp_198001202412_monthly.nc'
+
+# --- Basin / PMB data ---
+basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
+Pmb_mm_fle  = os.path.join(basins_path, 'Monthly_mass_budget_precip_RignotBasin_in_mm_20260226.nc')
+
+# --- File lists: 2013–2020 only ---
+all_gpcp_v3pt3_mnthly_files = sorted(
+    [os.path.join(gpcp_v3pt3_mnthly_ds_path, f) for f in os.listdir(gpcp_v3pt3_mnthly_ds_path) if f.endswith('.nc4')]
+    )
+
+all_gpcp_v3pt3_mnthly_files_2013_2020 = [
+    f for f in all_gpcp_v3pt3_mnthly_files
+    if 2013 <= int(os.path.basename(f).split('_')[2][:4]) <= 2020
+]
+
+
+# =============================================================================
+# SECTION 3. BASIN DEFINITIONS
+# =============================================================================
+
+WAIS_BASINS = [10, 11, 12, 13, 14, 15, 16, 17]
+EAIS_BASINS = [2, 3, 4, 5, 6, 7, 8, 9, 18, 19]
+AIS_BASINS  = WAIS_BASINS + EAIS_BASINS
+
+REGION_BASINS = {
+    "Antarctica": AIS_BASINS,
+    "West Antarctica": WAIS_BASINS,
+    "East Antarctica": EAIS_BASINS,
+}
+
 #%%
+
+# =============================================================================
+# SECTION 5. LOAD BASIN GRID AND BUILD COMMON 0.1° TARGET GRID
+# =============================================================================
+
+basins = load_basin_grid(basins_path, crs_stereo)
+print_basin_grid_info(basins)
+
+# Common 0.1° comparison grid in lat-lon, derived from basin geometry
+target_template_01deg = build_target_latlon_template_from_basin_grid(basins)
+
+# Basin IDs remapped onto the same common target grid
+basin_mask_01deg = reproject_basin_ids_to_target_grid(basins, target_template_01deg)
+
+# Region masks on the same target grid
+region_masks_01deg = make_region_masks_from_basin_mask(basin_mask_01deg, REGION_BASINS)
+
+print("✅ Common 0.1° target grid ready")
+print("Target dims:", target_template_01deg.dims)
+print("Basin-mask dims:", basin_mask_01deg.dims)
 # floating variables
 
+#%%
+# =============================================================================
+# SECTION 6. LOAD RAW PRODUCT DATA
+# =============================================================================
+
+print("Loading GPCP monthly dataset ...")
+print("Loading GPCP monthly dataset ...")
+
+gpcp_ds_v3pt3 = xr.open_mfdataset(
+    all_gpcp_v3pt3_mnthly_files_2013_2020,
+    combine="nested",
+    concat_dim="time",
+    coords="minimal",
+    compat="override",
+    parallel=True,
+    engine="netcdf4",
+    chunks={"time": 120, "lat": 180, "lon": 360},
+    cache=False,
+)
+
+gpcp_ds_v3pt3 = ds_swaplon(gpcp_ds_v3pt3)
+
+# Keep the monthly precipitation variable
+# Your file shows the variable name is sat_gauge_precip
+gpcp_mnth = gpcp_ds_v3pt3["sat_gauge_precip"].copy()
+
+# Normalize monthly timestamps to month-start
+gpcp_mnth = gpcp_mnth.assign_coords(
+    time=pd.to_datetime(gpcp_mnth["time"].values).to_period("M").to_timestamp()
+)
+
+# Convert from mm/day to mm/month
+days_in_month = xr.DataArray(
+    pd.to_datetime(gpcp_mnth["time"].values).days_in_month,
+    dims=["time"],
+    coords={"time": gpcp_mnth["time"]}
+)
+
+gpcp_mnth = gpcp_mnth * days_in_month
+gpcp_mnth.name = "gpcp_mm_month"
+
+# Replace fill/missing with NaN if needed
+fillv = gpcp_mnth.attrs.get("_FillValue", None)
+if fillv is not None:
+    gpcp_mnth = gpcp_mnth.where(gpcp_mnth != fillv)
+gpcp_mnth = gpcp_mnth.where(np.isfinite(gpcp_mnth))
+
+# Subset Antarctica
+gpcp_mnth = gpcp_mnth.sel(lat=slice(-60, -90))
+#----------------------------------------------------------------------------
+
+
+print("Loading ERA5 monthly dataset ...")
+
+era5_mnth_ds = xr.open_dataset(era5_mnhtly_file, engine="netcdf4")[["tp"]]
+
+# Standardize longitude to -180..180 if needed
+era5_mnth_ds = ds_swaplon(era5_mnth_ds)
+era5_mnth_ds = replace_fill_with_nan(era5_mnth_ds)
+# Rename valid_time -> time if needed
+if "valid_time" in era5_mnth_ds.dims or "valid_time" in era5_mnth_ds.coords:
+    era5_mnth_ds = era5_mnth_ds.rename({"valid_time": "time"})
+
+# Sort coordinates
+era5_mnth_ds = era5_mnth_ds.sortby("longitude")
+era5_mnth_ds = era5_mnth_ds.sortby("latitude", ascending=False)
+
+# Drop bookkeeping coordinates that are not needed downstream
+drop_coords = [c for c in ["expver", "number"] if c in era5_mnth_ds.coords]
+era5_mnth_ds = era5_mnth_ds.drop_vars(drop_coords, errors="ignore")
+
+# Normalize monthly timestamps to clean month-start values
+era5_mnth_ds = era5_mnth_ds.assign_coords(
+    time=pd.to_datetime(era5_mnth_ds["time"].values).to_period("M").to_timestamp()
+)
+
+# Convert ERA5 monthly tp to mm/month
+# Assumption for this monthly file:
+# tp is monthly mean daily precipitation in meters/day
+days_in_month = xr.DataArray(
+    era5_mnth_ds["time"].dt.days_in_month,
+    dims=["time"],
+    coords={"time": era5_mnth_ds["time"]}
+)
+
+era5_mnth_ds["tp_mm_month"] = era5_mnth_ds["tp"] * 1000.0 * days_in_month
+
+# Keep processed variable only
+era5_mnth = era5_mnth_ds["tp_mm_month"]
+
+# Subset study period
+era5_mnth = era5_mnth.sel(time=slice("2013-01-01", "2020-12-31"))
+
+# Subset Antarctica
+era5_mnth = era5_mnth.sel(latitude=slice(-60, -90))
+
+# Rename spatial dims to standard names
+era5_mnth = era5_mnth.rename({"latitude": "lat", "longitude": "lon"})
+
+#----------------------------------------------------------------------------
+
+print("Loading PMB monthly dataset ...")
+P_mm_mnth = xr.open_dataarray(Pmb_mm_fle)
+
+
+gc.collect()
+
+#%%
+
+# =============================================================================
+# SECTION 7. REMAP ALL PRODUCTS TO THE COMMON 0.1° TARGET GRID
+# =============================================================================
+
+print("Reprojecting GPCP monthly to common 0.1° grid ...")
+# Attach CRS and spatial dims
+gpcp_mnth = gpcp_mnth.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=False)
+gpcp_mnth = gpcp_mnth.rio.write_crs("EPSG:4326", inplace=False)
+
+# Reproject to the common 0.1° target grid using nearest neighbor
+gpcp_mon_01 = gpcp_mnth.rio.reproject_match(
+    target_template_01deg,
+    resampling=Resampling.nearest
+)
+
+# Rename x/y back if needed
+rename_map = {}
+if "x" in gpcp_mon_01.dims:
+    rename_map["x"] = "lon"
+if "y" in gpcp_mon_01.dims:
+    rename_map["y"] = "lat"
+if rename_map:
+    gpcp_mon_01 = gpcp_mon_01.rename(rename_map)
+
+gpcp_mon_01 = gpcp_mon_01.sortby("lon")
+gpcp_mon_01 = gpcp_mon_01.sortby("lat", ascending=False)
+
+# Apply valid basin-analysis mask
+gpcp_mon_01 = gpcp_mon_01.where(basin_mask_01deg.notnull())
+gpcp_mon_01 = gpcp_mon_01.where(gpcp_mon_01["lat"] < -60)
+#----------------------------------------------------------------------------
+
+print("Reprojecting PMB monthly to common 0.1° grid ...")
+pmb_mon_01 = prepare_pmb_monthly_on_target(P_mm_mnth, target_template_01deg)
+pmb_mon_01 = subset_common_period(pmb_mon_01)
+#----------------------------------------------------------------------------
+
+# Attach CRS metadata
+era5_mnth = era5_mnth.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=False)
+era5_mnth = era5_mnth.rio.write_crs("EPSG:4326", inplace=False)
+
+# Remap to common 0.1° target grid using nearest neighbor
+era5_mnth_01 = era5_mnth.rio.reproject_match(
+    target_template_01deg,
+    resampling=Resampling.nearest
+)
+era5_mnth_01 = replace_fill_with_nan(era5_mnth_01)
+# Rename x/y back to lon/lat if needed
+rename_map = {}
+if "x" in era5_mnth_01.dims:
+    rename_map["x"] = "lon"
+if "y" in era5_mnth_01.dims:
+    rename_map["y"] = "lat"
+if rename_map:
+    era5_mnth_01 = era5_mnth_01.rename(rename_map)
+
+era5_mnth_01 = era5_mnth_01.sortby("lon")
+era5_mnth_01 = era5_mnth_01.sortby("lat", ascending=False)
+
+# Apply valid basin-analysis mask
+era5_mnth_01 = era5_mnth_01.where(basin_mask_01deg.notnull())
+era5_mnth_01 = era5_mnth_01.where(era5_mnth_01["lat"] < -60)
+
+
+gc.collect()
+
+#%%
+
+# =============================================================================
+# SECTION 8. APPLY BASIN MASK DOMAIN
+# =============================================================================
+
+# Keep only cells that belong to Antarctica basins included in the study
+valid_basin_mask = basin_mask_01deg.notnull()
+
+gpcp_mon_01 = gpcp_mon_01.where(valid_basin_mask)
+era5_mon_01 = era5_mnth_01.where(valid_basin_mask)
+pmb_mon_01  = pmb_mon_01.where(valid_basin_mask)
+
+print("✅ Common masked monthly fields ready")
+print("GPCP  :", gpcp_mon_01.shape)
+print("ERA5  :", era5_mon_01.shape)
+print("PMB   :", pmb_mon_01.shape)
+
+
+# =============================================================================
+# SECTION 9. QUICK SANITY CHECKS
+# =============================================================================
+
+print("\n--- Sanity checks ---")
+print("Target grid CRS:", target_template_01deg.rio.crs)
+print("Basin mask CRS :", basin_mask_01deg.rio.crs)
+
+print("GPCP time range:", str(gpcp_mon_01.time.min().values), "->", str(gpcp_mon_01.time.max().values))
+print("ERA5 time range:", str(era5_mon_01.time.min().values), "->", str(era5_mon_01.time.max().values))
+print("PMB time range :", str(pmb_mon_01.time.min().values),  "->", str(pmb_mon_01.time.max().values))
+
+
+#%% Build GMP Data Series
+# =============================================================================
+# SECTION 1D. GPM MICROWAVE MONTHLY INPUT PREPARATION
+# =============================================================================
+gpm_family_monthly_dict = build_gpm_family_monthly_dict(
+    gpm_satellites_path=gpm_satellites_path,
+    preprocess_func=preprocess,
+    target_template_01deg=target_template_01deg,
+    basin_mask_01deg=basin_mask_01deg,
+)
+
+print(gpm_family_monthly_dict.keys())
+
+gpm_pmw_v07_mon_01 = build_gpm_pmw_mean(
+    gpm_family_dict=gpm_family_monthly_dict,
+    mean_name="GPM PMW V07"
+)
+
+print(gpm_pmw_v07_mon_01)
+print(gpm_pmw_v07_mon_01.shape)
+#%%
+# =============================================================================
+# SECTION 2B. BUILD MONTHLY REGIONAL SERIES FOR PMB, ERA5, GPCP
+# =============================================================================
+
+product_monthly_dict = {
+    r"$P_{\mathrm{MB}}$": pmb_mon_01,
+    "ERA5": era5_mnth_01,
+    "GPCP v3.3": gpcp_mon_01,
+    "GPM PMW V07": gpm_pmw_v07_mon_01
+}
+
+regional_monthly_cos_df = build_all_region_monthly_series_cosine(
+    product_dict=product_monthly_dict,
+    region_masks=region_masks_01deg,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+print(regional_monthly_cos_df.head())
+print(regional_monthly_cos_df.tail())
+print(regional_monthly_cos_df.groupby(["region", "product"]).size())
+
+
+#%% Monthly Climatology
+
+region_monthly_clim_cos = compute_monthly_climatology_from_regional_series(
+    regional_monthly_cos_df
+)
+
+svnme = os.path.join(path_to_plots, f'monthly_climatology_precip_over_imbie_basins_{cde_run_dte}.png')
+fig, axes = plot_monthly_climatology(
+    region_monthly_clim_cos,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3", "GPM PMW V07"),
+    product_styles=product_styles,
+    figsize=(10, 9),
+    ylabel="mm/month",
+    y_nbins=4,
+    legend_ncol=3,
+)
+
+fig.savefig(svnme, dpi=300)
+plt.show()
+gc.collect()
+
+#%% Seasonal Climatology
+region_seasonal_clim_cos = compute_seasonal_climatology_from_regional_series(
+    regional_monthly_cos_df,
+    drop_incomplete=True
+)
+svnme = os.path.join(path_to_plots, f'seasonal_climatology_precip_over_imbie_basins_{cde_run_dte}.png')
+fig, axes = plot_seasonal_climatology(
+    region_seasonal_clim_cos,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
+    product_styles=product_styles,
+    figsize=(10, 8),
+    ylabel="mm/season",
+    y_nbins=5,
+    legend_ncol=3,
+)
+
+fig.savefig(svnme, dpi=300)
+plt.show()
+gc.collect()
+
+#%% Interannual Variability
+region_annual_cos = compute_annual_totals_from_regional_series(
+    regional_monthly_cos_df
+)
+
+svnme = os.path.join(path_to_plots, f'interannual_variability_precip_over_imbie_basins_{cde_run_dte}.png')
+fig, axes = plot_interannual_variability(
+    region_annual_cos,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
+    product_styles=product_styles,
+    figsize=(10, 9),
+    ylabel="mm/year",
+    y_nbins=5,
+    legend_ncol=3,
+)
+
+fig.savefig(svnme, dpi=300)
+plt.show()
+gc.collect()
+
+
+#%% Seasonal Anomalies
+# =============================================================================
+#BUILD REGION-WISE SEASONAL SERIES AND ANOMALIES
+# =============================================================================
+
+region_monthly_wide_dict = regional_monthly_tidy_to_region_dict(
+    regional_monthly_cos_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+)
+
+
+ts_seasonal_dict = {}
+ts_seasonal_anom_dict = {}
+
+for region, wide_df in region_monthly_wide_dict.items():
+    ts_seasonal = build_conventional_seasonal_series_from_region_monthly(
+        ts_region_monthly=wide_df,
+        seasonal_mode="mean",
+        drop_incomplete=True,
+    )
+    ts_anom = deseasonalize_seasonal_series(ts_seasonal)
+
+    ts_seasonal_dict[region] = ts_seasonal
+    ts_seasonal_anom_dict[region] = ts_anom
+
+# print(ts_seasonal_dict["Antarctica"].head())
+# print(ts_seasonal_anom_dict["Antarctica"].head())
+
+svnme = os.path.join(path_to_plots, f'seasonal_anomalies_precip_over_imbie_basins_{cde_run_dte}.png')
+fig_ts, axes_ts = plot_seasonal_anomaly_timeseries_regions_3x1(
+    ts_seasonal_anom_dict=ts_seasonal_anom_dict,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=("ERA5", "GPCP v3.3"),
+    product_styles=product_styles,
+    figsize=(10, 9),
+    y_nbins=5,
+    ylabel="mm/season",
+    legend_ncol=3,
+)
+
+fig_ts.savefig(svnme, dpi=300)
+plt.show()
+gc.collect()
+
+#----------------------------------------------------------------------------------
+lims_by_region = {
+    "Antarctica": (-3, 3),
+    "West Antarctica": (-10, 10),
+    "East Antarctica": (-3, 3),
+}
+svnme = os.path.join(path_to_plots, f'seasonal_anomaly_scatter_precip_over_imbie_basins_{cde_run_dte}.png')
+
+
+fig_sc, axes_sc, stats_sc = plot_seasonal_anomaly_scatter_regions_3xN(
+    region_anom_dict=ts_seasonal_anom_dict,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=("ERA5", "GPCP v3.3"),
+    figsize=(10.8, 11.5),
+    share_lims=False,
+    lims=lims_by_region,
+    equal_axes=True,
+    point_size=65,
+)
+
+
+fig_sc.savefig(svnme, dpi=300)
+plt.show()
+gc.collect()
+
+stats_table_wide = seasonal_scatter_stats_to_wide_table(
+    stats_out=stats_sc,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    target_cols=("ERA5", "GPCP v3.3"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+)
+
+print(stats_table_wide)
+
+
+#%% ANNUAL TOTALS AND 2013–2020 MEAN ANNUAL FIELDS
+
+# Build annual fields [mm/year]
+pmb_annual_01  = monthly_to_annual_totals_field(pmb_mon_01)
+era5_annual_01 = monthly_to_annual_totals_field(era5_mnth_01)
+gpcp_annual_01 = monthly_to_annual_totals_field(gpcp_mon_01)
+
+# Build 2013–2020 mean annual fields [mm/year]
+pmb_annual_mean_01  = annual_to_multiyear_mean_field(pmb_annual_01,  2013, 2020)
+era5_annual_mean_01 = annual_to_multiyear_mean_field(era5_annual_01, 2013, 2020)
+gpcp_annual_mean_01 = annual_to_multiyear_mean_field(gpcp_annual_01, 2013, 2020)
+
+print(pmb_annual_mean_01.shape, era5_annual_mean_01.shape, gpcp_annual_mean_01.shape)
+
+
+# =============================================================================
+# SECTION 10.3. BUILD BASIN MULTI-YEAR MEAN ANNUAL DATAFRAME
+# =============================================================================
+
+BASIN_IDS = sorted(AIS_BASINS)
+
+basin_mask_01deg_clean = basin_mask_01deg.where(basin_mask_01deg.isin(BASIN_IDS))
+
+df_pmb_basin = compute_basin_cosine_weighted_means_from_field(
+    da_2d=pmb_annual_mean_01,
+    basin_mask_2d=basin_mask_01deg_clean,
+    basin_ids=BASIN_IDS,
+    value_name=r"$P_{\mathrm{MB}}$",
+)
+
+df_era5_basin = compute_basin_cosine_weighted_means_from_field(
+    da_2d=era5_annual_mean_01,
+    basin_mask_2d=basin_mask_01deg_clean,
+    basin_ids=BASIN_IDS,
+    value_name="ERA5",
+)
+
+df_gpcp_basin = compute_basin_cosine_weighted_means_from_field(
+    da_2d=gpcp_annual_mean_01,
+    basin_mask_2d=basin_mask_01deg_clean,
+    basin_ids=BASIN_IDS,
+    value_name="GPCP v3.3",
+)
+
+# Merge
+df_basin_mean_annual = (
+    df_pmb_basin
+    .merge(df_era5_basin, on="basin", how="outer")
+    .merge(df_gpcp_basin, on="basin", how="outer")
+    .sort_values("basin")
+    .reset_index(drop=True)
+)
+
+# print(df_basin_mean_annual)
+svnme = os.path.join(path_to_plots, f'annual_precip_basin_mean_scatter_{cde_run_dte}.png')
+fig_sc_basin, axes_sc_basin, stats_sc_basin = plot_pmb_scatter_oldstyle(
+    df_mean_yr_acc=df_basin_mean_annual,
+    ref=r"$P_{\mathrm{MB}}$",
+    products=["ERA5", "GPCP v3.3"],
+    high_thresh=500.0,
+    scale="log",
+    log_min=5,
+    log_ticks=(5, 10, 20, 50, 100, 200, 500, 1000, 2000),
+    ncols=2,
+    figsize_per_col=4.8,
+    figsize_per_row=4.5,
+    share_axes=False,
+    show_ylabel_only_left=False,
+)
+
+fig_sc_basin.savefig(svnme, dpi=300)
+plt.show()
+
+print(stats_sc_basin)
+gc.collect()
+
+#----------------------------------------------------------------------------------
+svnme = os.path.join(path_to_plots, f'basin_spread_points_precip_over_imbie_basins_{cde_run_dte}.png')
+fig_spread, ax_spread, spread_non_gpm, spread_gpm = plot_basin_spread_points_dual(
+    df=df_basin_mean_annual,
+    basin_col="basin",
+    ref_col=r"$P_{\mathrm{MB}}$",
+    prod_cols=["ERA5", "GPCP v3.3", "GPM PMW V07"],   # GPM placeholder okay if absent
+    prod_labels=None,
+    product_styles=product_styles_corr,
+    non_gpm_group=[r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"],
+    gpm_group=[r"$P_{\mathrm{MB}}$", "GPM PMW V07"],
+    figsize=(13, 5.2),
+    log_scale=True,
+    ylim=(10, 2000),
+    legend_ncol=4,
+    place_key=True,
+)
+
+fig_spread.savefig(svnme, dpi=300)
+
+plt.show()
+gc.collect()
+#%%
 crs = "+proj=longlat +datum=WGS84 +no_defs"  
 crs_format = 'proj4' 
 
@@ -47,76 +583,6 @@ cde_run_dte = str(date.today().strftime('%Y%m%d'))
 # id2name = {1: "F-G", 2: "A-Ap", 3: "Ap-B", 4: "B-C", ...}
 
 #----------------------------------------------------------------------------------
-
-product_order_corr = [
-    r"$P_{\mathrm{MB}}$",
-    "ERA5",
-    "GPCP v3.3",
-    # "ATMS",
-    # "ATMS (corr.)",
-    # "MHS",
-    # "MHS (corr.)",
-    # "DMSP SSMIS",
-    # "DMSP SSMIS (corr.)",
-    # "AMSR2",
-    # "AMSR2 (corr.)",   
-    "GPM PMW V07 (corr.)",
-    "GPM PMW V07",
-]
-
-product_styles_corr = {
-    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.5},
-
-    "ERA5": {"color": "blue", "marker": "s", "lw": 2.5},
-    "GPCP v3.3": {"color": "orange", "marker": "D", "lw": 2.5},
-
-    "ATMS": {"color": "tab:blue", "lw": 1.5},
-    "ATMS (corr.)": {"color": "tab:blue", "ls": "--", "lw": 2},
-
-    "MHS": {"color": "lime", "lw": 1.5},
-    "MHS (corr.)": {"color": "lime", "ls": "--", "lw": 2},
-
-    "DMSP SSMIS": {"color": "green", "lw": 1.5},
-    "DMSP SSMIS (corr.)": {"color": "green", "ls": "--", "lw": 2},
-
-    "AMSR2": {"color": "red", "lw": 1.5},
-    "AMSR2 (corr.)": {"color": "red", "ls": "--", "lw": 2},
-
-    "GPM PMW V07": {"color": "cyan", "lw": 3.5},
-    "GPM PMW V07 (corr.)": {"color": "cyan", "ls": "--", "lw": 3.5},
-}
-
-corr_targets = [
-    # "ATMS",
-    # "MHS",
-    # "DMSP SSMIS",
-    # "AMSR2",
-    "GPM PMW V07",
-]
-
-product_order = [
-    r"$P_{\mathrm{MB}}$",
-    "ERA5",
-    "GPCP v3.3",
-    # "RACMO 2.4p1",
-    "ATMS",
-    "MHS",
-    "DMSP SSMIS",
-    "AMSR2",
-    "GPM PMW V07",
-]
-
-product_styles = {
-    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.0},
-    "ERA5": {"color": "blue", "marker": "s", "lw": 1.8},
-    "GPCP v3.3": {"color": "tab:orange", "marker": "D", "lw": 1.8},
-    # "RACMO 2.4p1": {"color": "tab:green", "marker": "^", "lw": 1.8},
-    "ATMS": {"lw": 1.5},
-    "MHS": {"lw": 1.5},
-    "DMSP SSMIS": {"lw": 1.5},
-    "AMSR2": {"lw": 1.5},
-    "GPM PMW V07": {"lw": 1.5},
-}
 
 #----------------------------------------------------------------------------------
 # basin grid
