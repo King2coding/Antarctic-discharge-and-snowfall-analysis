@@ -297,7 +297,7 @@ gpm_pmw_v07_mon_01 = build_gpm_pmw_mean(
     mean_name="GPM PMW V07"
 )
 
-print(gpm_pmw_v07_mon_01)
+# print(gpm_pmw_v07_mon_01)
 print(gpm_pmw_v07_mon_01.shape)
 #%%
 # =============================================================================
@@ -319,9 +319,9 @@ regional_monthly_cos_df = build_all_region_monthly_series_cosine(
     time_name="time",
 )
 
-print(regional_monthly_cos_df.head())
-print(regional_monthly_cos_df.tail())
-print(regional_monthly_cos_df.groupby(["region", "product"]).size())
+# print(regional_monthly_cos_df.head())
+# print(regional_monthly_cos_df.tail())
+# print(regional_monthly_cos_df.groupby(["region", "product"]).size())
 
 
 #%% Monthly Climatology
@@ -335,7 +335,7 @@ fig, axes = plot_monthly_climatology(
     region_monthly_clim_cos,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
     product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3", "GPM PMW V07"),
-    product_styles=product_styles,
+    product_styles=product_styles_corr,
     figsize=(10, 9),
     ylabel="mm/month",
     y_nbins=4,
@@ -355,8 +355,8 @@ svnme = os.path.join(path_to_plots, f'seasonal_climatology_precip_over_imbie_bas
 fig, axes = plot_seasonal_climatology(
     region_seasonal_clim_cos,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
-    product_styles=product_styles,
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3", "GPM PMW V07"),
+    product_styles=product_styles_corr,
     figsize=(10, 8),
     ylabel="mm/season",
     y_nbins=5,
@@ -376,8 +376,8 @@ svnme = os.path.join(path_to_plots, f'interannual_variability_precip_over_imbie_
 fig, axes = plot_interannual_variability(
     region_annual_cos,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
-    product_styles=product_styles,
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3", "GPM PMW V07"),
+    product_styles=product_styles_corr,
     figsize=(10, 9),
     ylabel="mm/year",
     y_nbins=5,
@@ -469,18 +469,18 @@ stats_table_wide = seasonal_scatter_stats_to_wide_table(
 
 print(stats_table_wide)
 
-
 #%% ANNUAL TOTALS AND 2013–2020 MEAN ANNUAL FIELDS
 
 # Build annual fields [mm/year]
 pmb_annual_01  = monthly_to_annual_totals_field(pmb_mon_01)
 era5_annual_01 = monthly_to_annual_totals_field(era5_mnth_01)
 gpcp_annual_01 = monthly_to_annual_totals_field(gpcp_mon_01)
-
+gpm_pmw_v07_01 = monthly_to_annual_totals_field(gpm_pmw_v07_mon_01)
 # Build 2013–2020 mean annual fields [mm/year]
 pmb_annual_mean_01  = annual_to_multiyear_mean_field(pmb_annual_01,  2013, 2020)
 era5_annual_mean_01 = annual_to_multiyear_mean_field(era5_annual_01, 2013, 2020)
 gpcp_annual_mean_01 = annual_to_multiyear_mean_field(gpcp_annual_01, 2013, 2020)
+gpm_pmw_v07_01 = annual_to_multiyear_mean_field(gpm_pmw_v07_01, 2013, 2020)
 
 print(pmb_annual_mean_01.shape, era5_annual_mean_01.shape, gpcp_annual_mean_01.shape)
 
@@ -514,11 +514,19 @@ df_gpcp_basin = compute_basin_cosine_weighted_means_from_field(
     value_name="GPCP v3.3",
 )
 
+df_gpm_pmw_v07 = compute_basin_cosine_weighted_means_from_field(
+    da_2d=gpm_pmw_v07_01,
+    basin_mask_2d=basin_mask_01deg_clean,
+    basin_ids=BASIN_IDS,
+    value_name="GPM PMW v07",
+)
+
 # Merge
 df_basin_mean_annual = (
     df_pmb_basin
     .merge(df_era5_basin, on="basin", how="outer")
     .merge(df_gpcp_basin, on="basin", how="outer")
+    .merge(df_gpm_pmw_v07, on="basin", how="outer")
     .sort_values("basin")
     .reset_index(drop=True)
 )
@@ -528,12 +536,12 @@ svnme = os.path.join(path_to_plots, f'annual_precip_basin_mean_scatter_{cde_run_
 fig_sc_basin, axes_sc_basin, stats_sc_basin = plot_pmb_scatter_oldstyle(
     df_mean_yr_acc=df_basin_mean_annual,
     ref=r"$P_{\mathrm{MB}}$",
-    products=["ERA5", "GPCP v3.3"],
+    products=["ERA5", "GPCP v3.3", "GPM PMW v07"],
     high_thresh=500.0,
     scale="log",
-    log_min=5,
+    log_min=2,
     log_ticks=(5, 10, 20, 50, 100, 200, 500, 1000, 2000),
-    ncols=2,
+    ncols=3,
     figsize_per_col=4.8,
     figsize_per_row=4.5,
     share_axes=False,
@@ -565,6 +573,122 @@ fig_spread, ax_spread, spread_non_gpm, spread_gpm = plot_basin_spread_points_dua
 )
 
 fig_spread.savefig(svnme, dpi=300)
+
+plt.show()
+gc.collect()
+
+#%% ANnual Mean 
+BASIN_IDS = sorted(AIS_BASINS)
+basin_mask_01deg_clean = basin_mask_01deg.where(basin_mask_01deg < 1e10)
+basin_mask_01deg_clean = basin_mask_01deg_clean.where(basin_mask_01deg_clean.isin(BASIN_IDS))
+
+pmb_pack = build_basin_mean_plot_product(
+    pmb_mon_01, basin_mask_01deg_clean, BASIN_IDS, r"P$_{MB}$"
+)
+era5_pack = build_basin_mean_plot_product(
+    era5_mnth_01, basin_mask_01deg_clean, BASIN_IDS, "ERA5"
+)
+gpcp_pack = build_basin_mean_plot_product(
+    gpcp_mon_01, basin_mask_01deg_clean, BASIN_IDS, "GPCP v3.3"
+)
+# =============================================================================
+# BUILD GPM MONTHLY 0.1° FIELDS, BASIN PACKS, AND FINAL DUAL-CBAR MAP
+# =============================================================================
+
+# -------------------------------------------------------------------------
+# 1. Pull GPM-family monthly 0.1° fields from the prepared dictionary
+# -------------------------------------------------------------------------
+dmsp_mon_01 = gpm_family_monthly_dict["DMSP SSMIS"]
+atms_mon_01 = gpm_family_monthly_dict["ATMS"]
+mhs_mon_01  = gpm_family_monthly_dict["MHS"]
+amsr2_mon_01 = gpm_family_monthly_dict["AMSR2"]
+
+# -------------------------------------------------------------------------
+# 2. Build overall GPM PMW V07 mean monthly 0.1° field
+# -------------------------------------------------------------------------
+gpm_pmw_mon_01 = build_gpm_pmw_mean(
+    gpm_family_dict=gpm_family_monthly_dict,
+    mean_name="GPM PMW V07"
+)
+
+print("GPM PMW V07:", gpm_pmw_mon_01.shape, gpm_pmw_mon_01.name)
+
+# -------------------------------------------------------------------------
+# 3. Build basin-aggregated annual-mean packs
+# -------------------------------------------------------------------------
+atms_pack = build_basin_mean_plot_product(
+    atms_mon_01,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "ATMS"
+)
+
+mhs_pack = build_basin_mean_plot_product(
+    mhs_mon_01,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "MHS"
+)
+
+dmsp_pack = build_basin_mean_plot_product(
+    dmsp_mon_01,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "DMSP-SSMIS"
+)
+
+amsr2_pack = build_basin_mean_plot_product(
+    amsr2_mon_01,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "AMSR2"
+)
+
+gpm_pmw_pack = build_basin_mean_plot_product(
+    gpm_pmw_mon_01,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "GPM PMW V07"
+)
+
+# -------------------------------------------------------------------------
+# 4. Assemble the final list for plotting
+# -------------------------------------------------------------------------
+arr_lst_mean = [
+    (pmb_pack["product"],      pmb_pack["plot_grid"],      pmb_pack["panel_mean"]),
+    (era5_pack["product"],     era5_pack["plot_grid"],     era5_pack["panel_mean"]),
+    (gpcp_pack["product"],     gpcp_pack["plot_grid"],     gpcp_pack["panel_mean"]),
+    (atms_pack["product"],     atms_pack["plot_grid"],     atms_pack["panel_mean"]),
+    (mhs_pack["product"],      mhs_pack["plot_grid"],      mhs_pack["panel_mean"]),
+    (dmsp_pack["product"],     dmsp_pack["plot_grid"],     dmsp_pack["panel_mean"]),
+    (amsr2_pack["product"],    amsr2_pack["plot_grid"],    amsr2_pack["panel_mean"]),
+    (gpm_pmw_pack["product"],  gpm_pmw_pack["plot_grid"],  gpm_pmw_pack["panel_mean"]),
+]
+
+
+svnme = os.path.join(path_to_plots, f'basin_mean_annual_precip_over_imbie_basins_{cde_run_dte}.png')
+fig, axes, cb1, cb2 = compare_mean_precip_basin_dual_cbar(
+    arr_lst_mean=arr_lst_mean,
+    basin_mask_latlon=basin_mask_01deg_clean,
+    group1_idx=[0, 1, 2],
+    group2_idx=[3, 4, 5, 6, 7],
+    ncols=4,
+    gamma1=0.6,
+    vmin1=0,
+    vmax1=400,
+    cbar_tcks1=[0, 25, 50, 100, 200, 300, 400],
+    cbar_label1="axes (a, b, c)",
+    gamma2=0.6,
+    vmin2=0,
+    vmax2=80,
+    cbar_tcks2=[0, 5, 10, 20, 40, 60, 80],
+    cbar_label2="axes (d, e, f, g, h)",
+    panel_letters=True,
+    show_panel_mean=True,
+)
+plt.show()
+
+fig.savefig(svnme, dpi=300)
 
 plt.show()
 gc.collect()

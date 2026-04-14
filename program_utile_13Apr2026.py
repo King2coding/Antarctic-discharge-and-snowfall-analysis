@@ -1197,10 +1197,61 @@ def annual_to_multiyear_mean_field(da_annual, year_start=2013, year_end=2020):
     da = da_annual.sel(year=slice(year_start, year_end))
     return da.mean(dim="year", skipna=True)
 
+# =============================================================================
+# HELPER: COSINE-WEIGHTED MEAN OVER VALID MASK
+# =============================================================================
 
+def cosine_weighted_panel_mean(
+    da_2d,
+    valid_mask=None,
+    lat_name="lat",
+    lon_name="lon",
+):
+    """
+    Cosine-weighted mean of a 2D lat-lon field over a valid mask.
+
+    Parameters
+    ----------
+    da_2d : xr.DataArray
+        2D field on lat-lon grid
+    valid_mask : xr.DataArray or np.ndarray or None
+        Boolean mask on same grid; if None, use all finite values
+    """
+    if valid_mask is None:
+        valid_mask = xr.where(np.isfinite(da_2d), True, False)
+    elif not isinstance(valid_mask, xr.DataArray):
+        valid_mask = xr.DataArray(
+            valid_mask,
+            coords={lat_name: da_2d[lat_name], lon_name: da_2d[lon_name]},
+            dims=(lat_name, lon_name),
+        )
+
+    da_masked = da_2d.where(valid_mask)
+
+    lat_vals = da_2d[lat_name].values
+    lon_vals = da_2d[lon_name].values
+
+    w_lat = np.cos(np.deg2rad(lat_vals))
+    w_2d = xr.DataArray(
+        np.repeat(w_lat[:, None], len(lon_vals), axis=1),
+        coords={lat_name: lat_vals, lon_name: lon_vals},
+        dims=(lat_name, lon_name),
+    )
+
+    valid = xr.where(np.isfinite(da_masked), 1.0, np.nan)
+    w_valid = w_2d * valid
+
+    num = (da_masked * w_valid).sum(dim=(lat_name, lon_name), skipna=True)
+    den = w_valid.sum(dim=(lat_name, lon_name), skipna=True)
+
+    if float(den.values) == 0:
+        return np.nan
+
+    return float((num / den).values)
 # =============================================================================
 # COSINE-WEIGHTED BASIN MEANS FROM A 2D FIELD
 # =============================================================================
+
 
 def compute_basin_cosine_weighted_means_from_field(
     da_2d,
@@ -1212,21 +1263,11 @@ def compute_basin_cosine_weighted_means_from_field(
     value_name="precipitation",
 ):
     """
-    Compute cosine-weighted mean within each basin from a 2D lat-lon field.
-
-    Parameters
-    ----------
-    da_2d : xr.DataArray
-        2D field on common lat-lon grid, e.g. mean annual precipitation [mm/year]
-    basin_mask_2d : xr.DataArray
-        Basin ID grid on the same lat-lon grid
-    basin_ids : list-like
-        Basin IDs to compute
+    Compute one cosine-weighted mean value per basin from a 2D lat-lon field.
     """
     lat_vals = da_2d[lat_name].values
     lon_vals = da_2d[lon_name].values
 
-    # 2D cosine(lat) weights
     w_lat = np.cos(np.deg2rad(lat_vals))
     w_2d = xr.DataArray(
         np.repeat(w_lat[:, None], len(lon_vals), axis=1),
@@ -1246,7 +1287,7 @@ def compute_basin_cosine_weighted_means_from_field(
         num = (da_b * w_valid).sum(dim=(lat_name, lon_name), skipna=True)
         den = w_valid.sum(dim=(lat_name, lon_name), skipna=True)
 
-        mean_val = (num / den).item() if float(den.values) > 0 else np.nan
+        mean_val = (num / den).item() if np.isfinite(den.values) and float(den.values) > 0 else np.nan
 
         out.append({
             basin_name: int(bid),
@@ -1254,6 +1295,90 @@ def compute_basin_cosine_weighted_means_from_field(
         })
 
     return pd.DataFrame(out)
+
+
+def basin_means_to_plot_grid(
+    basin_mean_df,
+    basin_mask_2d,
+    basin_col="basin",
+    value_col="precipitation",
+):
+    """
+    Paint one basin-mean value back onto the basin mask grid.
+    Output is a 2D DataArray with one uniform value per basin.
+    """
+    out = xr.full_like(basin_mask_2d.astype(float), np.nan, dtype=float)
+
+    value_map = dict(zip(
+        basin_mean_df[basin_col].astype(int).tolist(),
+        basin_mean_df[value_col].astype(float).tolist()
+    ))
+
+    for bid, val in value_map.items():
+        out = xr.where(basin_mask_2d == bid, val, out)
+
+    out.name = value_col
+    return out
+
+
+def basin_panel_mean_from_basin_df(
+    basin_mean_df,
+    value_col="precipitation",
+):
+    """
+    Mean of basin values, matching the original slide concept:
+    'Mean is the mean of all basins'
+    """
+    vals = basin_mean_df[value_col].astype(float).values
+    vals = vals[np.isfinite(vals)]
+    return np.nan if len(vals) == 0 else float(np.nanmean(vals))
+
+
+def build_basin_mean_plot_product(
+    da_monthly,
+    basin_mask_2d,
+    basin_ids,
+    product_name,
+    year_start=2013,
+    year_end=2020,
+):
+    """
+    Full pipeline for one product:
+      monthly field -> annual totals -> mean annual field ->
+      basin cosine means -> basin-filled plot grid -> cosine-weighted panel mean
+    """
+    da_annual = monthly_to_annual_totals_field(da_monthly)
+    da_annual_mean = annual_to_multiyear_mean_field(da_annual, year_start, year_end)
+
+    basin_df = compute_basin_cosine_weighted_means_from_field(
+        da_2d=da_annual_mean,
+        basin_mask_2d=basin_mask_2d,
+        basin_ids=basin_ids,
+        value_name=product_name,
+    )
+
+    plot_grid = basin_means_to_plot_grid(
+        basin_mean_df=basin_df.rename(columns={product_name: "precipitation"}),
+        basin_mask_2d=basin_mask_2d,
+        basin_col="basin",
+        value_col="precipitation",
+    )
+
+    # THIS is the corrected panel mean
+    panel_mean = basin_panel_mean_cosine_from_plot_grid(
+        basin_plot_grid=plot_grid,
+        basin_mask_2d=basin_mask_2d,
+        lat_name="lat",
+    )
+
+    return {
+        "product": product_name,
+        "annual_mean_field": da_annual_mean,
+        "basin_mean_df": basin_df,
+        "plot_grid": plot_grid,
+        "panel_mean": panel_mean,
+    }
+
 #%% The plots
 # =============================================================================
 # HELPER FUNCTIONS FOR NICE SYMMETRIC AXES
@@ -1389,6 +1514,28 @@ def regression_stats(x, y):
 # PLOT HELPER 1. MONTHLY CLIMATOLOGY
 # =============================================================================
 
+def get_zonal(spatial_product, mask, y, axis=(0, 1)):
+    cosines = np.cos(np.radians(y))[:, np.newaxis]
+    cosines = np.where(mask, cosines, 0)
+    weights = cosines / np.nansum(cosines)
+    return np.nansum(weights * spatial_product, axis=axis)
+
+def basin_panel_mean_cosine_from_plot_grid(
+    basin_plot_grid,
+    basin_mask_2d,
+    lat_name="lat",
+):
+    """
+    Cosine-weighted mean over the basin-masked 2D plot grid.
+    """
+    data = basin_plot_grid.values.astype(float)
+    mask = np.isfinite(basin_mask_2d.values)
+    lat_vals = basin_plot_grid[lat_name].values
+
+    # keep only valid basin-domain pixels
+    data = np.where(mask, data, np.nan)
+
+    return float(get_zonal(data, mask, lat_vals))
 
 def plot_monthly_climatology(
     clim_df,
@@ -1438,7 +1585,7 @@ def plot_monthly_climatology(
     fig.legend(
         handles, labels,
         loc="lower center",
-        bbox_to_anchor=(0.5, -0.001),
+        bbox_to_anchor=(0.5, -0.03),
         ncol=legend_ncol,
         fontsize=15,
         frameon=False
@@ -1499,7 +1646,7 @@ def plot_seasonal_climatology(
     fig.legend(
         handles, labels,
         loc="lower center",
-        bbox_to_anchor=(0.5, -0.001),
+        bbox_to_anchor=(0.5, -0.03),
         ncol=legend_ncol,
         fontsize=15,
         frameon=False
@@ -1554,7 +1701,7 @@ def plot_interannual_variability(
     fig.legend(
         handles, labels,
         loc="lower center",
-        bbox_to_anchor=(0.5, -0.001),
+        bbox_to_anchor=(0.5, -0.03),
         ncol=legend_ncol,
         fontsize=15,
         frameon=False
@@ -2111,12 +2258,6 @@ def plot_pmb_scatter_oldstyle(
 # Adapted to the new cosine-weighted basin dataframe
 # -----------------------------------------------------------------------------
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-
-
 def plot_basin_spread_points_dual(
     df,
     basin_col="basin",
@@ -2396,3 +2537,355 @@ def plot_basin_spread_points_dual(
     return fig, ax, spread_non_gpm, spread_gpm
 
 
+# =============================================================================
+# ANNUAL SPATIAL COMPARISON ON COMMON LAT-LON GRID
+# WITH COSINE-WEIGHTED PANEL MEAN
+# =============================================================================
+
+import math
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import xarray as xr
+import numpy as np
+from matplotlib.colors import PowerNorm
+from matplotlib.cm import ScalarMappable
+from matplotlib.ticker import FixedLocator
+
+
+def compare_mean_precip_grid_power_latlon(
+    arr_lst_mean,
+    basin_mask_latlon,
+    ncols=4,
+    figsize=None,
+    cmap=None,
+    gamma=0.6,
+    vmin=0,
+    vmax=400,
+    cbar_tcks=None,
+    cbar_label="Precipitation [mm/year]",
+    panel_letters=False,
+    show_panel_mean=True,
+    mean_fmt="Mean: {:.0f}",
+    mean_xy=(0.07, 0.93),
+    mean_fontsize=12,
+    basin_linecolor="k",
+    basin_linewidth=0.6,
+):
+    """
+    Multi-panel Antarctic precipitation maps for fields on common lat-lon grid.
+    Panel mean is computed using cosine-weighted averaging over valid basin cells.
+    """
+
+    if len(arr_lst_mean) == 0:
+        raise ValueError("arr_lst_mean is empty.")
+
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet if cmap is None else cmap
+    norm = PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax)
+
+    n = len(arr_lst_mean)
+    ncols = min(ncols, n)
+    nrows = math.ceil(n / ncols)
+
+    if figsize is None:
+        figsize = (4.0 * ncols, 4.2 * nrows)
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        subplot_kw={"projection": proj},
+        figsize=figsize
+    )
+
+    axes = np.atleast_1d(axes).ravel()
+
+    fig.subplots_adjust(
+        left=0.04, right=0.90,
+        top=0.96, bottom=0.10,
+        wspace=0.05, hspace=0.20
+    )
+
+    letters = list("abcdefghijklmnopqrstuvwxyz")
+
+    for i, (ax, (product_name, data)) in enumerate(zip(axes, arr_lst_mean)):
+        panel_label = letters[i] if panel_letters and i < len(letters) else None
+
+        _plot_single_polar_basin_panel(
+            ax=ax,
+            product_name=product_name,
+            data=data,
+            basin_mask_latlon=basin_mask_latlon,
+            proj=proj,
+            cmap=cmap,
+            norm=norm,
+            panel_label=panel_label,
+            show_panel_mean=show_panel_mean,
+            mean_fmt=mean_fmt,
+            mean_xy=mean_xy,
+            mean_fontsize=mean_fontsize,
+            basin_linecolor=basin_linecolor,
+            basin_linewidth=basin_linewidth,
+        )
+
+    for ax in axes[len(arr_lst_mean):]:
+        ax.set_visible(False)
+
+    sm = ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+
+    cb = fig.colorbar(
+        sm,
+        ax=[ax for ax in axes if ax.get_visible()],
+        orientation="horizontal",
+        fraction=0.03,
+        pad=0.06,
+    )
+
+    if cbar_tcks is not None:
+        cb.set_ticks(cbar_tcks)
+
+    cb.ax.tick_params(labelsize=12)
+    cb.ax.minorticks_off()
+    cb.set_label(cbar_label, fontsize=14)
+
+    return fig, axes
+
+
+# =============================================================================
+# 2) POLAR PANEL HELPER FOR BASIN-FILLED MAPS
+# =============================================================================
+
+def _plot_single_polar_basin_panel(
+    ax,
+    product_name,
+    basin_plot_grid,
+    basin_mask_latlon,
+    panel_mean,
+    proj,
+    cmap,
+    norm,
+    lat_rings=(-65, -70, -75, -80),
+    lon_spokes=np.arange(-180, 180, 30),
+    panel_label=None,
+    title_fs=18,
+    mean_xy=(0.07, 0.93),
+    mean_fontsize=15,
+    mean_fmt="Mean: {:.0f}",
+    basin_linecolor="k",
+    basin_linewidth=0.7,
+):
+    """
+    Plot one basin-aggregated precipitation panel on Antarctic polar map.
+    """
+
+    ax.set_frame_on(False)
+    ax.set_extent([-180, 180, -90, -65], ccrs.PlateCarree())
+
+    if panel_label is not None:
+        title_txt = f"({panel_label}) {product_name}"
+    else:
+        title_txt = product_name
+
+    ax.text(
+        0.15, 1.05,
+        title_txt,
+        transform=ax.transAxes,
+        fontsize=title_fs,
+        fontweight="bold",
+        ha="center",
+        va="bottom"
+    )
+
+    data_plot = xr.where(basin_plot_grid <= 0, 1e-6, basin_plot_grid)
+
+    data_plot.plot(
+        ax=ax,
+        transform=ccrs.PlateCarree(),
+        cmap=cmap,
+        norm=norm,
+        add_colorbar=False,
+        add_labels=False,
+    )
+
+    basin_da = xr.where(np.isfinite(basin_mask_latlon), basin_mask_latlon, 0)
+
+    # internal boundaries
+    internal_levels = np.arange(1.5, 19.5, 1.0)
+    ax.contour(
+        basin_da["lon"],
+        basin_da["lat"],
+        basin_da.values,
+        levels=internal_levels,
+        colors=basin_linecolor,
+        linewidths=basin_linewidth,
+        transform=ccrs.PlateCarree(),
+        zorder=5,
+    )
+
+    # outer coastline
+    ax.contour(
+        basin_da["lon"],
+        basin_da["lat"],
+        basin_da.values,
+        levels=[0.5],
+        colors="k",
+        linewidths=1.2,
+        transform=ccrs.PlateCarree(),
+        zorder=6,
+    )
+
+    if np.isfinite(panel_mean):
+        ax.text(
+            mean_xy[0], mean_xy[1],
+            mean_fmt.format(panel_mean),
+            transform=ax.transAxes,
+            ha="left", va="top",
+            fontsize=mean_fontsize,
+            fontweight="bold",
+            bbox=dict(
+                boxstyle="round,pad=0.20",
+                facecolor="white",
+                edgecolor="none",
+                alpha=0.75
+            ),
+            zorder=20,
+        )
+
+    gl = ax.gridlines(
+        crs=ccrs.PlateCarree(),
+        draw_labels=False,
+        linewidth=0.55,
+        color="gray",
+        alpha=0.8,
+        linestyle="--",
+    )
+    gl.ylocator = FixedLocator(lat_rings)
+    gl.xlocator = FixedLocator(lon_spokes)
+
+    add_polar_latlon_labels(
+        ax,
+        lat_rings=lat_rings,
+        lon_spokes=lon_spokes,
+        label_size=11
+    )
+
+
+# =============================================================================
+# 3) MAIN PLOTTING FUNCTION WITH DUAL COLORBARS
+# =============================================================================
+
+def compare_mean_precip_basin_dual_cbar(
+    arr_lst_mean,
+    basin_mask_latlon,
+    group1_idx,
+    group2_idx,
+    ncols=4,
+    figsize=None,
+    cmap=None,
+    gamma1=0.6,
+    vmin1=0,
+    vmax1=400,
+    cbar_tcks1=None,
+    cbar_label1="axes (a, b, c)",
+    gamma2=0.6,
+    vmin2=0,
+    vmax2=80,
+    cbar_tcks2=None,
+    cbar_label2="axes (d, e, f, g, h)",
+    panel_letters=False,
+    show_panel_mean=True,
+    mean_fmt="Mean: {:.0f}",
+    mean_xy=(0.07, 0.93),
+    mean_fontsize=15,
+):
+    """
+    Basin-aggregated Antarctic precipitation maps with TWO colorbars.
+
+    arr_lst_mean : list of tuples
+        [(product_name, basin_plot_grid, panel_mean), ...]
+    """
+    if len(arr_lst_mean) == 0:
+        raise ValueError("arr_lst_mean is empty.")
+
+    idx_all = set(range(len(arr_lst_mean)))
+    if set(group1_idx).union(set(group2_idx)) != idx_all:
+        raise ValueError("group1_idx and group2_idx must cover all panels exactly.")
+    if set(group1_idx).intersection(set(group2_idx)):
+        raise ValueError("group1_idx and group2_idx must not overlap.")
+
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet if cmap is None else cmap
+
+    norm1 = PowerNorm(gamma=gamma1, vmin=vmin1, vmax=vmax1)
+    norm2 = PowerNorm(gamma=gamma2, vmin=vmin2, vmax=vmax2)
+
+    n = len(arr_lst_mean)
+    ncols = min(ncols, n)
+    nrows = math.ceil(n / ncols)
+
+    if figsize is None:
+        figsize = (4.0 * ncols + 1.2, 4.2 * nrows)
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        subplot_kw={"projection": proj},
+        figsize=figsize
+    )
+    axes = np.atleast_1d(axes).ravel()
+
+    fig.subplots_adjust(
+        left=0.04, right=0.87,
+        top=0.96, bottom=0.06,
+        wspace=0.08, hspace=0.20
+    )
+
+    letters = list("abcdefghijklmnopqrstuvwxyz")
+
+    for i, (ax, (product_name, plot_grid, panel_mean)) in enumerate(zip(axes, arr_lst_mean)):
+        panel_label = letters[i] if panel_letters and i < len(letters) else None
+        norm = norm1 if i in group1_idx else norm2
+
+        _plot_single_polar_basin_panel(
+            ax=ax,
+            product_name=product_name,
+            basin_plot_grid=plot_grid,
+            basin_mask_latlon=basin_mask_latlon,
+            panel_mean=panel_mean if show_panel_mean else np.nan,
+            proj=proj,
+            cmap=cmap,
+            norm=norm,
+            panel_label=panel_label,
+            mean_fmt=mean_fmt,
+            mean_xy=mean_xy,
+            mean_fontsize=mean_fontsize,
+        )
+
+    for ax in axes[len(arr_lst_mean):]:
+        ax.set_visible(False)
+
+    # upper colorbar
+    cax1 = fig.add_axes([0.89, 0.54, 0.016, 0.28])
+    sm1 = ScalarMappable(norm=norm1, cmap=cmap)
+    sm1.set_array([])
+
+    cb1 = fig.colorbar(sm1, cax=cax1, orientation="vertical")
+    if cbar_tcks1 is not None:
+        cb1.set_ticks(cbar_tcks1)
+    cb1.ax.tick_params(labelsize=11)
+    cb1.ax.minorticks_off()
+    cb1.ax.set_title("mm/year", fontsize=12, pad=12)
+    cb1.set_label(cbar_label1, fontsize=10)
+
+    # lower colorbar
+    cax2 = fig.add_axes([0.89, 0.12, 0.016, 0.28])
+    sm2 = ScalarMappable(norm=norm2, cmap=cmap)
+    sm2.set_array([])
+
+    cb2 = fig.colorbar(sm2, cax=cax2, orientation="vertical")
+    if cbar_tcks2 is not None:
+        cb2.set_ticks(cbar_tcks2)
+    cb2.ax.tick_params(labelsize=11)
+    cb2.ax.minorticks_off()
+    cb2.ax.set_title("mm/year", fontsize=12, pad=12)
+    cb2.set_label(cbar_label2, fontsize=10)
+
+    return fig, axes, cb1, cb2
