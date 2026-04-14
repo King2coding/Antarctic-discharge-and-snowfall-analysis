@@ -307,7 +307,7 @@ print(gpm_pmw_v07_mon_01.shape)
 product_monthly_dict = {
     r"$P_{\mathrm{MB}}$": pmb_mon_01,
     "ERA5": era5_mnth_01,
-    "GPCP v3.3": gpcp_mon_01,
+    "GPCP V3.3": gpcp_mon_01,
     "GPM PMW V07": gpm_pmw_v07_mon_01
 }
 
@@ -330,11 +330,16 @@ region_monthly_clim_cos = compute_monthly_climatology_from_regional_series(
     regional_monthly_cos_df
 )
 
+region_monthly_wide_dict = regional_monthly_tidy_to_region_dict(
+    regional_monthly_cos_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+)
+
 svnme = os.path.join(path_to_plots, f'monthly_climatology_precip_over_imbie_basins_{cde_run_dte}.png')
 fig, axes = plot_monthly_climatology(
     region_monthly_clim_cos,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3", "GPM PMW V07"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07"),
     product_styles=product_styles_corr,
     figsize=(10, 9),
     ylabel="mm/month",
@@ -351,20 +356,47 @@ region_seasonal_clim_cos = compute_seasonal_climatology_from_regional_series(
     regional_monthly_cos_df,
     drop_incomplete=True
 )
-svnme = os.path.join(path_to_plots, f'seasonal_climatology_precip_over_imbie_basins_{cde_run_dte}.png')
-fig, axes = plot_seasonal_climatology(
-    region_seasonal_clim_cos,
+
+# region_seasonal_clim_cos should already exist
+# and should include raw GPM PMW V07
+
+pmw_scalar_factors_df = compute_scalar_pmw_factors_from_seasonal_clim_df(
+    region_seasonal_clim_df=region_seasonal_clim_cos,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3", "GPM PMW V07"),
+    reference_col=r"$P_{\mathrm{MB}}$",
+    pmw_col="GPM PMW V07",
+)
+
+region_seasonal_clim_corr = add_scalar_corrected_pmw_to_seasonal_clim_df(
+    region_seasonal_clim_df=region_seasonal_clim_cos,
+    scalar_factors_df=pmw_scalar_factors_df,
+    pmw_col="GPM PMW V07",
+    corrected_col="GPM PMW V07 (corr.)",
+)
+
+fig, axes = plot_seasonal_climatology(
+    region_seasonal_clim_corr,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(
+        r"$P_{\mathrm{MB}}$",
+        "ERA5",
+        "GPCP V3.3",
+        "GPM PMW V07",
+        "GPM PMW V07 (corr.)",
+    ),
     product_styles=product_styles_corr,
     figsize=(10, 8),
     ylabel="mm/season",
-    y_nbins=5,
+    y_nbins=4,
     legend_ncol=3,
 )
 
-fig.savefig(svnme, dpi=300)
-plt.show()
+svnme = os.path.join(
+    path_to_plots,
+    f"seasonal_climatology_precip_over_imbie_basins_{cde_run_dte}.png"
+)
+plt.savefig(svnme, dpi=500, bbox_inches="tight")
+# plt.show()
 gc.collect()
 
 #%% Interannual Variability
@@ -372,15 +404,22 @@ region_annual_cos = compute_annual_totals_from_regional_series(
     regional_monthly_cos_df
 )
 
+region_annual_corr = add_scalar_corrected_pmw_to_annual_df(
+    region_annual_df=region_annual_cos,
+    scalar_factors_df=pmw_scalar_factors_df,
+    pmw_col="GPM PMW V07",
+    corrected_col="GPM PMW V07 (corr.)",
+)
+
 svnme = os.path.join(path_to_plots, f'interannual_variability_precip_over_imbie_basins_{cde_run_dte}.png')
 fig, axes = plot_interannual_variability(
-    region_annual_cos,
+    region_annual_corr,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3", "GPM PMW V07"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07", "GPM PMW V07 (corr.)"),
     product_styles=product_styles_corr,
     figsize=(10, 9),
     ylabel="mm/year",
-    y_nbins=5,
+    y_nbins=4,
     legend_ncol=3,
 )
 
@@ -399,7 +438,6 @@ region_monthly_wide_dict = regional_monthly_tidy_to_region_dict(
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
 )
 
-
 ts_seasonal_dict = {}
 ts_seasonal_anom_dict = {}
 
@@ -417,20 +455,26 @@ for region, wide_df in region_monthly_wide_dict.items():
 # print(ts_seasonal_dict["Antarctica"].head())
 # print(ts_seasonal_anom_dict["Antarctica"].head())
 
+yticks_by_region = {
+    "Antarctica": [-4, 0, 4],
+    "West Antarctica": [-20, 0, 20],
+    "East Antarctica": [-4, 0, 4],
+}
 svnme = os.path.join(path_to_plots, f'seasonal_anomalies_precip_over_imbie_basins_{cde_run_dte}.png')
-fig_ts, axes_ts = plot_seasonal_anomaly_timeseries_regions_3x1(
+
+fig, axes = plot_seasonal_anomaly_timeseries_regions_3x1(
     ts_seasonal_anom_dict=ts_seasonal_anom_dict,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
     ref_col=r"$P_{\mathrm{MB}}$",
-    target_cols=("ERA5", "GPCP v3.3"),
-    product_styles=product_styles,
+    target_cols=("ERA5", "GPCP V3.3", "GPM PMW V07"),
+    product_styles=product_styles_corr,
     figsize=(10, 9),
-    y_nbins=5,
     ylabel="mm/season",
-    legend_ncol=3,
+    legend_ncol=4,  
+    yticks_by_region=yticks_by_region,
 )
 
-fig_ts.savefig(svnme, dpi=300)
+fig.savefig(svnme, dpi=300)
 plt.show()
 gc.collect()
 
@@ -442,19 +486,17 @@ lims_by_region = {
 }
 svnme = os.path.join(path_to_plots, f'seasonal_anomaly_scatter_precip_over_imbie_basins_{cde_run_dte}.png')
 
-
-fig_sc, axes_sc, stats_sc = plot_seasonal_anomaly_scatter_regions_3xN(
+fig_sc, axes_sc, stats_sc = plot_seasonal_anomaly_scatter_regions_3x3(
     region_anom_dict=ts_seasonal_anom_dict,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
     ref_col=r"$P_{\mathrm{MB}}$",
-    target_cols=("ERA5", "GPCP v3.3"),
-    figsize=(10.8, 11.5),
+    target_cols=("ERA5", "GPCP V3.3", "GPM PMW V07"),
+    figsize=(12.0, 11.0),
     share_lims=False,
     lims=lims_by_region,
     equal_axes=True,
-    point_size=65,
+    point_size=58,
 )
-
 
 fig_sc.savefig(svnme, dpi=300)
 plt.show()
@@ -463,7 +505,7 @@ gc.collect()
 stats_table_wide = seasonal_scatter_stats_to_wide_table(
     stats_out=stats_sc,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    target_cols=("ERA5", "GPCP v3.3"),
+    target_cols=("ERA5", "GPCP V3.3", "GPM PMW V07"),
     ref_col=r"$P_{\mathrm{MB}}$",
 )
 
@@ -511,14 +553,14 @@ df_gpcp_basin = compute_basin_cosine_weighted_means_from_field(
     da_2d=gpcp_annual_mean_01,
     basin_mask_2d=basin_mask_01deg_clean,
     basin_ids=BASIN_IDS,
-    value_name="GPCP v3.3",
+    value_name="GPCP V3.3",
 )
 
 df_gpm_pmw_v07 = compute_basin_cosine_weighted_means_from_field(
     da_2d=gpm_pmw_v07_01,
     basin_mask_2d=basin_mask_01deg_clean,
     basin_ids=BASIN_IDS,
-    value_name="GPM PMW v07",
+    value_name="GPM PMW V07",
 )
 
 # Merge
@@ -536,7 +578,7 @@ svnme = os.path.join(path_to_plots, f'annual_precip_basin_mean_scatter_{cde_run_
 fig_sc_basin, axes_sc_basin, stats_sc_basin = plot_pmb_scatter_oldstyle(
     df_mean_yr_acc=df_basin_mean_annual,
     ref=r"$P_{\mathrm{MB}}$",
-    products=["ERA5", "GPCP v3.3", "GPM PMW v07"],
+    products=["ERA5", "GPCP V3.3", "GPM PMW V07"],
     high_thresh=500.0,
     scale="log",
     log_min=2,
@@ -560,14 +602,14 @@ fig_spread, ax_spread, spread_non_gpm, spread_gpm = plot_basin_spread_points_dua
     df=df_basin_mean_annual,
     basin_col="basin",
     ref_col=r"$P_{\mathrm{MB}}$",
-    prod_cols=["ERA5", "GPCP v3.3", "GPM PMW V07"],   # GPM placeholder okay if absent
+    prod_cols=["ERA5", "GPCP V3.3", "GPM PMW V07"],   # GPM placeholder okay if absent
     prod_labels=None,
     product_styles=product_styles_corr,
-    non_gpm_group=[r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"],
+    non_gpm_group=[r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3"],
     gpm_group=[r"$P_{\mathrm{MB}}$", "GPM PMW V07"],
     figsize=(13, 5.2),
     log_scale=True,
-    ylim=(10, 2000),
+    ylim=(2, 2000),
     legend_ncol=4,
     place_key=True,
 )
@@ -589,7 +631,7 @@ era5_pack = build_basin_mean_plot_product(
     era5_mnth_01, basin_mask_01deg_clean, BASIN_IDS, "ERA5"
 )
 gpcp_pack = build_basin_mean_plot_product(
-    gpcp_mon_01, basin_mask_01deg_clean, BASIN_IDS, "GPCP v3.3"
+    gpcp_mon_01, basin_mask_01deg_clean, BASIN_IDS, "GPCP V3.3"
 )
 # =============================================================================
 # BUILD GPM MONTHLY 0.1° FIELDS, BASIN PACKS, AND FINAL DUAL-CBAR MAP
@@ -692,6 +734,64 @@ fig.savefig(svnme, dpi=300)
 
 plt.show()
 gc.collect()
+
+#==============================================================================
+df_regional_mean_annual = compute_regional_mean_annual_precip(
+    region_annual_cos,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07"),
+)
+svnme = os.path.join(path_to_plots, f'regional_mean_annual_precip_over_imbie_basins_{cde_run_dte}.png')
+fig, ax = plot_regional_mean_annual_bars(
+    df_regional_mean_annual,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07"),
+    product_colors=product_styles_corr,
+    figsize=(9, 6),
+    ylabel="[mm/year]",
+    title="2013–2020 mean annual precipitation",
+    annotate=True,
+)
+
+fig.savefig(svnme, dpi=300)
+
+plt.show()
+gc.collect()
+
+#%% CloudSat
+file_cs = r'/ra1/pubdat/Reza_archive/CS_2022_Maps/Monthly'
+all_cs_files = [os.path.join(file_cs, f) for f in os.listdir(file_cs) if f.endswith('.h5')]
+
+import h5py
+import numpy as np
+import matplotlib.pyplot as plt
+
+file_path = all_cs_files[0]
+
+
+with h5py.File(file_path, "r") as f:
+    x = f["X"][...]
+    y = f["Y"][...]
+    snow = f["surface_snowfall_rate"][...]
+
+print("X shape:", x.shape)
+print("Y shape:", y.shape)
+print("snow shape:", snow.shape)
+print("snow min/max:", np.nanmin(snow), np.nanmax(snow))
+
+plt.figure(figsize=(8, 8))
+plt.pcolormesh(x, y, snow, shading="auto")
+plt.colorbar(label="surface_snowfall_rate")
+plt.xlabel("X")
+plt.ylabel("Y")
+plt.title("Surface snowfall rate")
+plt.gca().set_aspect("equal")
+plt.show()
+
+
+csfilept = r'/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/CS-Antarctica_maps'
+cs_ant_mnthly = os.path.join(csfilept, 'CS-Antarctica_monthly_climatology_2007-2010.nc')
+xr.open_dataarray(cs_ant_mnthly)[0].plot()
 #%%
 crs = "+proj=longlat +datum=WGS84 +no_defs"  
 crs_format = 'proj4' 
@@ -1128,7 +1228,7 @@ ts_ais_raw = build_region_monthly_series(
 mean_annual_plot_arrs = [
                     (r"P$_{MB}$", Pmb_annual_mean),
                     (f'ERA5', era5_annual_mean_mean), 
-                    (f'GPCP v3.3', gpcpv3pt3_annual_mean_mean),
+                    (f'GPCP V3.3', gpcpv3pt3_annual_mean_mean),
                     # (f'RACMO 2.4p1', racmo_pr_annual_mean_mean),
                     (f'ATMS', atms_annual_mean_mean),
                     (f'MHS', mhs_annual_mean_mean),

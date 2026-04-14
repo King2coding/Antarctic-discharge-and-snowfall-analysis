@@ -36,7 +36,7 @@ product_styles_corr = {
     r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.5},
 
     "ERA5": {"color": "blue", "marker": "s", "lw": 2.5},
-    "GPCP v3.3": {"color": "orange", "marker": "D", "lw": 2.5},
+    "GPCP V3.3": {"color": "orange", "marker": "D", "lw": 2.5},
 
     "ATMS": {"color": "tab:blue", "lw": 1.5},
     "ATMS (corr.)": {"color": "tab:blue", "ls": "--", "lw": 2},
@@ -66,7 +66,7 @@ corr_targets = [
 product_order = [
     r"$P_{\mathrm{MB}}$",
     "ERA5",
-    "GPCP v3.3",
+    "GPCP V3.3",
     # "RACMO 2.4p1",
     "ATMS",
     "MHS",
@@ -79,7 +79,7 @@ product_order = [
 product_styles = {
     r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.0},
     "ERA5": {"color": "blue", "marker": "s", "lw": 1.8},
-    "GPCP v3.3": {"color": "tab:orange", "marker": "D", "lw": 1.8},
+    "GPCP V3.3": {"color": "tab:orange", "marker": "D", "lw": 1.8},
     # "RACMO 2.4p1": {"color": "tab:green", "marker": "^", "lw": 1.8},
     "ATMS": {"lw": 1.5},
     "MHS": {"lw": 1.5},
@@ -1122,6 +1122,119 @@ def build_conventional_seasonal_series_from_region_monthly(
     seasonal_df.index.name = "time"
     return seasonal_df
 
+# -----------------------------------------------------------------------------
+# 1) seasonal correction factors
+# -----------------------------------------------------------------------------
+def compute_pmw_seasonal_factors(
+    ts_seasonal_dict,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+    pmw_col="GPM PMW V07",
+):
+    """
+    Seasonal multiplicative factors:
+        alpha_s = mean(P_MB in season s) / mean(PMW in season s)
+
+    Computed separately for each region.
+    """
+    rows = []
+    month_to_seas = {1: "DJF", 4: "MAM", 7: "JJA", 10: "SON"}
+
+    for region in region_order:
+        df = ts_seasonal_dict[region].copy()
+        seasons = df.index.month.map(month_to_seas)
+
+        for seas in ["DJF", "MAM", "JJA", "SON"]:
+            mask = seasons == seas
+
+            ref_mean = df.loc[mask, ref_col].mean()
+            pmw_mean = df.loc[mask, pmw_col].mean()
+
+            alpha = np.nan
+            if np.isfinite(ref_mean) and np.isfinite(pmw_mean) and pmw_mean != 0:
+                alpha = ref_mean / pmw_mean
+
+            rows.append({
+                "region": region,
+                "season": seas,
+                "alpha": alpha,
+                "ref_mean": ref_mean,
+                "pmw_mean": pmw_mean,
+            })
+
+    return pd.DataFrame(rows)
+
+
+# -----------------------------------------------------------------------------
+# 2) apply correction to SEASONAL series
+# -----------------------------------------------------------------------------
+def add_pmw_corrected_to_seasonal_dict(
+    ts_seasonal_dict,
+    pmw_factors_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    pmw_col="GPM PMW V07",
+    corrected_col="GPM PMW V07 (corr.)",
+):
+    """
+    Add corrected PMW series to each region's seasonal dataframe.
+    """
+    out = {}
+    month_to_seas = {1: "DJF", 4: "MAM", 7: "JJA", 10: "SON"}
+
+    for region in region_order:
+        df = ts_seasonal_dict[region].copy()
+        seasons = df.index.month.map(month_to_seas)
+
+        fac_sub = pmw_factors_df[pmw_factors_df["region"] == region].copy()
+        fac_map = dict(zip(fac_sub["season"], fac_sub["alpha"]))
+
+        df[corrected_col] = np.nan
+        for seas in ["DJF", "MAM", "JJA", "SON"]:
+            alpha = fac_map.get(seas, np.nan)
+            mask = seasons == seas
+            if np.isfinite(alpha):
+                df.loc[mask, corrected_col] = df.loc[mask, pmw_col] * alpha
+
+        out[region] = df
+
+    return out
+
+# -----------------------------------------------------------------------------
+# apply same seasonal factors to MONTHLY series
+#    then aggregate to YEARLY for slide 6
+# -----------------------------------------------------------------------------
+def add_pmw_corrected_to_monthly_region_dict(
+    region_monthly_wide_dict,
+    pmw_factors_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    pmw_col="GPM PMW V07",
+    corrected_col="GPM PMW V07 (corr.)",
+):
+    """
+    Apply region+season correction factors to monthly PMW series.
+    Each month gets the factor of its season:
+      DJF, MAM, JJA, SON.
+    """
+    out = {}
+
+    for region in region_order:
+        df = _ensure_month_start_index(region_monthly_wide_dict[region].copy())
+
+        fac_sub = pmw_factors_df[pmw_factors_df["region"] == region].copy()
+        fac_map = dict(zip(fac_sub["season"], fac_sub["alpha"]))
+
+        month_seasons = df.index.month.map(month_to_season)
+
+        df[corrected_col] = np.nan
+        for seas in ["DJF", "MAM", "JJA", "SON"]:
+            alpha = fac_map.get(seas, np.nan)
+            mask = month_seasons == seas
+            if np.isfinite(alpha):
+                df.loc[mask, corrected_col] = df.loc[mask, pmw_col] * alpha
+
+        out[region] = df
+
+    return out
 
 def deseasonalize_seasonal_series(df_seasonal):
     """
@@ -1168,6 +1281,182 @@ def seasonal_scatter_stats_to_wide_table(
 
     return pd.DataFrame(rows)
 
+def compute_annual_totals_from_region_dict(
+    region_monthly_wide_dict,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+):
+    """
+    Annual totals [mm/year] from monthly regional wide dataframes.
+    Returns dict of annual wide dfs by region.
+    """
+    out = {}
+
+    for region in region_order:
+        df = _ensure_month_start_index(region_monthly_wide_dict[region].copy())
+        df["year"] = df.index.year
+
+        annual = df.groupby("year").sum(numeric_only=True)
+        annual.index.name = "year"
+        out[region] = annual
+
+    return out
+
+# =============================================================================
+# SCALAR PMW CORRECTION FACTORS BY REGION
+# =============================================================================
+
+def compute_scalar_pmw_factors_from_seasonal_clim_df(
+    region_seasonal_clim_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    reference_col=r"$P_{\mathrm{MB}}$",
+    pmw_col="GPM PMW V07",
+    min_mean=1e-6,
+):
+    """
+    Compute one scalar correction factor per region:
+
+        CF = mean(P_MB over 4 seasons) / mean(PMW over 4 seasons)
+
+    This matches the old slide behavior better than season-specific scaling.
+    """
+    rows = []
+
+    for region in region_order:
+        sub = region_seasonal_clim_df[region_seasonal_clim_df["region"] == region].copy()
+
+        ref_vals = sub[sub["product"] == reference_col]["precipitation"].astype(float).values
+        pmw_vals = sub[sub["product"] == pmw_col]["precipitation"].astype(float).values
+
+        ref_mean = np.nanmean(ref_vals) if len(ref_vals) else np.nan
+        pmw_mean = np.nanmean(pmw_vals) if len(pmw_vals) else np.nan
+
+        if np.isfinite(ref_mean) and np.isfinite(pmw_mean) and pmw_mean > 0:
+            cf = max(ref_mean, min_mean) / max(pmw_mean, min_mean)
+        else:
+            cf = np.nan
+
+        rows.append({
+            "region": region,
+            "correction_factor": cf,
+            "ref_mean": ref_mean,
+            "pmw_mean": pmw_mean,
+        })
+
+    return pd.DataFrame(rows)
+
+# =============================================================================
+# APPLY SCALAR PMW CORRECTION TO SEASONAL CLIMATOLOGY DF
+# =============================================================================
+
+def add_scalar_corrected_pmw_to_seasonal_clim_df(
+    region_seasonal_clim_df,
+    scalar_factors_df,
+    pmw_col="GPM PMW V07",
+    corrected_col="GPM PMW V07 (corr.)",
+):
+    """
+    Add scalar-corrected PMW to the seasonal climatology dataframe.
+    """
+    out_rows = [region_seasonal_clim_df.copy()]
+
+    pmw_sub = region_seasonal_clim_df[
+        region_seasonal_clim_df["product"] == pmw_col
+    ].copy()
+
+    factor_map = dict(zip(
+        scalar_factors_df["region"],
+        scalar_factors_df["correction_factor"]
+    ))
+
+    pmw_sub["product"] = corrected_col
+    pmw_sub["precipitation"] = pmw_sub.apply(
+        lambda r: r["precipitation"] * factor_map.get(r["region"], np.nan),
+        axis=1
+    )
+
+    out_rows.append(pmw_sub)
+
+    out = pd.concat(out_rows, ignore_index=True)
+    return out
+
+# =============================================================================
+# APPLY SCALAR PMW CORRECTION TO YEARLY DF
+# =============================================================================
+
+def add_scalar_corrected_pmw_to_annual_df(
+    region_annual_df,
+    scalar_factors_df,
+    pmw_col="GPM PMW V07",
+    corrected_col="GPM PMW V07 (corr.)",
+):
+    """
+    Add scalar-corrected PMW to annual tidy dataframe.
+    """
+    out_rows = [region_annual_df.copy()]
+
+    pmw_sub = region_annual_df[
+        region_annual_df["product"] == pmw_col
+    ].copy()
+
+    factor_map = dict(zip(
+        scalar_factors_df["region"],
+        scalar_factors_df["correction_factor"]
+    ))
+
+    pmw_sub["product"] = corrected_col
+    pmw_sub["precipitation"] = pmw_sub.apply(
+        lambda r: r["precipitation"] * factor_map.get(r["region"], np.nan),
+        axis=1
+    )
+
+    out_rows.append(pmw_sub)
+
+    out = pd.concat(out_rows, ignore_index=True)
+    return out
+
+# -----------------------------------------------------------------------------
+# tidy converter for plotting if needed
+# -----------------------------------------------------------------------------
+def region_annual_dict_to_tidy_df(
+    region_annual_dict,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+):
+    rows = []
+    for region in region_order:
+        df = region_annual_dict[region].copy()
+        for year in df.index:
+            for col in df.columns:
+                rows.append({
+                    "region": region,
+                    "year": int(year),
+                    "product": col,
+                    "precipitation": df.loc[year, col],
+                })
+    return pd.DataFrame(rows)
+
+def region_seasonal_dict_to_tidy_df(
+    region_seasonal_dict,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+):
+    rows = []
+
+    for region in region_order:
+        df = region_seasonal_dict[region].copy()
+
+        for t in df.index:
+            season = month_to_season(pd.Timestamp(t).month)
+
+            for col in df.columns:
+                rows.append({
+                    "region": region,
+                    "product": col,
+                    "time": pd.Timestamp(t),
+                    "season": season,
+                    "precipitation": df.loc[t, col],
+                })
+
+    out = pd.DataFrame(rows)
+    return out
 # =============================================================================
 # ANNUAL TOTALS AND 2013–2020 MEAN ANNUAL FIELDS
 # =============================================================================
@@ -1187,6 +1476,36 @@ def monthly_to_annual_totals_field(da_monthly, time_name="time"):
     )
     return annual
 
+
+#============================================================================
+def compute_regional_mean_annual_precip(
+    region_annual_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
+):
+    """
+    Compute 2013–2020 mean annual precipitation by region and product
+    from a tidy annual dataframe.
+
+    Expected columns:
+      - region
+      - year
+      - product
+      - precipitation
+    """
+    out = (
+        region_annual_df
+        .groupby(["region", "product"], as_index=False)["precipitation"]
+        .mean()
+    )
+
+    out["region"] = pd.Categorical(out["region"], categories=region_order, ordered=True)
+    out["product"] = pd.Categorical(out["product"], categories=product_order, ordered=True)
+
+    out = out.sort_values(["region", "product"]).reset_index(drop=True)
+    return out
+
+#============================================================================
 
 def annual_to_multiyear_mean_field(da_annual, year_start=2013, year_end=2020):
     """
@@ -1726,6 +2045,7 @@ def plot_seasonal_anomaly_timeseries_regions_3x1(
     y_nbins=4,
     ylabel="mm/season",
     legend_ncol=3,
+    yticks_by_region=None,
 ):
     plot_cols = (ref_col,) + tuple(target_cols)
 
@@ -1749,7 +2069,12 @@ def plot_seasonal_anomaly_timeseries_regions_3x1(
         ax.axhline(0, color="gray", lw=1.0, alpha=0.8)
         ax.set_title(region, fontweight="bold", fontsize=18)
         ax.grid(True, alpha=0.3)
-        ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
+
+        # only set tick labels, not limits
+        if yticks_by_region is not None and region in yticks_by_region:
+            ax.set_yticks(yticks_by_region[region])
+        else:
+            ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
 
     fig.supylabel(ylabel, x=0.06, fontweight="bold", fontsize=18)
 
@@ -1767,7 +2092,6 @@ def plot_seasonal_anomaly_timeseries_regions_3x1(
     plt.tight_layout(rect=[0.05, 0.06, 1, 1])
 
     return fig, axes
-
 # =============================================================================
 # SEASONAL ANOMALY SCATTER PLOT (OLD STYLE, UPDATED)
 # =============================================================================
@@ -1958,6 +2282,199 @@ def plot_seasonal_anomaly_scatter_regions_3xN(
     return fig, axes, stats_out
 
 
+#============================================================================
+def plot_seasonal_anomaly_scatter_regions_3x3(
+    region_anom_dict,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    ref_col=r"$P_{\mathrm{MB}}$",
+    target_cols=("ERA5", "GPCP v3.3", "GPM PMW V07"),
+    panel_titles=None,
+    figsize=(12.0, 11.0),
+    share_lims=False,
+    lims=None,
+    equal_axes=True,
+    point_size=58,
+    point_alpha=0.9,
+    add_regression=True,
+    add_one_to_one=True,
+    add_zero_lines=True,
+    show_stats_text=True,
+    stats_fontsize=15,
+    title_fontsize=18,
+    label_fontsize=15,
+    tick_fontsize=12,
+):
+    """
+    3x3 scatter plot:
+      rows = regions
+      cols = target products
+    """
+
+    target_cols = list(target_cols)
+    region_order = list(region_order)
+
+    if panel_titles is None:
+        panel_titles = {c: c for c in target_cols}
+
+    # ----- global limits if requested -----
+    global_lims = None
+    if share_lims and lims is None:
+        vals = []
+        for region_name in region_order:
+            df = region_anom_dict[region_name]
+            use_cols = [ref_col] + [c for c in target_cols if c in df.columns]
+            arr = df[use_cols].to_numpy(dtype=float).ravel()
+            vals.append(arr)
+
+        vals = np.concatenate(vals)
+        vals = vals[np.isfinite(vals)]
+
+        if len(vals) == 0:
+            global_lims = (-1, 1)
+        else:
+            vmax = np.nanmax(np.abs(vals))
+            vmax = 1.0 if (not np.isfinite(vmax) or vmax == 0) else vmax
+            pad = 0.06 * vmax
+            global_lims = (-vmax - pad, vmax + pad)
+
+    nrows = len(region_order)
+    ncols = len(target_cols)
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=figsize,
+        squeeze=False,
+        sharex=False,
+        sharey=False,
+    )
+
+    stats_out = {}
+
+    for i, region_name in enumerate(region_order):
+        df = region_anom_dict[region_name].copy()
+        stats_out[region_name] = {}
+
+        for j, targ in enumerate(target_cols):
+            ax = axes[i, j]
+
+            if ref_col not in df.columns or targ not in df.columns:
+                ax.axis("off")
+                continue
+
+            sub = df[[ref_col, targ]].dropna().copy()
+            x = sub[ref_col].values.astype(float)
+            y = sub[targ].values.astype(float)
+
+            st = regression_stats(x, y)
+
+            if np.isfinite(st["slope"]) and len(x) >= 2:
+                yhat = st["intercept"] + st["slope"] * x
+                resid_std = np.std(y - yhat, ddof=1) if len(x) > 2 else np.nan
+            else:
+                resid_std = np.nan
+
+            st["std"] = resid_std
+            stats_out[region_name][targ] = st
+
+            # ----- limits -----
+            if share_lims:
+                panel_lims = global_lims if global_lims is not None else lims
+            else:
+                if isinstance(lims, dict):
+                    panel_lims = lims.get(region_name, None)
+                elif isinstance(lims, (tuple, list, np.ndarray)) and len(lims) == 2:
+                    panel_lims = tuple(lims)
+                else:
+                    panel_lims = None
+
+                if panel_lims is None:
+                    panel_lims = _get_axis_limits(x, y, pad_frac=0.08, symmetric=True)
+
+            # scatter
+            ax.scatter(
+                x, y,
+                s=point_size,
+                alpha=point_alpha,
+                color="k",
+                edgecolor="b",
+                linewidth=0.45,
+                zorder=3
+            )
+
+            # 1:1 line
+            if add_one_to_one:
+                ax.plot(panel_lims, panel_lims, color="k", lw=1.0, ls="--", zorder=2)
+
+            # regression
+            if add_regression and np.isfinite(st["slope"]):
+                xx = np.linspace(panel_lims[0], panel_lims[1], 100)
+                yy = st["intercept"] + st["slope"] * xx
+                ax.plot(xx, yy, color="red", lw=1.4, zorder=4)
+
+            # zero lines
+            if add_zero_lines:
+                ax.axhline(0, color="k", lw=0.8, ls=":", alpha=0.8, zorder=1)
+                ax.axvline(0, color="k", lw=0.8, ls=":", alpha=0.8, zorder=1)
+
+            ax.set_xlim(panel_lims)
+            ax.set_ylim(panel_lims)
+
+            ticks = _nice_symmetric_ticks(panel_lims)
+            ax.set_xticks(ticks)
+            ax.set_yticks(ticks)
+
+            ax.tick_params(labelsize=tick_fontsize)
+
+            if equal_axes:
+                ax.set_aspect("equal", adjustable="box")
+
+            ax.grid(True, alpha=0.22)
+
+            # titles
+            if i == 0:
+                ax.set_title(
+                    panel_titles.get(targ, targ),
+                    fontsize=title_fontsize,
+                    fontweight="bold",
+                    pad=6
+                )
+
+            # labels
+            if j == 0:
+                ax.set_ylabel(
+                    f"{region_name}\n{targ} anomaly",
+                    fontsize=label_fontsize,
+                    fontweight="bold"
+                )
+            else:
+                ax.set_ylabel(
+                    f"{targ} anomaly",
+                    fontsize=label_fontsize - 1,
+                    fontweight="bold"
+                )
+
+            if i == nrows - 1:
+                ax.set_xlabel(
+                    f"{ref_col} anomaly",
+                    fontsize=label_fontsize - 1,
+                    fontweight="bold"
+                )
+
+            # stats text
+            if show_stats_text:
+                ax.text(
+                    0.04, 0.96,
+                    f"Slope={st['slope']:.2f}\nCC={st['cc']:.2f}",
+                    transform=ax.transAxes,
+                    ha="left", va="top",
+                    fontsize=stats_fontsize,
+                    fontweight="bold",
+                    bbox=dict(facecolor="white", alpha=0.55, edgecolor="none"),
+                )
+
+    plt.tight_layout()
+    fig.subplots_adjust(wspace=0.25, hspace=0.10)
+    return fig, axes, stats_out
 # =============================================================================
 # BASIN MULTI-YEAR MEAN ANNUAL SCATTER
 # =============================================================================
@@ -2301,7 +2818,7 @@ def plot_basin_spread_points_dual(
     if prod_cols is None:
         prod_cols = [
             "ERA5",
-            "GPCP v3.3",
+            "GPCP V3.3",
             "GPM PMW V07",          # placeholder for later
             "GPM PMW V07 (corr.)",  # placeholder for later
         ]
@@ -2321,7 +2838,7 @@ def plot_basin_spread_points_dual(
 
     # spread groups
     if non_gpm_group is None:
-        non_gpm_group = [ref_col, "ERA5", "GPCP v3.3"]
+        non_gpm_group = [ref_col, "ERA5", "GPCP V3.3"]
 
     if gpm_group is None:
         # keep placeholder structure now; when GPM arrives it will drop in naturally
@@ -2349,6 +2866,8 @@ def plot_basin_spread_points_dual(
     # one row per basin expected
     df_plot = df_plot.set_index(basin_col).loc[basins]
 
+    # df_plot = df_plot.set_index(basin_col).loc[basins]
+
     # -------------------------------------------------------------------------
     # figure
     # -------------------------------------------------------------------------
@@ -2364,6 +2883,7 @@ def plot_basin_spread_points_dual(
         label=r"$P_{\mathrm{MB}}$",
         zorder=1,
     )
+    
 
     # -------------------------------------------------------------------------
     # points for products
@@ -2416,6 +2936,18 @@ def plot_basin_spread_points_dual(
 
     ax.tick_params(axis="y", labelsize=12)
 
+    print("\n--- DEBUG basin rows used inside plot function ---")
+    print(df_plot[[ref_col, "ERA5", "GPCP V3.3", "GPM PMW V07"]].head(20))
+
+    if 11 in df_plot.index:
+        vals11 = df_plot.loc[11, [ref_col, "ERA5", "GPCP V3.3"]]
+        print("\nBasin 11 values INSIDE function:")
+        print(vals11)
+
+        vals11_arr = vals11.astype(float).values
+        spread11 = (np.nanmax(vals11_arr) - np.nanmin(vals11_arr)) / np.nanmean(vals11_arr) * 100.0
+        print("Manual spread basin 11 inside function =", spread11)     
+
     # -------------------------------------------------------------------------
     # spread helpers
     # -------------------------------------------------------------------------
@@ -2446,9 +2978,9 @@ def plot_basin_spread_points_dual(
     top_stack = np.vstack([df_plot[c].values.astype(float) for c in cols_for_top if c in df_plot.columns])
     top_val_all = np.nanmax(top_stack, axis=0)
 
-    # -------------------------------------------------------------------------
-    # annotate spreads
-    # -------------------------------------------------------------------------
+    # -----------------------------
+    # annotate spreads (clearer separation + readable text)
+    # -----------------------------
     y_top_axis = ax.get_ylim()[1]
     y_bot_axis = ax.get_ylim()[0]
 
@@ -2457,28 +2989,37 @@ def plot_basin_spread_points_dual(
             continue
 
         if log_scale:
-            y1 = min(top_val * 1.45, y_top_axis * 0.985)  # non-GPM
-            y2 = min(top_val * 1.18, y_top_axis * 0.93)   # GPM
+            # push black label a bit higher, gray label a bit lower
+            y1 = min(top_val * 1.62, y_top_axis * 0.985)  # non-GPM
+            y2 = min(top_val * 1.26, y_top_axis * 0.92)   # GPM
         else:
-            y1 = top_val + 0.09 * (y_top_axis - y_bot_axis)
-            y2 = top_val + 0.03 * (y_top_axis - y_bot_axis)
+            y1 = top_val + 0.11 * (y_top_axis - y_bot_axis)
+            y2 = top_val + 0.04 * (y_top_axis - y_bot_axis)
+
+        # stronger horizontal separation
+        x1 = xi - 0.14
+        x2 = xi + 0.14
 
         if np.isfinite(s_ref):
             ax.text(
-                xi, y1, f"{int(round(s_ref))}%",
+                x1, y1, f"{int(round(s_ref))}%",
                 ha="center", va="bottom",
                 fontsize=annotate_fontsize,
+                fontweight="bold",
                 color=annotate_non_gpm_color,
-                zorder=6
+                zorder=9,
+                path_effects=[pe.withStroke(linewidth=3.5, foreground="white")]
             )
 
         if np.isfinite(s_gpm):
             ax.text(
-                xi, y2, f"{int(round(s_gpm))}%",
+                x2, y2, f"{int(round(s_gpm))}%",
                 ha="center", va="bottom",
                 fontsize=annotate_fontsize,
+                fontweight="bold",
                 color=annotate_gpm_color,
-                zorder=6
+                zorder=9,
+                path_effects=[pe.withStroke(linewidth=3.5, foreground="white")]
             )
 
     # -------------------------------------------------------------------------
@@ -2494,7 +3035,7 @@ def plot_basin_spread_points_dual(
     if place_key:
         ax.text(
             key_loc[0], key_loc[1],
-            "% = spread(P_MB, ERA5, GPCP v3.3)",
+            "% = spread(P_MB, ERA5, GPCP V3.3)",
             transform=ax.transAxes,
             ha="left", va="top",
             fontsize=key_fontsize,
@@ -2889,3 +3430,77 @@ def compare_mean_precip_basin_dual_cbar(
     cb2.set_label(cbar_label2, fontsize=10)
 
     return fig, axes, cb1, cb2
+
+#===============================================================================
+# plot_regional_mean_annual_bars
+
+def plot_regional_mean_annual_bars(
+    df_mean_regional,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
+    product_colors=None,
+    figsize=(8.5, 6.0),
+    ylabel="[mm/year]",
+    title="2013–2020 mean annual precipitation",
+    annotate=True,
+    bar_width=0.22,
+):
+    """
+    Grouped bar chart of regional mean annual precipitation.
+    """
+    if product_colors is None:
+        product_colors = {
+            r"$P_{\mathrm{MB}}$": "black",
+            "ERA5": "blue",
+            "GPCP v3.3": "orange",
+        }
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    x = np.arange(len(region_order))
+    offsets = np.linspace(
+        -bar_width * (len(product_order) - 1) / 2,
+         bar_width * (len(product_order) - 1) / 2,
+         len(product_order)
+    )
+
+    for off, prod in zip(offsets, product_order):
+        sub = (
+            df_mean_regional[df_mean_regional["product"] == prod]
+            .set_index("region")
+            .reindex(region_order)
+        )
+
+        y = sub["precipitation"].values.astype(float)
+
+        bars = ax.bar(
+            x + off,
+            y,
+            width=bar_width,
+            color=product_colors.get(prod, None)['color'],
+            label=prod,
+            zorder=3
+        )
+
+        if annotate:
+            for b, val in zip(bars, y):
+                if np.isfinite(val):
+                    ax.text(
+                        b.get_x() + b.get_width() / 2,
+                        b.get_height() + 0.01 * np.nanmax(df_mean_regional["precipitation"]),
+                        f"{int(round(val))}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=10,
+                        fontweight="bold"
+                    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(region_order, fontsize=15)
+    ax.set_ylabel(ylabel, fontsize=14, fontweight="bold")
+    # ax.set_title(title, fontsize=15, fontweight="bold")
+    ax.grid(axis="y", linestyle="--", alpha=0.35, zorder=0)
+    ax.legend(frameon=False, fontsize=15)
+
+    plt.tight_layout()
+    return fig, ax
