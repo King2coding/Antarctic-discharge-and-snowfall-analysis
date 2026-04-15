@@ -58,6 +58,130 @@ REGION_BASINS = {
 basins = load_basin_grid(basins_path, crs_stereo)
 print_basin_grid_info(basins)
 
+colors = plt.cm.gist_ncar(np.linspace(0, 1, 19))
+
+# Give Basin 19 a unique neutral color not used elsewhere
+colors[-1] = np.array([0.60, 0.60, 0.60, 1.0])   # medium gray
+
+cmap = mcolors.ListedColormap(colors)
+cmap.set_bad(color='white')
+
+vmin, vmax = 1, 19
+levels = np.linspace(vmin, vmax, vmax - vmin + 2)
+norm = mcolors.BoundaryNorm(levels, cmap.N)
+
+# work with a 2D slice (drop the band dimension)
+da = basins.isel(band=0)
+
+proj = ccrs.SouthPolarStereo()
+fig, ax = plt.subplots(figsize=(12, 8), dpi=300,
+                       subplot_kw={'projection': proj})
+ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
+
+p = da.plot(
+    ax=ax,
+    transform=proj,
+    cmap=cmap,
+    norm=norm,
+    add_colorbar=False,
+    add_labels=False,
+)
+
+ax.set_facecolor('white')
+
+# --- boundaries: use a copy with ocean=0 instead of NaN ---
+da_for_contour = da.fillna(0)          # 0 outside basins, 1..19 inside
+
+# coastline (0–1) + internal boundaries (1–19)
+boundary_levels = np.arange(0.5, 19.5, 1.0)
+
+ax.contour(
+    da["x"].values,
+    da["y"].values,
+    da_for_contour.values,   # 2D (y, x) with 0/1..19
+    levels=boundary_levels,
+    colors="k",
+    linewidths=0.8,
+    transform=proj,
+    zorder=5,
+)
+
+# --- label offsets for small WAIS basins (same as your name-plot) ---
+small_id_offsets = {
+    11: (-4.0e5, -1.0e5),  # F-G
+    13: (-4.8e5,  1.3e5),  # H-Hp
+    14: (-8.4e5,  1.9e5),  # Hp-I
+    15: (-4.8e5,  2.5e5),  # I-Ipp
+    16: (-0.8e5,  3.7e5),  # Ipp-J
+    17: (-0.5e5,  4.2e5),  # J-Jpp
+    # add 12 or others if you want them outside too
+}
+
+# Annotate each basin
+for basin_id in range(1, 20):
+    mask = (da == basin_id)
+    y, x = np.where(mask.values)
+    if len(x) == 0:
+        continue
+
+    cx = da["x"].values[x].mean()
+    cy = da["y"].values[y].mean()
+    label = str(basin_id)
+
+    if basin_id in small_id_offsets:
+        # place label outside with a leader line
+        dx, dy = small_id_offsets[basin_id]
+        lx, ly = cx + dx, cy + dy
+
+        ax.annotate(
+            label,
+            xy=(cx, cy),      # centroid (tail of line)
+            xytext=(lx, ly),  # label position
+            textcoords='data',
+            xycoords='data',
+            ha='center',
+            va='center',
+            fontsize=15,
+            transform=proj,
+            arrowprops=dict(
+                arrowstyle="-",   # simple line
+                lw=0.8,
+                color="k"
+            ),
+            bbox=dict(
+                boxstyle="round,pad=0.2",
+                fc="white",
+                ec="none",
+                alpha=0.7
+            ),
+        )
+    else:
+        # “normal” in-basin label
+        ax.text(
+            cx, cy, label,
+            color="black",
+            fontsize=15,
+            ha="center",
+            va="center",
+            transform=proj,
+            zorder=5,
+            bbox=dict(
+                boxstyle="round,pad=0.2",
+                fc="white",
+                ec="none",
+                alpha=0.6
+            ),
+        )
+
+ax.axis("off")
+plt.tight_layout()
+# plt.show()
+# Save the imbie basin plot
+output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
+# plt.savefig(output_path, dpi=300, bbox_inches='tight')
+gc.collect()
+
+
 # Common 0.1° comparison grid in lat-lon, derived from basin geometry
 target_template_01deg = build_target_latlon_template_from_basin_grid(basins)
 
@@ -121,6 +245,7 @@ gpcp_mnth = gpcp_mnth.where(np.isfinite(gpcp_mnth))
 
 # Subset Antarctica
 gpcp_mnth = gpcp_mnth.sel(lat=slice(-60, -90))
+
 #----------------------------------------------------------------------------
 
 
@@ -758,8 +883,341 @@ fig.savefig(svnme, dpi=300)
 plt.show()
 gc.collect()
 
-#%% CloudSat
-file_cs = r'/ra1/pubdat/Reza_archive/CS_2022_Maps/Monthly'
+#%% THE CLOUDSAT COMPARATIVE ANALYSIS
+cs_ant_file_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/CS-Antarctica_maps'
+
+all_gpcp_v3pt3_mnthly_files_2007_2010 = [
+    f for f in all_gpcp_v3pt3_mnthly_files
+    if 2007 <= int(os.path.basename(f).split('_')[2][:4]) <= 2010
+]
+
+#----------------------------------------------------------------------------
+# 1. LOAD Data
+#---------------------------------------------------------------------------
+gpcp_ds_v3pt320072010 = xr.open_mfdataset(
+    all_gpcp_v3pt3_mnthly_files_2007_2010,
+    combine="nested",
+    concat_dim="time",
+    coords="minimal",
+    compat="override",
+    parallel=True,
+    engine="netcdf4",
+    chunks={"time": 120, "lat": 180, "lon": 360},
+    cache=False,
+)
+
+gpcp_ds_v3pt320072010 = ds_swaplon(gpcp_ds_v3pt320072010)
+
+# Keep the monthly precipitation variable
+# Your file shows the variable name is sat_gauge_precip
+gpcp_mnth20072013 = gpcp_ds_v3pt320072010["sat_gauge_precip"].copy()
+
+# Normalize monthly timestamps to month-start
+gpcp_mnth20072013 = gpcp_mnth20072013.assign_coords(
+    time=pd.to_datetime(gpcp_mnth20072013["time"].values).to_period("M").to_timestamp()
+)
+
+# Convert from mm/day to mm/month
+days_in_month = xr.DataArray(
+    pd.to_datetime(gpcp_mnth20072013["time"].values).days_in_month,
+    dims=["time"],
+    coords={"time": gpcp_mnth20072013["time"]}
+)
+
+gpcp_mnth20072013 = gpcp_mnth20072013 * days_in_month
+gpcp_mnth20072013.name = "gpcp_mm_month"
+
+# Replace fill/missing with NaN if needed
+fillv = gpcp_mnth20072013.attrs.get("_FillValue", None)
+if fillv is not None:
+    gpcp_mnth20072013 = gpcp_mnth20072013.where(gpcp_mnth20072013 != fillv)
+gpcp_mnth20072013 = gpcp_mnth20072013.where(np.isfinite(gpcp_mnth20072013))
+
+# Subset Antarctica
+gpcp_mnth20072013 = gpcp_mnth20072013.sel(lat=slice(-60, -90))
+
+# Reproject to target grid
+gpcp_mnth20072013 = gpcp_mnth20072013.rio.set_spatial_dims(
+    x_dim="lon", y_dim="lat", inplace=False
+    )
+gpcp_mnth20072013 = gpcp_mnth20072013.rio.write_crs("EPSG:4326", inplace=False)
+
+gpcp_mnth20072013 = gpcp_mnth20072013.rio.reproject_match(
+    target_template_01deg,
+    resampling=Resampling.nearest
+)
+
+rename_map = {}
+if "x" in gpcp_mnth20072013.dims:
+    rename_map["x"] = "lon"
+if "y" in gpcp_mnth20072013.dims:
+    rename_map["y"] = "lat"
+if rename_map:
+    gpcp_mnth20072013 = gpcp_mnth20072013.rename(rename_map)
+
+gpcp_mnth20072013 = gpcp_mnth20072013.sortby("lon")
+gpcp_mnth20072013 = gpcp_mnth20072013.sortby("lat", ascending=False)
+gpcp_mnth20072013 = gpcp_mnth20072013.where(valid_basin_mask)
+gpcp_mnth20072013 = gpcp_mnth20072013.where(gpcp_mnth20072013["lat"] < -60)
+
+#----------------------------------------------------------------------------
+# 2. LOAD ERA5
+#----------------------------------------------------------------------
+
+era5_mnth20072010 = era5_mnth_ds["tp_mm_month"].copy()
+# Subset study period
+era5_mnth20072010 = era5_mnth20072010.sel(time=slice("2007-01-01", "2010-12-31"))
+era5_mnth20072010 = era5_mnth20072010.sel(latitude=slice(-60, -90))
+era5_mnth20072010 = era5_mnth20072010.rename({"latitude": "lat", "longitude": "lon"})
+
+era5_mnth20072010 = era5_mnth20072010.rio.set_spatial_dims(
+    x_dim="lon", y_dim="lat", inplace=False)
+era5_mnth20072010 = era5_mnth20072010.rio.write_crs(
+        "EPSG:4326", inplace=False
+                                    )
+
+era5_mnth20072010 = era5_mnth20072010.rio.reproject_match(
+    target_template_01deg,
+    resampling=Resampling.nearest
+)
+era5_mnth20072010 = replace_fill_with_nan(era5_mnth20072010)
+
+rename_map = {}
+if "x" in era5_mnth20072010.dims:
+    rename_map["x"] = "lon"
+if "y" in era5_mnth20072010.dims:
+    rename_map["y"] = "lat"
+if rename_map:
+    era5_mnth20072010 = era5_mnth20072010.rename(rename_map)
+
+era5_mnth20072010 = era5_mnth20072010.sortby("lon")
+era5_mnth20072010 = era5_mnth20072010.sortby("lat", ascending=False)
+era5_mnth20072010 = era5_mnth20072010.where(valid_basin_mask)
+era5_mnth20072010 = era5_mnth20072010.where(era5_mnth20072010["lat"] < -60)
+#----------------------------------------------------------------------
+# 3. LOAD CloudSat
+cs_mnthly_clim = xr.open_dataset(
+    os.path.join(cs_ant_file_path, 'CS-Antarctica_monthly_climatology_2007-2010.nc')
+)
+
+cs_seasonal_clim = xr.open_dataset(
+    os.path.join(cs_ant_file_path, 'CS_seasonal_climatology-2007-2010.nc')
+)
+
+cs_annual_clim = xr.open_dataset(
+    os.path.join(cs_ant_file_path, 'CS_annual_climatology-2007-2010.nc')
+)
+# first data variable
+cs_mnth_da = cs_mnthly_clim[list(cs_mnthly_clim.data_vars)[0]].copy()
+cs_season_da = cs_seasonal_clim[list(cs_seasonal_clim.data_vars)[0]].copy()
+cs_annual_da = cs_annual_clim[list(cs_annual_clim.data_vars)[0]].copy()
+
+# monthly: rename time->time if needed and build pseudo dates for 12 climatological months
+if "time" not in cs_mnth_da.dims:
+    if "month" in cs_mnth_da.dims:
+        cs_mnth_da = cs_mnth_da.rename({"month": "time"})
+    else:
+        raise ValueError("CloudSat monthly climatology must have either 'time' or 'month' dimension.")
+
+cs_mnth_da = cs_mnth_da.assign_coords(
+    time=pd.date_range("2001-01-01", periods=12, freq="MS")
+)
+
+# seasonal: keep season coordinate as-is
+if "season" not in cs_season_da.dims:
+    raise ValueError("CloudSat seasonal climatology must contain a 'season' dimension.")
+
+# annual: must be 2D
+print("CloudSat monthly dims :", cs_mnth_da.dims)
+print("CloudSat seasonal dims:", cs_season_da.dims)
+print("CloudSat annual dims  :", cs_annual_da.dims)
+
+cs_mnth_01   = regrid_clim_to_target(
+                        cs_mnth_da, 
+                        target_template_01deg, 
+                        valid_basin_mask,
+                        method=Resampling.nearest
+                        )
+cs_season_01 = regrid_clim_to_target(
+                        cs_season_da, 
+                        target_template_01deg, 
+                        valid_basin_mask,
+                        method=Resampling.nearest
+                        )
+cs_annual_01 = regrid_clim_to_target(
+                        cs_annual_da, 
+                        target_template_01deg, 
+                        valid_basin_mask,
+                        method=Resampling.nearest
+                        )
+
+#%%
+product_order_cs = [
+    "CloudSat",
+    "ERA5",
+    "GPCP V3.3",
+]
+
+product_styles_cs = {
+    "CloudSat":    {"color": "gray",          "marker": "o", "lw": 2.5},
+    "ERA5":        {"color": "blue",       "marker": "s", "lw": 2.5},
+    "GPCP V3.3":   {"color": "orange", "marker": "D", "lw": 2.5},
+}
+
+# =============================================================================
+# SECTION 8. MONTHLY REGIONAL TIME SERIES (ERA5, GPCP) + CLOUDSAT MONTHLY CLIM
+# =============================================================================
+days_in_month_cs = xr.DataArray(
+    pd.to_datetime(cs_mnth_01.time.values).days_in_month,
+    dims=["time"],
+    coords={"time": cs_mnth_01.time}
+)
+
+# gpcp_mnth_day = gpcp_mnth20072013 / xr.DataArray(
+#     pd.to_datetime(gpcp_mnth20072013.time.values).days_in_month,
+#     dims=["time"],
+#     coords={"time": gpcp_mnth20072013.time}
+# )
+
+# era5_mnth_day = era5_mnth20072010 / xr.DataArray(
+#     pd.to_datetime(era5_mnth20072010.time.values).days_in_month,
+#     dims=["time"],
+#     coords={"time": era5_mnth20072010.time}
+# )
+cs_mnth_mm_mnth_01 = cs_mnth_01 * days_in_month_cs
+cs_mnth_mm_mnth_01.attrs["units"] = "mm/month"
+
+product_monthly_dict_cs = {
+    "CloudSat":  cs_mnth_mm_mnth_01,
+    "ERA5":      era5_mnth20072010,
+    "GPCP V3.3": gpcp_mnth20072013,
+}
+
+regional_monthly_cos_df_cs = build_all_region_monthly_series_cosine(
+    product_dict=product_monthly_dict_cs,
+    region_masks=region_masks_01deg,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+# This works because CloudSat monthly climatology is carried as 12 pseudo-months.
+region_monthly_clim_cs = compute_monthly_climatology_from_regional_series(
+    regional_monthly_cos_df_cs
+)
+
+# =============================================================================
+# SECTION 9. MONTHLY CLIMATOLOGY PLOT
+# =============================================================================
+svnme = os.path.join(
+    path_to_plots,
+    f"cloudsat_era5_gpcp_monthly_climatology_2007_2010_{cde_run_dte}.png"
+)
+
+fig, axes = plot_monthly_climatology(
+    region_monthly_clim_cs,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=("CloudSat", "ERA5", "GPCP V3.3"),
+    product_styles=product_styles_cs,
+    figsize=(10, 9),
+    ylabel="mm/month",
+    y_nbins=4,
+    legend_ncol=3,
+)
+
+fig.savefig(svnme, dpi=300, bbox_inches="tight")
+plt.show()
+gc.collect()
+#%% Seasonal and annula
+# =============================================================================
+# CloudSat seasonal climatology -> mm/season
+# =============================================================================
+
+# -----------------------------------------------------------
+# 2. Build seasonal climatology directly from monthly climatology
+# -----------------------------------------------------------
+region_seasonal_clim_cs = compute_seasonal_climatology_from_monthly_climatology(
+    region_monthly_clim_cs
+)
+
+# print(region_seasonal_clim_cs)
+
+# -----------------------------------------------------------
+# 3. Plot
+# -----------------------------------------------------------
+svnme = os.path.join(
+    path_to_plots,
+    f"cloudsat_era5_gpcp_seasonal_climatology_2007_2010_{cde_run_dte}.png"
+)
+
+fig, axes = plot_seasonal_climatology(
+    region_seasonal_clim_cs,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=("CloudSat", "ERA5", "GPCP V3.3"),
+    product_styles=product_styles_cs,
+    figsize=(10, 8),
+    ylabel="mm/season",
+    y_nbins=4,
+    legend_ncol=3,
+)
+
+fig.savefig(svnme, dpi=300, bbox_inches="tight")
+plt.show()
+gc.collect()
+#%%
+#%% =========================================================
+# REGIONAL MEAN ANNUAL PRECIPITATION BAR PLOT
+# CloudSat annual climatology -> mm/year
+# ===========================================================
+
+# regional annual mean from monthly climatology
+df_regional_mean_annual_cs = (
+    region_monthly_clim_cs
+    .groupby(["region", "product"], as_index=False)["precipitation"]
+    .sum()
+)
+
+df_regional_mean_annual_cs["region"] = pd.Categorical(
+    df_regional_mean_annual_cs["region"],
+    categories=("Antarctica", "West Antarctica", "East Antarctica"),
+    ordered=True
+)
+
+df_regional_mean_annual_cs["product"] = pd.Categorical(
+    df_regional_mean_annual_cs["product"],
+    categories=("CloudSat", "ERA5", "GPCP V3.3"),
+    ordered=True
+)
+
+df_regional_mean_annual_cs = df_regional_mean_annual_cs.sort_values(
+    ["region", "product"]
+).reset_index(drop=True)
+
+# print(df_regional_mean_annual_cs)
+# 5. Plot
+svnme = os.path.join(
+    path_to_plots,
+    f"cloudsat_era5_gpcp_regional_mean_annual_2007_2010_{cde_run_dte}.png"
+)
+
+fig, ax = plot_regional_mean_annual_bars(
+    df_regional_mean_annual_cs,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=("CloudSat", "ERA5", "GPCP V3.3"),
+    product_colors=product_styles_cs,
+    figsize=(9, 6),
+    ylabel="[mm/year]",
+    title="2007–2010 mean annual precipitation",
+    annotate=True,
+)
+
+fig.savefig(svnme, dpi=300, bbox_inches="tight")
+plt.show()
+gc.collect()
+
+#%%
+#----------------------------------------------------------------------
+
 all_cs_files = [os.path.join(file_cs, f) for f in os.listdir(file_cs) if f.endswith('.h5')]
 
 import h5py
@@ -791,7 +1249,8 @@ plt.show()
 
 csfilept = r'/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/CS-Antarctica_maps'
 cs_ant_mnthly = os.path.join(csfilept, 'CS-Antarctica_monthly_climatology_2007-2010.nc')
-xr.open_dataarray(cs_ant_mnthly)[0].plot()
+cs_mntly_clim = xr.open_dataarray(cs_ant_mnthly)
+cs_mntly_clim[0].plot()
 #%%
 crs = "+proj=longlat +datum=WGS84 +no_defs"  
 crs_format = 'proj4' 
@@ -832,128 +1291,6 @@ print(f"Basin bounds: {basin_bounds}")
 # basins_imbie = basins['imbie']
 
 # %%
-colors = plt.cm.gist_ncar(np.linspace(0, 1, 19))
-
-# Give Basin 19 a unique neutral color not used elsewhere
-colors[-1] = np.array([0.60, 0.60, 0.60, 1.0])   # medium gray
-
-cmap = mcolors.ListedColormap(colors)
-cmap.set_bad(color='white')
-
-vmin, vmax = 1, 19
-levels = np.linspace(vmin, vmax, vmax - vmin + 2)
-norm = mcolors.BoundaryNorm(levels, cmap.N)
-
-# work with a 2D slice (drop the band dimension)
-da = basins.isel(band=0)
-
-proj = ccrs.SouthPolarStereo()
-fig, ax = plt.subplots(figsize=(12, 8), dpi=300,
-                       subplot_kw={'projection': proj})
-ax.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
-
-p = da.plot(
-    ax=ax,
-    transform=proj,
-    cmap=cmap,
-    norm=norm,
-    add_colorbar=False,
-    add_labels=False,
-)
-
-ax.set_facecolor('white')
-
-# --- boundaries: use a copy with ocean=0 instead of NaN ---
-da_for_contour = da.fillna(0)          # 0 outside basins, 1..19 inside
-
-# coastline (0–1) + internal boundaries (1–19)
-boundary_levels = np.arange(0.5, 19.5, 1.0)
-
-ax.contour(
-    da["x"].values,
-    da["y"].values,
-    da_for_contour.values,   # 2D (y, x) with 0/1..19
-    levels=boundary_levels,
-    colors="k",
-    linewidths=0.8,
-    transform=proj,
-    zorder=5,
-)
-
-# --- label offsets for small WAIS basins (same as your name-plot) ---
-small_id_offsets = {
-    11: (-4.0e5, -1.0e5),  # F-G
-    13: (-4.8e5,  1.3e5),  # H-Hp
-    14: (-8.4e5,  1.9e5),  # Hp-I
-    15: (-4.8e5,  2.5e5),  # I-Ipp
-    16: (-0.8e5,  3.7e5),  # Ipp-J
-    17: (-0.5e5,  4.2e5),  # J-Jpp
-    # add 12 or others if you want them outside too
-}
-
-# Annotate each basin
-for basin_id in range(1, 20):
-    mask = (da == basin_id)
-    y, x = np.where(mask.values)
-    if len(x) == 0:
-        continue
-
-    cx = da["x"].values[x].mean()
-    cy = da["y"].values[y].mean()
-    label = str(basin_id)
-
-    if basin_id in small_id_offsets:
-        # place label outside with a leader line
-        dx, dy = small_id_offsets[basin_id]
-        lx, ly = cx + dx, cy + dy
-
-        ax.annotate(
-            label,
-            xy=(cx, cy),      # centroid (tail of line)
-            xytext=(lx, ly),  # label position
-            textcoords='data',
-            xycoords='data',
-            ha='center',
-            va='center',
-            fontsize=15,
-            transform=proj,
-            arrowprops=dict(
-                arrowstyle="-",   # simple line
-                lw=0.8,
-                color="k"
-            ),
-            bbox=dict(
-                boxstyle="round,pad=0.2",
-                fc="white",
-                ec="none",
-                alpha=0.7
-            ),
-        )
-    else:
-        # “normal” in-basin label
-        ax.text(
-            cx, cy, label,
-            color="black",
-            fontsize=15,
-            ha="center",
-            va="center",
-            transform=proj,
-            zorder=5,
-            bbox=dict(
-                boxstyle="round,pad=0.2",
-                fc="white",
-                ec="none",
-                alpha=0.6
-            ),
-        )
-
-ax.axis("off")
-plt.tight_layout()
-# plt.show()
-# Save the imbie basin plot
-output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
-# plt.savefig(output_path, dpi=300, bbox_inches='tight')
-gc.collect()
 
 all_basin_ids = sorted({
     bid

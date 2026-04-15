@@ -818,6 +818,167 @@ def build_region_monthly_series_cosine(
     return pd.concat(out, ignore_index=True)
 
 # =============================================================================
+# Regrid CloudSat climatologies to common 0.1° basin grid if needed
+def regrid_clim_to_target(da, target_template, valid_basin_mask, method=Resampling.nearest):
+    da = da.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=False)
+    da = da.rio.write_crs("EPSG:4326", inplace=False)
+
+    out = da.rio.reproject_match(
+        target_template,
+        resampling=method
+    )
+
+    rename_map = {}
+    if "x" in out.dims:
+        rename_map["x"] = "lon"
+    if "y" in out.dims:
+        rename_map["y"] = "lat"
+    if rename_map:
+        out = out.rename(rename_map)
+
+    out = out.sortby("lon")
+    out = out.sortby("lat", ascending=False)
+    out = out.where(valid_basin_mask)
+    out = out.where(out["lat"] < -60)
+    return out
+
+# -------------------------------------------------------------------------
+# Build CloudSat seasonal climatology from converted monthly climatology
+# -------------------------------------------------------------------------
+def build_cloudsat_seasonal_from_monthly(cs_monthly_mm_month):
+    """
+    Input: monthly climatology [time=12, lat, lon] in mm/month
+    Output: seasonal climatology [season, lat, lon] in mm/season
+    """
+    month_to_season = {
+        12: "DJF", 1: "DJF", 2: "DJF",
+        3: "MAM", 4: "MAM", 5: "MAM",
+        6: "JJA", 7: "JJA", 8: "JJA",
+        9: "SON", 10: "SON", 11: "SON",
+    }
+
+    months = pd.to_datetime(cs_monthly_mm_month["time"].values).month
+    season_labels = np.array([month_to_season[m] for m in months], dtype=object)
+
+    tmp = cs_monthly_mm_month.assign_coords(season=("time", season_labels))
+    cs_season = tmp.groupby("season").sum("time", skipna=True)
+
+    # enforce order
+    cs_season = cs_season.sel(season=["DJF", "MAM", "JJA", "SON"])
+    cs_season.attrs["units"] = "mm/season"
+    return cs_season
+
+#============================================================================
+#%% =========================================================
+# SEASONAL CLIMATOLOGY FROM MONTHLY CLIMATOLOGY
+# Use the monthly climatology directly, not the multi-year seasonal function
+# ===========================================================
+
+def compute_seasonal_climatology_from_monthly_climatology(clim_df):
+    """
+    Convert monthly climatology [mm/month] to seasonal climatology [mm/season].
+
+    Input columns required:
+      - region
+      - product
+      - month
+      - precipitation
+
+    Output:
+      tidy dataframe with columns:
+      - region
+      - product
+      - season
+      - precipitation
+    """
+    month_to_season = {
+        12: "DJF", 1: "DJF", 2: "DJF",
+        3: "MAM", 4: "MAM", 5: "MAM",
+        6: "JJA", 7: "JJA", 8: "JJA",
+        9: "SON", 10: "SON", 11: "SON",
+    }
+
+    out = clim_df.copy()
+    out["season"] = out["month"].map(month_to_season)
+
+    seasonal = (
+        out.groupby(["region", "product", "season"], as_index=False)["precipitation"]
+        .sum()
+    )
+
+    season_order = {"DJF": 1, "MAM": 2, "JJA": 3, "SON": 4}
+    seasonal["season_order"] = seasonal["season"].map(season_order)
+    seasonal = (
+        seasonal.sort_values(["region", "product", "season_order"])
+        .drop(columns="season_order")
+        .reset_index(drop=True)
+    )
+
+    return seasonal
+
+#============================================================================
+# CloudSat seasonal climatology from provided seasonal grid
+def build_tidy_seasonal_clim_from_field(
+    seasonal_da,
+    region_masks,
+    product_name,
+    season_order=("DJF", "MAM", "JJA", "SON"),
+    season_name_map=None,
+):
+    """
+    Convert seasonal climatology field (season, lat, lon) into tidy regional dataframe.
+    """
+    if season_name_map is None:
+        season_name_map = {
+            "winter": "JJA",
+            "spring": "SON",
+            "summer": "DJF",
+            "fall":   "MAM",
+            "DJF":    "DJF",
+            "MAM":    "MAM",
+            "JJA":    "JJA",
+            "SON":    "SON",
+        }
+
+    rows = []
+
+    for s in seasonal_da["season"].values:
+        s_out = season_name_map.get(str(s), str(s))
+
+        da2d = seasonal_da.sel(season=s)
+
+        for region_name, region_mask in region_masks.items():
+            reg_mean = cosine_weighted_mean_masked(
+                da2d,
+                region_mask=region_mask,
+                lat_name="lat",
+                lon_name="lon",
+            )
+            rows.append({
+                "region": region_name,
+                "product": product_name,
+                "season": s_out,
+                "precipitation": float(reg_mean.values if hasattr(reg_mean, "values") else reg_mean),
+            })
+
+    out = pd.DataFrame(rows)
+
+    season_rank = {"DJF": 1, "MAM": 2, "JJA": 3, "SON": 4}
+    out["season_order"] = out["season"].map(season_rank)
+    out = out.sort_values(["region", "product", "season_order"]).drop(columns="season_order")
+
+    return out
+# -------------------------------------------------------------------------
+# Build CloudSat annual climatology from converted monthly climatology
+# -------------------------------------------------------------------------
+def build_cloudsat_annual_from_monthly(cs_monthly_mm_month):
+    """
+    Input: monthly climatology [time=12, lat, lon] in mm/month
+    Output: annual climatology [lat, lon] in mm/year
+    """
+    cs_annual = cs_monthly_mm_month.sum("time", skipna=True)
+    cs_annual.attrs["units"] = "mm/year"
+    return cs_annual
 
 # =============================================================================
 
