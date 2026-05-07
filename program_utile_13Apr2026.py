@@ -4,7 +4,33 @@ from Extra_util_functions import *
 import matplotlib.patheffects as pe
 #%%
 # Floating Variables
+# -----------------------------------------------------------------------------
+# 1. Basin label to basin ID mapping
+# -----------------------------------------------------------------------------
 
+BASIN_NAME_TO_ID = {
+    # EAIS
+    "A-Ap": 2,
+    "Ap-B": 3,
+    "B-C": 4,
+    "C-Cp": 5,
+    "Cp-D": 6,
+    "D-Dp": 7,
+    "Dp-E": 8,
+    "E-Ep": 9,
+    "Jpp-K": 18,
+    "K-A": 19,
+
+    # WAIS
+    "F-G": 10,
+    "G-H": 11,
+    "Ep-F": 12,
+    "H-Hp": 13,
+    "Hp-I": 14,
+    "I-Ipp": 15,
+    "Ipp-J": 16,
+    "J-Jpp": 17,
+}
 
 SATELLITE_CATEGORIES = {
     "ATMS": ["SNPP", "NOAA-20"],

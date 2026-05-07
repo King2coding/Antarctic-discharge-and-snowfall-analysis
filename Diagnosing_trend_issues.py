@@ -2115,3 +2115,607 @@ axes[-1].set_xlabel("Date", fontsize=12, fontweight="bold")
 fig.suptitle("Top-basin weighted contributions: PMB vs ΔS", fontsize=15, fontweight="bold", y=1.01)
 plt.tight_layout()
 plt.show()
+
+
+#%%% delta S analysis
+rignot_deltaS_2017 = rignot_deltaS[rignot_deltaS.Year == 2017]
+rignot_deltaS_2014 = rignot_deltaS[rignot_deltaS.Year == 2014]
+
+
+#---------------------------------------------------------
+
+wais_all_names_ = wais_all_names.copy()
+wais_all_names_ = [i.replace('Ep-F', 'Ep-f') if i == 'Ep-F' else i for i in wais_all_names_]
+
+eais_raw_2017_mins = rignot_deltaS_2017[eais_names].min()
+eais_raw_2017_means = rignot_deltaS_2017[eais_names].mean()
+
+wais_raw_2017_mins = rignot_deltaS_2017[wais_all_names_].min()
+wais_raw_2017_means = rignot_deltaS_2017[wais_all_names_].mean()
+
+
+eais_raw_2014_mins = rignot_deltaS_2014[eais_names].min()
+eais_raw_2014_means = rignot_deltaS_2014[eais_names].mean()
+
+wais_raw_2014_mins = rignot_deltaS_2014[wais_all_names_].min()
+wais_raw_2014_means = rignot_deltaS_2014[wais_all_names_].mean()
+
+
+# some plots
+eais_raw_2017_mins.plot(kind='bar', title='2017 EAIS raw Grace data:\nMinimum (Gt/month)')
+plt.ylabel('Minimum ΔS (Gt/month)')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+wais_raw_2017_mins.plot(kind='bar', title='2017 WAIS raw Grace data:\nMinimum (Gt/month)')
+plt.ylabel('Minimum ΔS (Gt/month)')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+
+#----------------------------------------------------------
+eais_raw_2014_mins.plot(kind='bar', title='2014 EAIS raw Grace data:\nMinimum (Gt/month)')
+plt.ylabel('Minimum ΔS (Gt/month)')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+wais_raw_2014_mins.plot(kind='bar', title='2014 WAIS raw Grace data:\nMinimum (Gt/month)')
+plt.ylabel('Minimum ΔS (Gt/month)')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+
+
+#----------------------------------------------------------
+
+S_tier1["Year"] = S_tier1.index.year
+# pd.to_datetime(rignot_deltaS["Date"]).dt.year
+S_tier1["Month"] = S_tier1.index.month
+
+# Identify basin columns
+basin_cols = [c for c in S_tier1.columns if c not in ("Time","Date","Year","Month")]
+
+# ΔS(m) = S(t_{m+1}) - S(t_m) (per basin)
+# First, ensure monthly step by grouping per (Year, Month); if multiple epochs per month, average
+dfm = S_tier1.groupby(["Year","Month"], as_index=False)[basin_cols].mean()
+# Create a "month index" for easy shift
+dfm["date"] = pd.to_datetime(dict(year=dfm["Year"], month=dfm["Month"], day=1))
+dfm = dfm.sort_values("date")
+
+# Compute difference forward in time per basin
+# ΔS for a given month is next_month_state - current_month_state
+dfm_shift = dfm.copy()
+dfm_shift[basin_cols] = dfm[basin_cols].shift(-1)
+dS = dfm_shift[basin_cols] - dfm[basin_cols]
+dS["date"] = dfm["date"]  # assign ΔS to the current month index
+
+# Keep only months that have a valid "next month" within the range
+dS = dS.dropna(subset=basin_cols, how="all")
+
+# Melt to long format
+dS_long = dS.melt(id_vars="date", var_name="basin", value_name="dS_Gt")
+dS_long = dS_long.dropna(subset=["dS_Gt"]).reset_index(drop=True)
+
+deltaS_2017 = dS_long[dS_long["date"].dt.year == 2017]
+deltaS_eais_2017_mins = deltaS_2017[deltaS_2017["basin"].isin(eais_names)]
+deltaS_eais_2017_mins = deltaS_eais_2017_mins.groupby("basin")["dS_Gt"].min()
+
+deltaS_eais_2017_means = deltaS_2017[deltaS_2017["basin"].isin(eais_names)]
+deltaS_eais_2017_means = deltaS_eais_2017_means.groupby("basin")["dS_Gt"].mean()
+
+deltaS_wais_2017_mins = deltaS_2017[deltaS_2017["basin"].isin(wais_all_names_)]
+deltaS_wais_2017_mins = deltaS_wais_2017_mins.groupby("basin")["dS_Gt"].min()
+
+deltaS_2014 = dS_long[dS_long["date"].dt.year == 2014]
+deltaS_eais_2014_mins = deltaS_2014[deltaS_2014["basin"].isin(eais_names)]
+deltaS_eais_2014_mins = deltaS_eais_2014_mins.groupby("basin")["dS_Gt"].min()
+
+deltaS_eais_2014_means = deltaS_2014[deltaS_2014["basin"].isin(eais_names)]
+deltaS_eais_2014_means = deltaS_eais_2014_means.groupby("basin")["dS_Gt"].mean()
+
+deltaS_wais_2014_mins = deltaS_2014[deltaS_2014["basin"].isin(wais_all_names_)]
+deltaS_wais_2014_mins = deltaS_wais_2014_mins.groupby("basin")["dS_Gt"].min()
+
+deltaS_wais_2014_means = deltaS_2014[deltaS_2014["basin"].isin(wais_all_names_)]
+deltaS_wais_2014_means = deltaS_wais_2014_means.groupby("basin")["dS_Gt"].mean()
+
+
+fig, axes = plt.subplots(figsize=(16, 10))
+deltaS_eais_2017_mins.plot(kind='bar', title='2017 EAIS DeltaS:\nMinimum (Gt/month)', ax=axes, color='tab:blue')
+deltaS_eais_2017_means.plot(kind='bar', title='2017 EAIS DeltaS:\nMean (Gt/month)', ax=axes, color='tab:orange')
+plt.ylabel('ΔS (Gt/month)')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+fig.legend(['Minimum ΔS', 'Mean ΔS'], loc='upper right')
+
+deltaS_wais_2017_mins.plot(kind='bar', title='2017 WAIS DeltaS:\nMinimum (Gt/month)')
+plt.ylabel('Minimum ΔS (Gt/month)')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+
+deltaS_eais_2014_mins.plot(kind='bar', title='2014 EAIS DeltaS:\nMinimum (Gt/month)')
+plt.ylabel('Minimum ΔS (Gt/month)')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+deltaS_wais_2014_mins.plot(kind='bar', title='2014 WAIS DeltaS:\nMinimum (Gt/month)')
+plt.ylabel('Minimum ΔS (Gt/month)')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+#%% some plots
+def _add_mean_line_label(
+    ax,
+    y,
+    text,
+    color,
+    x_frac=0.985,
+    y_offset_frac=0.025,
+    va="center",
+):
+    """
+    Add a readable label for a horizontal mean/reference line.
+    Uses axis-fraction x-position and data y-position.
+    """
+
+    ymin, ymax = ax.get_ylim()
+    yrange = ymax - ymin
+
+    # Offset label slightly upward/downward from line
+    y_text = y + y_offset_frac * yrange
+
+    ax.text(
+        x_frac,
+        y_text,
+        text,
+        transform=ax.get_yaxis_transform(),  # x in axes fraction, y in data coords
+        ha="right",
+        va=va,
+        fontsize=15,
+        fontweight="bold",
+        color=color,
+        bbox=dict(
+            facecolor="white",
+            edgecolor=color,
+            boxstyle="round,pad=0.25",
+            alpha=0.85,
+        ),
+        clip_on=False,
+        zorder=10,
+    )
+def plot_mean_min_bars_on_ax(
+    ax,
+    mean_s,
+    min_s,
+    title="",
+    ylabel="Value",
+    mean_label="Mean",
+    min_label="Minimum",
+    mean_color="tab:orange",
+    min_color="tab:blue",
+    sort_by="min",
+    ascending=True,
+    rotation=45,
+    annotate=False,
+    fmt="{:.1f}",
+    add_regional_mean_lines=True,
+    regional_mean_label_prefix="Basin mean",
+    show_mean_line_values=True,
+):
+    """
+    Plot mean and minimum bars side-by-side on an existing axis.
+
+    Optionally adds horizontal dashed lines showing the mean across basins
+    for both the mean series and minimum series.
+    """
+
+    df = pd.concat(
+        [
+            mean_s.rename(mean_label),
+            min_s.rename(min_label),
+        ],
+        axis=1,
+    ).dropna(how="all")
+
+    if sort_by == "min":
+        df = df.sort_values(min_label, ascending=ascending)
+    elif sort_by == "mean":
+        df = df.sort_values(mean_label, ascending=ascending)
+    elif sort_by in ["none", None]:
+        pass
+    else:
+        raise ValueError("sort_by must be 'min', 'mean', or 'none'.")
+
+    x = np.arange(len(df))
+    width = 0.38
+
+    b_min = ax.bar(
+        x - width / 2,
+        df[min_label].values,
+        width,
+        label=min_label,
+        color=min_color,
+        alpha=0.9,
+        edgecolor="black",
+        linewidth=0.5,
+        zorder=2,
+    )
+
+    b_mean = ax.bar(
+        x + width / 2,
+        df[mean_label].values,
+        width,
+        label=mean_label,
+        color=mean_color,
+        alpha=0.9,
+        edgecolor="black",
+        linewidth=0.5,
+        zorder=2,
+    )
+
+    ax.axhline(0, color="black", linewidth=1.0, zorder=3)
+
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.set_ylabel(ylabel, fontsize=11, fontweight="bold")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(df.index, rotation=rotation, ha="right")
+
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
+
+    # --------------------------------------------------------
+    # Regional/basin-average reference lines
+    # --------------------------------------------------------
+    if add_regional_mean_lines:
+        basin_mean_of_min = df[min_label].mean()
+        basin_mean_of_mean = df[mean_label].mean()
+
+        ax.axhline(
+            basin_mean_of_min,
+            color=min_color,
+            linestyle="--",
+            linewidth=2.0,
+            alpha=0.9,
+            label=f"{regional_mean_label_prefix}: {min_label}",
+            zorder=4,
+        )
+
+        ax.axhline(
+            basin_mean_of_mean,
+            color=mean_color,
+            linestyle="--",
+            linewidth=2.0,
+            alpha=0.9,
+            label=f"{regional_mean_label_prefix}: {mean_label}",
+            zorder=4,
+        )
+
+    if annotate:
+        ymin, ymax = ax.get_ylim()
+        yrange = ymax - ymin
+
+        for bars in [b_min, b_mean]:
+            for bar in bars:
+                h = bar.get_height()
+                if np.isnan(h):
+                    continue
+
+                if h >= 0:
+                    y = h + 0.015 * yrange
+                    va = "bottom"
+                else:
+                    y = h - 0.015 * yrange
+                    va = "top"
+
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    y,
+                    fmt.format(h),
+                    ha="center",
+                    va=va,
+                    fontsize=8,
+                    rotation=90,
+                )
+
+    # Let axis limits settle before adding boxed mean labels
+    ax.relim()
+    ax.autoscale_view()
+
+    if add_regional_mean_lines and show_mean_line_values:
+        ymin, ymax = ax.get_ylim()
+        yrange = ymax - ymin
+
+        basin_mean_of_min = df[min_label].mean()
+        basin_mean_of_mean = df[mean_label].mean()
+
+        # If the two mean lines are close together, separate labels more
+        close_lines = abs(basin_mean_of_min - basin_mean_of_mean) < 0.08 * yrange
+
+        if close_lines:
+            min_offset = -0.045
+            mean_offset = 0.045
+        else:
+            min_offset = 0.025
+            mean_offset = 0.025
+
+        def add_boxed_value(y, text, color, offset_frac):
+            ax.text(
+                0.985,
+                y + offset_frac * yrange,
+                text,
+                transform=ax.get_yaxis_transform(),
+                ha="right",
+                va="center",
+                fontsize=9,
+                fontweight="bold",
+                color=color,
+                bbox=dict(
+                    facecolor="white",
+                    edgecolor=color,
+                    boxstyle="round,pad=0.25",
+                    alpha=0.9,
+                ),
+                clip_on=False,
+                zorder=10,
+            )
+
+        add_boxed_value(
+            basin_mean_of_min,
+            f"{basin_mean_of_min:.1f}",
+            min_color,
+            min_offset,
+        )
+
+        add_boxed_value(
+            basin_mean_of_mean,
+            f"{basin_mean_of_mean:.1f}",
+            mean_color,
+            mean_offset,
+        )
+
+    ax.legend(frameon=False, fontsize=9)
+
+    return ax
+
+def plot_raw_vs_filled_mean_min(
+    raw_mean_s,
+    raw_min_s,
+    filled_mean_s,
+    filled_min_s,
+    year,
+    region,
+    raw_ylabel="Raw GRACE value (Gt)",
+    filled_ylabel=r"Computed $\Delta S$ (Gt/month)",
+    raw_title=None,
+    filled_title=None,
+    figsize=(15, 5),
+    sort_by="min",
+    ascending=True,
+    annotate=False,
+):
+    """
+    Make a 1x2 diagnostic plot:
+    left panel  = raw GRACE mean/min by basin
+    right panel = filled/computed ΔS mean/min by basin
+
+    Parameters
+    ----------
+    raw_mean_s, raw_min_s : pandas Series
+        Raw GRACE mean and minimum values by basin.
+    filled_mean_s, filled_min_s : pandas Series
+        Filled/computed ΔS mean and minimum values by basin.
+    year : int
+        Diagnostic year.
+    region : str
+        Region name, e.g., "EAIS", "WAIS".
+    """
+
+    if raw_title is None:
+        raw_title = f"{year} {region} raw GRACE diagnostic"
+
+    if filled_title is None:
+        filled_title = f"{year} {region} filled/computed ΔS diagnostic"
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+    plot_mean_min_bars_on_ax(
+        ax=axes[0],
+        mean_s=raw_mean_s,
+        min_s=raw_min_s,
+        title=raw_title,
+        ylabel=raw_ylabel,
+        mean_label="Mean raw",
+        min_label="Minimum raw",
+        sort_by=sort_by,
+        ascending=ascending,
+        annotate=annotate,
+    )
+
+    plot_mean_min_bars_on_ax(
+        ax=axes[1],
+        mean_s=filled_mean_s,
+        min_s=filled_min_s,
+        title=filled_title,
+        ylabel=filled_ylabel,
+        mean_label="Mean ΔS",
+        min_label="Minimum ΔS",
+        sort_by=sort_by,
+        ascending=ascending,
+        annotate=annotate,
+    )
+
+    fig.suptitle(
+        f"{year} {region}: raw GRACE vs filled/computed ΔS basin diagnostics",
+        fontsize=15,
+        fontweight="bold",
+        y=1.03,
+    )
+
+    plt.tight_layout()
+
+    return fig, axes
+
+
+def plot_monthly_basin_timeseries(
+    df_long,
+    year,
+    region,
+    basin_names=None,
+    value_col="value",
+    basin_col="basin",
+    year_col="Year",
+    month_col="Month",
+    title=None,
+    ylabel=r"$\Delta S$ (Gt/month)",
+    xlabel="Month",
+    figsize=(14, 4.8),
+    linewidth=2.0,
+    markersize=6,
+    marker="o",
+    legend_ncol=4,
+    legend_loc="lower center",
+    legend_bbox=(0.5, -0.42),
+    ylim=None,
+    add_zero_line=True,
+):
+    """
+    Plot monthly time series by basin for a selected year and region.
+
+    Parameters
+    ----------
+    df_long : pandas DataFrame
+        Long-format dataframe with one row per month/basin.
+    year : int
+        Year to plot.
+    region : str
+        Region name for title.
+    basin_names : list or None
+        Optional list of basin names to include.
+    value_col : str
+        Column containing plotted values.
+    """
+
+    sub = df_long[df_long[year_col] == year].copy()
+
+    if basin_names is not None:
+        sub = sub[sub[basin_col].isin(basin_names)].copy()
+
+    if sub.empty:
+        raise ValueError(f"No data found for {year} {region}.")
+
+    if title is None:
+        title = f"{year} {region} monthly ΔS by basin"
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for basin, ss in sub.groupby(basin_col):
+        ss = ss.sort_values(month_col)
+
+        ax.plot(
+            ss[month_col],
+            ss[value_col],
+            marker=marker,
+            linewidth=linewidth,
+            markersize=markersize,
+            label=basin,
+        )
+
+    if add_zero_line:
+        ax.axhline(0, color="black", linewidth=1.0)
+
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.set_xlabel(xlabel, fontsize=11, fontweight="bold")
+    ax.set_ylabel(ylabel, fontsize=11, fontweight="bold")
+
+    ax.set_xticks(np.arange(1, 13))
+    ax.set_xlim(0.5, 12.5)
+
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    ax.grid(alpha=0.3)
+    ax.set_axisbelow(True)
+
+    ax.legend(
+        frameon=False,
+        ncol=legend_ncol,
+        fontsize=9,
+        loc=legend_loc,
+        bbox_to_anchor=legend_bbox,
+    )
+
+    plt.tight_layout()
+
+    return fig, ax
+
+fig, axes = plot_raw_vs_filled_mean_min(
+    raw_mean_s=eais_raw_2017_means,
+    raw_min_s=eais_raw_2017_mins,
+    filled_mean_s=deltaS_eais_2017_means,
+    filled_min_s=deltaS_eais_2017_mins,
+    year=2017,
+    region="EAIS",
+    figsize=(16, 5),
+    sort_by="min",
+    ascending=True,
+    annotate=False,
+
+)
+gc.collect()
+# plt.show()
+
+fig, axes = plot_raw_vs_filled_mean_min(
+    raw_mean_s=wais_raw_2014_means,
+    raw_min_s=wais_raw_2014_mins,
+    filled_mean_s=deltaS_wais_2014_means,
+    filled_min_s=deltaS_wais_2014_mins,
+    year=2014,
+    region="WAIS",
+    figsize=(16, 5),
+    sort_by="min",
+    ascending=True,
+    annotate=False,
+)
+
+dS_long_ = dS_long.copy()
+dS_long_["Year"] = dS_long_["date"].dt.year
+dS_long_["Month"] = dS_long_["date"].dt.month
+fig, ax = plot_monthly_basin_timeseries(
+    df_long=dS_long_,
+    year=2017,
+    region="EAIS",
+    basin_names=eais_names,
+    value_col="dS_Gt",
+    basin_col="basin",
+    year_col="Year",
+    month_col="Month",
+    ylabel=r"$\Delta S$ (Gt/month)",
+    title="2017 EAIS monthly ΔS by basin",
+    figsize=(14, 4.8),
+    legend_ncol=6,
+)
+
+fig, ax = plot_monthly_basin_timeseries(
+    df_long=dS_long_,
+    year=2014,
+    region="WAIS",
+    basin_names=wais_all_names_,
+    value_col="dS_Gt",
+    basin_col="basin",
+    year_col="Year",
+    month_col="Month",
+    ylabel=r"$\Delta S$ (Gt/month)",
+    title="2014 WAIS monthly ΔS by basin",
+    figsize=(14, 4.8),
+    legend_ncol=6,
+)

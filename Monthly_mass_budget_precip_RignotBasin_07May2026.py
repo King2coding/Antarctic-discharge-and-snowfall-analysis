@@ -1,28 +1,36 @@
 """
-Monthly Mass-Budget Precipitation (2019–2020, Rignot/IMBIE basins)
+Monthly Mass-Budget Precipitation (2013–2020, Rignot/IMBIE basins)
 
 Inputs
 ------
-1) David (GRACE/altimetry): Excel with sub-annual basin mass anomalies (Gt)
-   - Sheet: "Basin_Timeseries (Gt)" (typical)
-   - Columns: Time (decimal year), then one column per basin (e.g., "A-Ap", "Ap-B", ...)
+1) David (GRACE/altimetry): basin-scale monthly storage/mass anomaly time series (Gt)
+   - Original source: DataCombo_RignotBasins.xlsx
+   - Working input: LI-filled monthly storage anomaly pickle
+     DataCombo_RignotBasins_LI_tier1_20260325.pkl
+   - Important: This is storage anomaly S, not ΔS.
+   - Monthly ΔS is computed after gap filling as:
+         ΔS_m = S_m - S_{m-1}
+     and assigned to the current month m.
 
 2) Chad (discharge & basal melt): Excel with annual values per basin (Gt/yr)
-   - Provide sheet/column names in CONFIG below.
+   - Discharge sheet: "Discharge (Gt yr^-1)"
+   - Basal melt source: "Summary"
 
 3) RACMO2 sublimation: NetCDF monthly ANT11 domain (RACMO2.4p1)
-   - Variable: "subltot" (mm water equivalent per month) [common name]
-   - Requires cell areas to convert to Gt. Tries variable "cell_area" (m^2) or "AREA" (km^2).
-   - Basin mask on the same grid: tries to find "basin" integer IDs in the NetCDF; if not present,
-     set BASIN_MASK_PATH to a co-registered mask (same shape/projection as RACMO grid).
+   - Variable: "subltot"
+   - Integrated over each basin and converted to Gt/month.
 
 Output
 ------
-- CSV with monthly P_MB per basin (Gt) for 2019–2020, and (if basin areas known) mm/month.
-- Columns: date, basin, dS_Gt, discharge_Gt, basal_Gt, subl_Gt, Pmb_Gt, (optional) basin_area_km2, Pmb_mm
+- Monthly P_MB per basin/map in Gt/month and mm/month.
+- Annual, seasonal, and monthly climatological P_MB summaries.
 
-Author: (K. K. Kumah)
-Date: 2025-09-10
+Main PMB equation
+-----------------
+P_MB = discharge + basal melt + ΔS + sublimation
+
+Author: K. K. Kumah
+Updated for GRACE storage-anomaly correction workflow.
 """
 #%%
 # import libraries
@@ -35,7 +43,25 @@ racmo_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data
 path_to_plots = r'/home/kkumah/Projects/Antarctic_discharge_work/plots'
 
 #%%
+# -----------------------------------------------------------------------------
+# Analysis settings
+# -----------------------------------------------------------------------------
 
+YEAR_START = 2013
+YEAR_END = 2020
+YEARS = np.arange(YEAR_START, YEAR_END + 1)
+
+# Main GRACE correction switch
+APPLY_GRACE_STORAGE_CLIM_CORRECTION = True
+
+# Replacement climatology option
+# "mean" = monthly mean storage anomaly climatology
+# "median" = more robust to outliers
+GRACE_CLIM_STAT = "mean"
+
+# Whether flagged storage values should be excluded when computing climatology
+EXCLUDE_FLAGGED_FROM_GRACE_CLIM = True
+#%%
 
 # basin_fle = os.path.join(basin_path, 'bedmap3_basins.nc')
 # bedmap3_basins = xr.open_dataset(basin_fle)
@@ -110,8 +136,7 @@ basin_name = basin_imbie_with_name_map['basin_name']
 rignot_deltaS_err = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='1-sigma_Error(Gt)')
 
 # - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
-# Year window
-YEARS = np.arange(2013,2021)#[2019, 2020]
+
 #%% - - - - - - - - - - Plot basins - - - - - - - - - - - - - - - - - - - - - - - 
 
 # Set up colormap and norm for 27 discrete basins
@@ -268,6 +293,14 @@ plt.savefig(output_path, dpi=300, bbox_inches='tight')
 
 #%% 1) Read David's LI-filled GRACE/altimetry basin storage anomaly data
 #     and compute monthly ΔS [Gt/month] for each basin.
+#
+# Important:
+# David's working GRACE/altimetry file provides monthly basin storage anomaly S [Gt].
+# The LI gap filling was already applied before this pickle was saved.
+#
+# We compute:
+#     ΔS_m = S_m - S_{m-1}
+# and assign ΔS to the current month m.
 
 rignot_storage = pd.read_pickle(
     os.path.join(basin_path, "DataCombo_RignotBasins_LI_tier1_20260325.pkl")
@@ -275,7 +308,11 @@ rignot_storage = pd.read_pickle(
 
 # Ensure monthly datetime index
 rignot_storage = rignot_storage.copy()
-rignot_storage.index = pd.to_datetime(rignot_storage.index).to_period("M").to_timestamp()
+rignot_storage.index = (
+    pd.to_datetime(rignot_storage.index)
+    .to_period("M")
+    .to_timestamp()
+)
 
 # Add year/month for grouping
 rignot_storage["Year"] = rignot_storage.index.year
@@ -287,8 +324,8 @@ basin_cols = [
     if c not in ("Time", "Date", "Year", "Month")
 ]
 
-# If multiple epochs exist within a month, average them.
-# For the LI-filled monthly pickle, this should usually be one value per month.
+# If multiple entries exist within a month, average them.
+# For the LI-filled monthly pickle, this should usually be one value per basin/month.
 dfm = (
     rignot_storage
     .groupby(["Year", "Month"], as_index=False)[basin_cols]
@@ -302,16 +339,112 @@ dfm["date"] = pd.to_datetime(
 
 dfm = dfm.set_index("date").sort_index()
 
-# Compute monthly storage change:
+# Restrict to analysis window
+dfm = dfm.loc[
+    (dfm.index.year >= YEAR_START) &
+    (dfm.index.year <= YEAR_END)
+].copy()
+
+# This is the LI-filled monthly storage anomaly series S [Gt]
+S_li = dfm[basin_cols].copy()
+
+print(
+    f"[David] LI-filled storage anomaly loaded for months "
+    f"{S_li.index.min().date()} to {S_li.index.max().date()}"
+)
+print(f"[David] Number of basins in storage file: {len(S_li.columns)}")
+
+
+# =============================================================================
+# GRACE correction setup
+# =============================================================================
+# Important terminology:
+#
+# flagged_pmb_table:
+#     Basin-months where final P_MB is negative/unphysical.
+#     This tells us where the problem appears.
+#
+# flagged_storage_table:
+#     Actual GRACE storage anomaly S months selected for replacement.
+#     This tells us what we are correcting.
+#
+# For the first controlled test, we use the same basin-months identified from
+# problematic PMB diagnostics as the storage months to correct. Later, we can
+# refine this using S_prev, S_curr, S_next diagnostics.
+# =============================================================================
+
+FLAGGED_PMB_MONTHS_BY_NAME = [
+    # WAIS 2014 SON problem season: dominant issue in November
+    {"year": 2014, "month": 11, "basins": ["G-H", "Ep-F", "I-Ipp"]},
+
+    # EAIS 2017 DJF problem season: dominant issue in Jan-Feb
+    {"year": 2017, "month": 1, "basins": ["Dp-E", "E-Ep"]},
+    {"year": 2017, "month": 2, "basins": ["Dp-E", "E-Ep"]},
+]
+
+flagged_pmb_rows = []
+
+for item in FLAGGED_PMB_MONTHS_BY_NAME:
+    yy = int(item["year"])
+    mm = int(item["month"])
+
+    for b in item["basins"]:
+        flagged_pmb_rows.append({
+            "time": pd.Timestamp(year=yy, month=mm, day=1),
+            "basin": b,
+            "source": "PMB_negative_or_unphysical",
+        })
+
+flagged_pmb_table = pd.DataFrame(flagged_pmb_rows)
+
+# For now, use the PMB-triggered months as the storage correction months.
+# Later, this can be refined after neighbor diagnostics.
+flagged_storage_table = flagged_pmb_table[["time", "basin"]].copy()
+
+
+# =============================================================================
+# Apply optional GRACE storage-anomaly climatology correction
+# =============================================================================
+
+if APPLY_GRACE_STORAGE_CLIM_CORRECTION:
+
+    S_used, grace_correction_log = replace_flagged_storage_with_monthly_climatology(
+        S_df=S_li,
+        flagged_storage_table=flagged_storage_table,
+        clim_stat=GRACE_CLIM_STAT,
+        exclude_flagged_from_clim=EXCLUDE_FLAGGED_FROM_GRACE_CLIM,
+    )
+
+    print("\n[GRACE correction] Storage-anomaly values replaced:")
+    print(grace_correction_log)
+
+    correction_log_file = os.path.join(
+        basin_path,
+        f"grace_storage_monthly_climatology_correction_log_{cde_run_dte}.csv"
+    )
+
+    grace_correction_log.to_csv(correction_log_file, index=False)
+    print(f"[GRACE correction] Log saved to: {correction_log_file}")
+
+else:
+    S_used = S_li.copy()
+    grace_correction_log = pd.DataFrame()
+
+    print("\n[GRACE correction] Correction is OFF. Using LI-filled storage anomaly as-is.")
+
+
+# =============================================================================
+# Compute monthly ΔS from selected storage anomaly series
+# =============================================================================
 # ΔS_m = S_m - S_{m-1}
-# The ΔS value is assigned to the current month m.
-dS = dfm[basin_cols].diff()
+# Assigned to current month m.
+
+dS = S_used.diff()
 dS = dS.dropna(how="all")
 
-# Convert to long format
 dS_long = (
     dS
-    .reset_index()
+    .reset_index(names="date")
     .melt(id_vars="date", var_name="basin", value_name="dS_Gt")
     .dropna(subset=["dS_Gt"])
     .reset_index(drop=True)
@@ -322,21 +455,9 @@ print(
     f"{dS_long['date'].min().date()} to {dS_long['date'].max().date()}"
 )
 
-S_corr, grace_correction_log = replace_flagged_storage_with_monthly_climatology(
-    S_df=S_tier1,
-    flagged_storage_table=flagged_storage_table,
-    clim_stat="mean",
-)
+print(f"[David] Number of ΔS rows: {len(dS_long)}")
 
-dS_corr = S_corr.diff().dropna(how="all")
-
-dS_long_corr = (
-    dS_corr
-    .reset_index(names="date")
-    .melt(id_vars="date", var_name="basin", value_name="dS_Gt")
-    .dropna(subset=["dS_Gt"])
-    .reset_index(drop=True)
-)
+#%%
 # create an xarray data based on the df above mapping basin mae to the GT values
 # ds_long_xr = dS_long.set_index(["date", "basin"]).to_xarray()
 
@@ -354,15 +475,39 @@ dS_long_df = generate_basin_id_mapping(basin_id, basin_name, dS_long)
 # Build the time-by-space raster
 
 attributes = {
-    'description': 'Monthly basin-total ΔS painted to all pixels of each basin (not areal density). ',
-    'long_name': 'Monthly basin mass anomaly change',
-    'units': 'Gt/month',
-    'source': 'Computed from David Rignot basin Excel (DataCombo_RignotBasins.xlsx)',
-    'note': 'Islands (ID=1) excluded; names matched via modal name per ID from the basin grid.'
+    "description": (
+        "Monthly basin-total ΔS painted to all pixels of each basin "
+        "(not areal density)."
+    ),
+    "long_name": "Monthly basin mass anomaly change",
+    "units": "Gt/month",
+    "source": (
+        "Computed from David's GRACE/altimetry Rignot-basin storage anomaly "
+        "time series after LI gap filling."
+    ),
+    "note": (
+        "ΔS_m = S_m - S_{m-1}, assigned to current month m. "
+        "Islands (ID=1) excluded; basin names matched via modal name per ID "
+        "from the basin grid."
+    ),
 }
 
-dS_raster = create_basin_xrr(basin_id[0], basin_name[0], dS_long_df, 
-                             'dS_Gt', attributes, "deltaS_Gt_per_month")
+if APPLY_GRACE_STORAGE_CLIM_CORRECTION:
+    attributes["correction"] = (
+        "Selected flagged GRACE storage anomaly basin-months were replaced "
+        "with basin-specific monthly climatological storage anomaly values "
+        "before recomputing ΔS."
+    )
+else:
+    attributes["correction"] = "No GRACE storage-anomaly climatology correction applied."
+
+dS_raster = create_basin_xrr(
+    basin_id[0], 
+    basin_name[0], 
+    dS_long_df, 
+    'dS_Gt', 
+    attributes, 
+    "deltaS_Gt_per_month")
 
 # plot one of the time stamps
 tms_plt = dS_raster['date'][0]
@@ -372,9 +517,22 @@ plt.title(f"ΔS for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
 vals = dS_raster['basin_name'].values.ravel()
 non_nan = vals[pd.notna(vals)]
 np.unique(non_nan)
+
 # save to disk
-out_flnme = os.path.join(basin_path, f'rignot_deltaS_monthly_2013_2020_LI_gap_filled_Grace_tier1_{cde_run_dte}.nc')
+correction_tag = (
+    "storage_clim_corrected"
+    if APPLY_GRACE_STORAGE_CLIM_CORRECTION
+    else "uncorrected"
+)
+
+out_flnme = os.path.join(
+    basin_path,
+    f"rignot_deltaS_monthly_{YEAR_START}_{YEAR_END}_LI_gap_filled_GRACE_tier1_{correction_tag}_{cde_run_dte}.nc"
+)
+
 dS_raster.to_netcdf(out_flnme)
+
+print(f"[David] ΔS raster saved to: {out_flnme}")
 # print(f"[David] ΔS raster saved to {out_flnme}")
 #%% 2) Read Chad's discharge & basal melt (annual Gt/yr) and spread to months
 discharge_data = pd.read_excel(os.path.join(basin_path, 'antarctic_discharge_2013-2022_imbie.xlsx'), sheet_name=['Discharge (Gt yr^-1)', 'Summary'])

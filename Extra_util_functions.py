@@ -3,6 +3,22 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.io import loadmat
 from program_utils import *
+import math
+import matplotlib.colors as mcolors
+from matplotlib.colors import BoundaryNorm, LogNorm, PowerNorm
+from matplotlib.cm import ScalarMappable
+import cartopy.crs as ccrs
+import matplotlib.dates as mdates
+
+#%%
+REGION_NEG_THRESHOLDS = {
+    "West Antarctica": -50.0,
+    "East Antarctica": -18, # -25.0
+}
+
+#%%
+
+
 def make_basin_annual_from_monthly_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     Input df columns expected:
@@ -16,7 +32,6 @@ def make_basin_annual_from_monthly_df(df: pd.DataFrame) -> pd.DataFrame:
           .rename(columns={"precipitation": "annual_precip"})
     )
     return out
-
 
 def plot_eais_basin_interannual(
     monthly_df_data_mmmonth,
@@ -120,9 +135,6 @@ def plot_eais_basin_interannual(
     plt.tight_layout(rect=[0, 0.06, 1, 1])
     return fig, axes
 
-
-import pandas as pd
-
 def ensure_monthly_basin_totals(df: pd.DataFrame) -> pd.DataFrame:
     """
     Ensure basin dataframe is monthly total precipitation with columns:
@@ -184,12 +196,646 @@ def basin_mean_bias_table(monthly_df_data_mmmonth, ref_name, test_name, basin_li
     )
     return tab
 
+#------------------------------------------------------------------------------
+
+def convert_outlier_basin_names_to_ids(outlier_list_by_name, basin_name_to_id):
+    """
+    Convert outlier basin/month definitions from basin names to basin IDs.
+    """
+
+    out = []
+
+    for item in outlier_list_by_name:
+        year = int(item["year"])
+        month = int(item["month"])
+        basin_names = item["basins"]
+
+        basin_ids = []
+        for name in basin_names:
+            if name not in basin_name_to_id:
+                raise ValueError(f"Basin name not found in mapping: {name}")
+            basin_ids.append(basin_name_to_id[name])
+
+        out.append({
+            "year": year,
+            "month": month,
+            "basins": basin_ids,
+            "basin_names": basin_names,
+        })
+
+    return out
+
+#------------------------------------------------------------------------------
+
+def mask_specific_basin_months_in_field(
+    da,
+    basin_mask,
+    outlier_basin_months,
+    time_name="time",
+):
+    """
+    Mask selected basin/month combinations in a monthly gridded DataArray.
+    """
+
+    da_masked = da.copy()
+
+    da_masked = da_masked.assign_coords(
+        {time_name: pd.to_datetime(da_masked[time_name].values)}
+    )
+
+    for item in outlier_basin_months:
+        year = int(item["year"])
+        month = int(item["month"])
+        basins_to_mask = item["basins"]
+        basin_names = item.get("basin_names", basins_to_mask)
+
+        tmask = (
+            (da_masked[time_name].dt.year == year) &
+            (da_masked[time_name].dt.month == month)
+        )
+
+        matching_times = da_masked[time_name].where(tmask, drop=True)
+
+        if matching_times.size == 0:
+            print(f"Warning: no matching time found for {year}-{month:02d}")
+            continue
+
+        bmask = basin_mask.isin(basins_to_mask)
+
+        for tt in matching_times.values:
+            da_masked.loc[{time_name: tt}] = (
+                da_masked.sel({time_name: tt}).where(~bmask)
+            )
+
+        print(
+            f"Masked PMB for {year}-{month:02d}; "
+            f"basins={basin_names}; basin_ids={basins_to_mask}"
+        )
+
+    return da_masked
+
+#-----------------------------------------------------------------------------
+def compare_original_vs_sensitivity_values(
+    seasonal_orig_df,
+    seasonal_sens_df,
+    regions=("West Antarctica", "East Antarctica"),
+    product=r"$P_{\mathrm{MB}}$",
+    years=(2014, 2017),
+):
+    """
+    Compare original and sensitivity PMB seasonal values.
+    """
+
+    orig = seasonal_orig_df[
+        (seasonal_orig_df["product"] == product) &
+        (seasonal_orig_df["region"].isin(regions)) &
+        (seasonal_orig_df["time"].dt.year.isin(years))
+    ].copy()
+
+    sens = seasonal_sens_df[
+        (seasonal_sens_df["product"] == product) &
+        (seasonal_sens_df["region"].isin(regions)) &
+        (seasonal_sens_df["time"].dt.year.isin(years))
+    ].copy()
+
+    keep_cols = ["region", "time", "season", "precipitation"]
+
+    orig = orig[keep_cols].rename(columns={"precipitation": "PMB_original"})
+    sens = sens[keep_cols].rename(columns={"precipitation": "PMB_sensitivity"})
+
+    out = orig.merge(
+        sens,
+        on=["region", "time", "season"],
+        how="outer"
+    )
+
+    out["difference_sens_minus_orig"] = (
+        out["PMB_sensitivity"] - out["PMB_original"]
+    )
+
+    return out.sort_values(["region", "time"]).reset_index(drop=True)
+#-----------------------------------------------------------------------------
+def basin_month_pmb_from_grid(
+    pmb_da,
+    basin_mask,
+    basin_ids,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+):
+    """
+    Compute cosine-weighted basin-month PMB values from gridded PMB.
+    Returns tidy dataframe: time, year, month, basin, pmb_mm_month.
+    """
+
+    rows = []
+
+    # Make sure basin mask is on same lat/lon ordering as PMB
+    basin_mask = basin_mask.reindex_like(pmb_da.isel({time_name: 0}), method=None)
+
+    # 1D latitude weights
+    lat = pmb_da[lat_name]
+    weights_lat = np.cos(np.deg2rad(lat))
+
+    # Broadcast to 2D lat/lon
+    weights_2d = xr.ones_like(pmb_da.isel({time_name: 0})) * weights_lat
+
+    for bid in basin_ids:
+        bmask = basin_mask == bid
+
+        vals = pmb_da.where(bmask)
+
+        # xarray weighted() cannot accept NaN weights
+        w = weights_2d.where(bmask).fillna(0)
+
+        # If the basin has no valid weights, skip
+        if float(w.sum()) == 0:
+            print(f"Warning: no valid weights for basin {bid}")
+            continue
+
+        basin_ts = vals.weighted(w).mean(
+            dim=(lat_name, lon_name),
+            skipna=True,
+        )
+
+        df = basin_ts.to_dataframe(name="pmb_mm_month").reset_index()
+        df["basin"] = bid
+        rows.append(df)
+
+    out = pd.concat(rows, ignore_index=True)
+
+    out["time"] = pd.to_datetime(out[time_name])
+    out["year"] = out["time"].dt.year
+    out["month"] = out["time"].dt.month
+
+    return out[["time", "year", "month", "basin", "pmb_mm_month"]]
+#-----------------------------------------------------------------------------
+def get_problem_season_basin_months(
+    pmb_basin_month_df,
+    region_name,
+    basin_ids,
+    year,
+    season_months,
+    sort_ascending=True,
+):
+    """
+    Pull basin/month PMB values for a specific region/year/season.
+
+    season_months should be a list of months.
+    Example:
+        DJF 2017 may need [1, 2, 12] depending on your season convention.
+        SON 2014 = [9, 10, 11].
+    """
+
+    sub = pmb_basin_month_df[
+        (pmb_basin_month_df["basin"].isin(basin_ids)) &
+        (pmb_basin_month_df["year"] == year) &
+        (pmb_basin_month_df["month"].isin(season_months))
+    ].copy()
+
+    sub = sub.sort_values("pmb_mm_month", ascending=sort_ascending)
+
+    print(f"\n{region_name} {year}, months={season_months}")
+    print(sub[["time", "month", "basin", "basin_name", "pmb_mm_month"]].head(20))
+
+    return sub
+#-----------------------------------------------------------------------------
+
+def compute_basin_month_series_from_grid(
+    da,
+    basin_mask,
+    basin_ids,
+    value_name="value",
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+):
+    """
+    Compute cosine-weighted basin-month values from a gridded monthly DataArray.
+
+    Returns
+    -------
+    DataFrame with:
+        time, year, month, basin, value_name
+    """
+
+    rows = []
+
+    da = da.assign_coords({time_name: pd.to_datetime(da[time_name].values)})
+
+    # Ensure basin mask aligns with one time slice
+    basin_mask_2d = basin_mask.reindex_like(da.isel({time_name: 0}), method=None)
+
+    # Latitude cosine weights
+    lat = da[lat_name]
+    weights_lat = np.cos(np.deg2rad(lat))
+    weights_2d = xr.ones_like(da.isel({time_name: 0})) * weights_lat
+
+    for bid in basin_ids:
+        bmask = basin_mask_2d == bid
+
+        vals = da.where(bmask)
+        w = weights_2d.where(bmask).fillna(0)
+
+        if float(w.sum()) == 0:
+            print(f"Warning: no valid weights for basin {bid}")
+            continue
+
+        ts = vals.weighted(w).mean(
+            dim=(lat_name, lon_name),
+            skipna=True,
+        )
+
+        df = ts.to_dataframe(name=value_name).reset_index()
+        df["basin"] = int(bid)
+        rows.append(df)
+
+    out = pd.concat(rows, ignore_index=True)
+    out["time"] = pd.to_datetime(out[time_name])
+    out["year"] = out["time"].dt.year
+    out["month"] = out["time"].dt.month
+
+    return out[["time", "year", "month", "basin", value_name]]
+#-------------------------------------------------------------------------------
+
+def mask_basin_months_from_negative_pmb_table(
+    da,
+    basin_mask,
+    negative_table,
+    basin_col="basin",
+    time_col="time",
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+):
+    """
+    Mask selected basin/months in a gridded monthly product.
+
+    The negative_table is usually derived from PMB and contains
+    time + basin combinations to exclude.
+
+    This function applies those exclusions to any product so that all
+    products use the same basin/month support.
+    """
+
+    da_out = da.copy()
+    da_out = da_out.assign_coords({time_name: pd.to_datetime(da_out[time_name].values)})
+
+    basin_mask_2d = basin_mask.reindex_like(da_out.isel({time_name: 0}), method=None)
+
+    tbl = negative_table[[time_col, basin_col]].copy()
+    tbl[time_col] = pd.to_datetime(tbl[time_col])
+    tbl["year"] = tbl[time_col].dt.year
+    tbl["month"] = tbl[time_col].dt.month
+
+    grouped = tbl.groupby(["year", "month"])[basin_col].apply(list).reset_index()
+
+    for _, row in grouped.iterrows():
+        yy = int(row["year"])
+        mm = int(row["month"])
+        basins_to_remove = [int(b) for b in row[basin_col]]
+
+        tmask = (
+            (da_out[time_name].dt.year == yy) &
+            (da_out[time_name].dt.month == mm)
+        )
+
+        matching_times = da_out[time_name].where(tmask, drop=True)
+
+        if matching_times.size == 0:
+            print(f"Warning: no matching product time for {yy}-{mm:02d}")
+            continue
+
+        bmask = basin_mask_2d.isin(basins_to_remove)
+
+        for tt in matching_times.values:
+            da_out.loc[{time_name: tt}] = (
+                da_out.sel({time_name: tt}).where(~bmask)
+            )
+
+        print(
+            f"Masked common PMB-negative support for {yy}-{mm:02d}; "
+            f"basins={basins_to_remove}"
+        )
+
+    return da_out
+#-------------------------------------------------------------------------------
+def diagnose_grace_storage_neighbors(
+    S_df,
+    flagged_table,
+    basin_col="basin",
+    time_col="time",
+):
+    """
+    Diagnose whether problematic PMB basin-months are linked to
+    current, previous, or next GRACE storage anomaly values.
+
+    S_df should be wide:
+        index = monthly date
+        columns = basin names or basin IDs
+        values = storage anomaly S [Gt]
+
+    flagged_table should contain:
+        time, basin
+    """
+
+    S = S_df.copy()
+    S.index = pd.to_datetime(S.index)
+    S = S.sort_index()
+
+    rows = []
+
+    flagged = flagged_table.copy()
+    flagged[time_col] = pd.to_datetime(flagged[time_col])
+
+    for _, r in flagged.iterrows():
+        t = pd.Timestamp(r[time_col]).to_period("M").to_timestamp()
+        basin = r[basin_col]
+
+        if basin not in S.columns:
+            continue
+        if t not in S.index:
+            continue
+
+        prev_t = t - pd.DateOffset(months=1)
+        next_t = t + pd.DateOffset(months=1)
+
+        S_prev = S.loc[prev_t, basin] if prev_t in S.index else np.nan
+        S_curr = S.loc[t, basin]
+        S_next = S.loc[next_t, basin] if next_t in S.index else np.nan
+
+        dS_curr = S_curr - S_prev if np.isfinite(S_prev) and np.isfinite(S_curr) else np.nan
+        dS_next = S_next - S_curr if np.isfinite(S_next) and np.isfinite(S_curr) else np.nan
+
+        rows.append({
+            "time": t,
+            "basin": basin,
+            "S_prev": S_prev,
+            "S_curr": S_curr,
+            "S_next": S_next,
+            "dS_curr": dS_curr,
+            "dS_next": dS_next,
+        })
+
+    return pd.DataFrame(rows)
+
+#-------------------------------------------------------------------------------
+
+def replace_flagged_storage_with_monthly_climatology(
+    S_df,
+    flagged_storage_table,
+    clim_stat="mean",
+    exclude_flagged_from_clim=True,
+):
+    """
+    Replace selected GRACE storage anomaly S values with basin-specific
+    monthly climatological S values.
+
+    Parameters
+    ----------
+    S_df : pd.DataFrame
+        Wide monthly storage anomaly dataframe.
+        index = monthly dates
+        columns = basin names
+        values = storage anomaly [Gt]
+
+    flagged_storage_table : pd.DataFrame
+        Must contain:
+            time, basin
+
+        These are the actual storage anomaly months selected for replacement.
+
+    clim_stat : str
+        "mean" or "median".
+
+    exclude_flagged_from_clim : bool
+        If True, flagged storage months are excluded from the monthly
+        climatology calculation.
+
+    Returns
+    -------
+    S_corr : pd.DataFrame
+        Corrected storage anomaly dataframe.
+
+    correction_log : pd.DataFrame
+        Diagnostic table showing original and replacement values.
+    """
+
+    S = S_df.copy()
+    S.index = pd.to_datetime(S.index).to_period("M").to_timestamp()
+    S = S.sort_index()
+
+    flagged = flagged_storage_table.copy()
+    flagged["time"] = (
+        pd.to_datetime(flagged["time"])
+        .dt.to_period("M")
+        .dt.to_timestamp()
+    )
+    flagged["basin"] = flagged["basin"].astype(str)
+
+    # Wide to long
+    S_long = (
+        S
+        .reset_index(names="time")
+        .melt(id_vars="time", var_name="basin", value_name="S_Gt")
+    )
+
+    S_long["basin"] = S_long["basin"].astype(str)
+    S_long["month"] = S_long["time"].dt.month
+
+    # Mark flagged rows
+    flagged_key = flagged[["time", "basin"]].copy()
+    flagged_key["_flagged"] = True
+
+    S_long = S_long.merge(
+        flagged_key,
+        on=["time", "basin"],
+        how="left"
+    )
+
+    S_long["_flagged"] = S_long["_flagged"].fillna(False)
+
+    # Compute monthly climatology
+    clim_source = S_long.copy()
+
+    if exclude_flagged_from_clim:
+        clim_source = clim_source[~clim_source["_flagged"]].copy()
+
+    if clim_stat == "mean":
+        clim = (
+            clim_source
+            .groupby(["basin", "month"], as_index=False)["S_Gt"]
+            .mean()
+            .rename(columns={"S_Gt": "S_clim_Gt"})
+        )
+    elif clim_stat == "median":
+        clim = (
+            clim_source
+            .groupby(["basin", "month"], as_index=False)["S_Gt"]
+            .median()
+            .rename(columns={"S_Gt": "S_clim_Gt"})
+        )
+    else:
+        raise ValueError("clim_stat must be 'mean' or 'median'")
+
+    S_long = S_long.merge(
+        clim,
+        on=["basin", "month"],
+        how="left"
+    )
+
+    # Replace flagged values
+    S_long["S_original_Gt"] = S_long["S_Gt"]
+
+    mask = S_long["_flagged"]
+
+    S_long.loc[mask, "S_Gt"] = S_long.loc[mask, "S_clim_Gt"]
+
+    S_long["S_correction_Gt"] = (
+        S_long["S_Gt"] - S_long["S_original_Gt"]
+    )
+
+    correction_log = (
+        S_long[S_long["_flagged"]]
+        [
+            [
+                "time",
+                "basin",
+                "month",
+                "S_original_Gt",
+                "S_clim_Gt",
+                "S_Gt",
+                "S_correction_Gt",
+            ]
+        ]
+        .sort_values(["time", "basin"])
+        .reset_index(drop=True)
+    )
+
+    # Long back to wide
+    S_corr = (
+        S_long
+        .pivot(index="time", columns="basin", values="S_Gt")
+        .sort_index()
+    )
+
+    # Preserve original basin-column order
+    S_corr = S_corr.reindex(columns=S.columns)
+
+    return S_corr, correction_log
 
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+#-------------------------------------------------------------------------------
 
+
+
+#%% PLOT MONTHLY PMB TIME SERIES BY BASIN FOR SELECTED REGION/YEAR
+# =============================================================================
+# Purpose:
+# Plot basin-level monthly PMB values for the affected years/seasons.
+# This is the PMB-based diagnostic used to identify outlier basin/month values.
+# =============================================================================
+
+def plot_monthly_pmb_by_basin(
+    pmb_basin_month_df,
+    year,
+    basin_ids,
+    region_name,
+    basin_name_col="basin_name",
+    value_col="pmb_mm_month",
+    figsize=(14, 4.8),
+    ylim=None,
+    highlight_months=None,
+    title=None,
+    legend_ncol=4,
+):
+    """
+    Plot monthly PMB time series by basin for one region/year.
+
+    Parameters
+    ----------
+    pmb_basin_month_df : DataFrame
+        Must contain: time, year, month, basin, basin_name, pmb_mm_month.
+    year : int
+        Year to plot.
+    basin_ids : list
+        Basin IDs for the region.
+    region_name : str
+        Region name for title.
+    highlight_months : list or None
+        Months to lightly highlight, e.g. [11] or [1, 2].
+    """
+
+    sub = pmb_basin_month_df[
+        (pmb_basin_month_df["year"] == year) &
+        (pmb_basin_month_df["basin"].isin(basin_ids))
+    ].copy()
+
+    if sub.empty:
+        raise ValueError(f"No PMB basin-month data found for {region_name}, {year}")
+
+    if title is None:
+        title = f"{year} {region_name} monthly PMB by basin"
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for basin, ss in sub.groupby("basin"):
+        ss = ss.sort_values("month")
+
+        label = (
+            ss[basin_name_col].iloc[0]
+            if basin_name_col in ss.columns
+            else str(basin)
+        )
+
+        ax.plot(
+            ss["month"],
+            ss[value_col],
+            marker="o",
+            linewidth=2.0,
+            markersize=5.5,
+            label=label,
+        )
+
+    # Zero line
+    ax.axhline(0, color="black", linewidth=1.0)
+
+    # Highlight affected months
+    if highlight_months is not None:
+        for m in highlight_months:
+            ax.axvspan(
+                m - 0.5,
+                m + 0.5,
+                color="gray",
+                alpha=0.12,
+                zorder=0,
+            )
+
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.set_xlabel("Month", fontsize=11, fontweight="bold")
+    ax.set_ylabel(r"$P_{\mathrm{MB}}$ (mm/month)", fontsize=11, fontweight="bold")
+
+    ax.set_xticks(np.arange(1, 13))
+    ax.set_xlim(0.5, 12.5)
+
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    ax.grid(alpha=0.3)
+    ax.set_axisbelow(True)
+
+    ax.legend(
+        frameon=False,
+        ncol=legend_ncol,
+        fontsize=9,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+    )
+
+    plt.tight_layout()
+
+    return fig, ax
+#-----------------------------------------------------------------------------
 def plot_basin_bias_ranked(
     bias_tab,
     interior_basins=None,
@@ -319,15 +965,6 @@ def plot_basin_metric_ranked(
 
     plt.tight_layout()
     return fig, ax
-
-
-    import math
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from matplotlib.colors import BoundaryNorm, LogNorm, PowerNorm
-from matplotlib.cm import ScalarMappable
-import cartopy.crs as ccrs
 
 
 def plot_antarctic_precip_dual_discrete(
@@ -687,8 +1324,6 @@ def make_region_mask_from_basin_ids(basin_id_grid, basin_ids):
     return np.isin(basin_id_grid, basin_ids)
 
 
-import xarray as xr
-
 def regrid_basin_ids_to_product_grid(basin_da, target_lat, target_lon,
                                      basin_lat_name="y", basin_lon_name="x"):
     """
@@ -735,8 +1370,114 @@ def reproject_basin_ids_to_match(basin_da, target_da):
     )
     return basin_on_target
 
+#---------------------------------------------------------------------------------
+
+def build_region_specific_negative_pmb_table(
+
+    pmb_basin_month_df,
+
+    region_basins,
+
+    region_thresholds,
+
+    value_col="pmb_mm_month",
+
+):
+
+    """
+
+    Build a basin/month exclusion table using region-specific PMB thresholds.
+
+    Parameters
+
+    ----------
+
+    pmb_basin_month_df : DataFrame
+
+        Must include time, year, month, basin, and value_col.
+
+    region_basins : dict
+
+        Region -> list of basin IDs.
+
+    region_thresholds : dict
+
+        Region -> threshold in mm/month.
+
+        Example: {"West Antarctica": -50, "East Antarctica": -25}
+
+    value_col : str
+
+        PMB monthly value column.
+
+    Returns
+
+    -------
+
+    exclusion_table : DataFrame
+
+        Basin/month rows where PMB is below the region-specific threshold.
+
+    """
+
+    rows = []
+
+    for region, threshold in region_thresholds.items():
+
+        basins = region_basins[region]
+
+        sub = pmb_basin_month_df[
+
+            (pmb_basin_month_df["basin"].isin(basins)) &
+
+            (pmb_basin_month_df[value_col] < threshold)
+
+        ].copy()
+
+        sub["region"] = region
+
+        sub["threshold_mm_month"] = threshold
+
+        rows.append(sub)
+
+    exclusion_table = (
+        pd.concat(rows, ignore_index=True)
+
+        .sort_values(["time", "basin"])
+
+        .reset_index(drop=True)
+    )
+
+    return exclusion_table
+#---------------------------------------------------------------------------------
+def outlier_id_list_to_table(outlier_list, pmb_basin_month_df):
+    """
+    Convert manually specified outlier basin/month list into a dataframe
+    compatible with mask_basin_months_from_negative_pmb_table().
+    """
+
+    rows = []
+
+    for item in outlier_list:
+        yy = int(item["year"])
+        mm = int(item["month"])
+        basins = [int(b) for b in item["basins"]]
+
+        sub = pmb_basin_month_df[
+            (pmb_basin_month_df["year"] == yy) &
+            (pmb_basin_month_df["month"] == mm) &
+            (pmb_basin_month_df["basin"].isin(basins))
+        ].copy()
+
+        sub["region"] = "East Antarctica"
+        sub["threshold_mm_month"] = "targeted_EAIS_DJF_2017"
+
+        rows.append(sub)
+
+    return pd.concat(rows, ignore_index=True)
 
 
+#-  ----------------------------------------------------------------------------
 def annual_regional_means_from_daily_xr(
     da_daily,
     region_masks,
@@ -911,9 +1652,6 @@ def regional_dict_to_tidy_df(region_dict):
                 })
     return pd.DataFrame(rows)
 
-
-import pandas as pd
-import numpy as np
 
 def compute_relative_differences(df, ref_product, target_products):
     """
@@ -1095,3 +1833,285 @@ def compute_pmb_cosine_weighted_annual(
         out.append(ann)
 
     return pd.concat(out, ignore_index=True)
+#---------------------------------------------------------------------------------
+def monthly_regional_df_to_conventional_seasonal(
+
+    df,
+
+    time_col="time",
+
+    region_col="region",
+
+    product_col="product",
+
+    value_col="precipitation",
+
+    require_complete_season=True,
+
+):
+
+    """
+
+    Convert regional monthly precipitation dataframe to conventional seasonal means.
+
+    Input dataframe format:
+
+        time | region | product | precipitation
+
+    Output dataframe format:
+
+        time | season_year | season | region | product | precipitation | n_months
+
+    DJF is assigned to the year of January/February.
+
+    Example:
+
+        Dec 2013 + Jan 2014 + Feb 2014 -> DJF 2014
+
+    """
+
+    out = df.copy()
+
+    out[time_col] = pd.to_datetime(out[time_col])
+
+    out["year"] = out[time_col].dt.year
+
+    out["month"] = out[time_col].dt.month
+
+    month_to_season = {
+
+        12: "DJF", 1: "DJF", 2: "DJF",
+
+        3: "MAM", 4: "MAM", 5: "MAM",
+
+        6: "JJA", 7: "JJA", 8: "JJA",
+
+        9: "SON", 10: "SON", 11: "SON",
+
+    }
+
+    season_mid_month = {
+
+        "DJF": 1,
+
+        "MAM": 4,
+
+        "JJA": 7,
+
+        "SON": 10,
+
+    }
+
+    season_order = {
+
+        "DJF": 1,
+
+        "MAM": 2,
+
+        "JJA": 3,
+
+        "SON": 4,
+
+    }
+
+    out["season"] = out["month"].map(month_to_season)
+
+    # Assign December to the following DJF year
+
+    out["season_year"] = out["year"]
+
+    out.loc[out["month"] == 12, "season_year"] += 1
+
+    grouped = (
+
+        out
+
+        .groupby([region_col, product_col, "season_year", "season"], as_index=False)
+
+        .agg(
+
+            precipitation=(value_col, "mean"),
+
+            n_months=(value_col, "count"),
+
+        )
+
+    )
+
+    if require_complete_season:
+
+        grouped = grouped[grouped["n_months"] == 3].copy()
+
+    grouped["season_order"] = grouped["season"].map(season_order)
+
+    grouped["time"] = [
+
+        pd.Timestamp(
+
+            year=int(y),
+
+            month=season_mid_month[s],
+
+            day=1
+
+        )
+
+        for y, s in zip(grouped["season_year"], grouped["season"])
+
+    ]
+
+    grouped = grouped.sort_values(
+
+        [region_col, product_col, "season_year", "season_order"]
+
+    ).reset_index(drop=True)
+
+    grouped = grouped[
+
+        ["time", "season_year", "season", region_col, product_col, "precipitation", "n_months"]
+
+    ]
+
+    return grouped
+#---------------------------------------------------------------------------------
+def plot_seasonal_timeseries_regions(
+
+    seasonal_df,
+
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
+
+    product_styles=None,
+
+    figsize=(12, 8),
+
+    ylabel="Precipitation [mm/month]",
+
+    y_nbins=4,
+
+    legend_ncol=4,
+
+    title_suffix="conventional seasonal input",
+
+    x_major_year_interval=1,
+
+):
+
+    """
+
+    Plot conventional seasonal-mean precipitation time series
+
+    for multiple regions in stacked panels.
+
+    Expected seasonal_df columns:
+
+        time | season_year | season | region | product | precipitation
+
+    Notes
+
+    -----
+
+    This function assumes that the input dataframe has already been converted
+
+    from monthly to conventional seasonal means.
+
+    """
+
+    df = seasonal_df.copy()
+
+    df["time"] = pd.to_datetime(df["time"])
+
+    fig, axes = plt.subplots(
+
+        len(region_order),
+
+        1,
+
+        figsize=figsize,
+
+        sharex=True
+
+    )
+
+    if len(region_order) == 1:
+
+        axes = [axes]
+
+    for ax, region in zip(axes, region_order):
+
+        sub = df[df["region"] == region].copy()
+
+        for prod in product_order:
+
+            ss = sub[sub["product"] == prod].copy()
+
+            if ss.empty:
+
+                continue
+
+            ss = ss.sort_values("time")
+
+            style = {} if product_styles is None else product_styles.get(prod, {}).copy()
+
+            ax.plot(
+
+                ss["time"],
+
+                ss["precipitation"],
+
+                label=prod,
+
+                **style
+
+            )
+
+        ax.set_title(
+
+            f"{region} — {title_suffix}",
+
+            fontweight="bold",
+
+            fontsize=18
+
+        )
+
+        ax.grid(True, alpha=0.3)
+
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
+
+    fig.supylabel(ylabel, x=0.06, fontweight="bold", fontsize=18)
+
+    # Clean yearly x-axis
+
+    axes[-1].xaxis.set_major_locator(
+
+        mdates.YearLocator(base=x_major_year_interval)
+
+    )
+
+    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+
+    handles, labels = axes[0].get_legend_handles_labels()
+
+    fig.legend(
+
+        handles,
+
+        labels,
+
+        loc="lower center",
+
+        bbox_to_anchor=(0.5, -0.03),
+
+        ncol=legend_ncol,
+
+        fontsize=15,
+
+        frameon=False
+
+    )
+
+    plt.tight_layout(rect=[0.05, 0.06, 1, 1])
+
+    return fig, axes
