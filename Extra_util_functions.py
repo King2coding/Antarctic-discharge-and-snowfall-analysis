@@ -2298,3 +2298,89 @@ def plot_seasonal_timeseries_regions(
     plt.tight_layout(rect=[0.05, 0.06, 1, 1])
 
     return fig, axes
+
+
+#--------------------------------------------------------------------------------
+def plot_seasonal_climatology_1x3(
+    clim_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(
+        r"$P_{\mathrm{MB}}$",
+        "ERA5",
+        "GPCP V3.3",
+        "GPM PMW V07",
+        "GPM PMW V07 (corr.)",
+    ),
+    product_styles=None,
+    figsize=(15, 4.8),
+    ylabel="mm/season",
+    y_nbins=4,
+    legend_ncol=5,
+):
+    season_labels = ["DJF", "MAM", "JJA", "SON"]
+
+    fig, axes = plt.subplots(
+        1, len(region_order),
+        figsize=figsize,
+        sharex=True,
+        sharey=False
+    )
+
+    if len(region_order) == 1:
+        axes = [axes]
+
+    for ax, region in zip(axes, region_order):
+
+        sub = clim_df[clim_df["region"] == region].copy()
+
+        for prod in product_order:
+            ss = sub[sub["product"] == prod].copy()
+
+            if ss.empty:
+                continue
+
+            ss["season"] = pd.Categorical(
+                ss["season"],
+                categories=season_labels,
+                ordered=True
+            )
+            ss = ss.sort_values("season")
+
+            style = {} if product_styles is None else product_styles.get(prod, {})
+
+            ax.plot(
+                ss["season"],
+                ss["precipitation"],
+                label=prod,
+                color=style.get("color", None),
+                marker=style.get("marker", None),
+                linestyle=style.get("linestyle", style.get("ls", "-")),
+                linewidth=style.get("lw", style.get("linewidth", 2.5)),
+                markersize=style.get("ms", style.get("markersize", 6)),
+            )
+
+        ax.set_title(region, fontsize=16, fontweight="bold")
+        ax.grid(True, alpha=0.3)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=y_nbins))
+
+        if ax == axes[0]:
+            ax.set_ylabel(ylabel, fontsize=15, fontweight="bold")
+
+        ax.tick_params(axis="both", labelsize=13)
+
+    # one shared legend below all panels
+    handles, labels = axes[0].get_legend_handles_labels()
+
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=legend_ncol,
+        frameon=False,
+        fontsize=13,
+        bbox_to_anchor=(0.5, -0.08),
+    )
+
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
+
+    return fig, axes

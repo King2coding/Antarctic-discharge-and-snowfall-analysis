@@ -78,6 +78,8 @@ product_styles_corr = {
 
     "GPM PMW V07": {"color": "cyan", "lw": 3.5},
     "GPM PMW V07 (corr.)": {"color": "cyan", "ls": "--", "lw": 3.5},
+
+    "UA-HIPA": {"color": "magenta", "lw": 2.5},
 }
 #---------------------------------------------------------------------------------
 

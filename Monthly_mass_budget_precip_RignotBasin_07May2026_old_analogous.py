@@ -51,7 +51,7 @@ YEAR_END = 2020
 YEARS = np.arange(YEAR_START, YEAR_END + 1)
 
 # Main GRACE-derived ΔS correction switch
-APPLY_GRACE_DELTAS_CLIM_CORRECTION = True
+APPLY_GRACE_DELTAS_CLIM_CORRECTION = False
 
 # Monthly ΔS climatology statistic: "mean" or "median"
 GRACE_CLIM_STAT = "mean"
@@ -386,183 +386,24 @@ print(
 )
 print(f"[David] Number of original forward ΔS months: {len(dS_original.index)}")
 
-
 # =============================================================================
-# PMB-negative-month trigger list
+# Use original LI-derived forward ΔS without climatology correction
 # =============================================================================
-# These basin-months come from the diagnostic slide section:
-# "Diagnosing PMB negative months"
+# Old-method replication:
+#     ΔS_m = S_{m+1} - S_m
+# assigned to the starting month m.
 #
-# They identify where the final PMB estimate became physically problematic.
-# They do NOT by themselves prove that the same GRACE storage anomaly month is bad.
-#
-# Important terminology:
-#
-# flagged_pmb_table:
-#     Basin-months where final P_MB is negative/unphysical.
-#     This tells us where the problem appears.
-#
-# flagged_deltaS_table:
-#     Actual GRACE-derived ΔS basin-months selected for replacement.
-#     This tells us what enters the correction.
-#
-# For this controlled correction experiment, we use the PMB-negative basin-months
-# as the ΔS correction targets.
+# No flagged PMB months are used here.
+# No ΔS monthly climatology replacement is applied.
 # =============================================================================
 
-FLAGGED_PMB_MONTHS_BY_NAME = [
-    # WAIS 2014 SON problem season: dominant issue in November
-    {"year": 2014, "month": 11, "basins": ["G-H", "Ep-f", "I-Ipp"]},
+dS_used = dS_original.copy()
+deltaS_correction_log = pd.DataFrame()
 
-    # EAIS 2017 DJF problem season: dominant issue in Jan-Feb
-    {"year": 2017, "month": 1, "basins": ["Dp-E", "E-Ep"]},
-    {"year": 2017, "month": 2, "basins": ["Dp-E", "E-Ep"]},
-]
+GRACE_DELTAS_CORRECTION_VARIANT = "none"
 
-flagged_pmb_rows = []
-
-for item in FLAGGED_PMB_MONTHS_BY_NAME:
-    yy = int(item["year"])
-    mm = int(item["month"])
-
-    for b in item["basins"]:
-        flagged_pmb_rows.append({
-            "time": pd.Timestamp(year=yy, month=mm, day=1),
-            "basin": normalize_basin_name_for_grace(b),
-            "basin_original": b,
-            "source": "PMB_negative_or_unphysical",
-        })
-
-flagged_pmb_table = pd.DataFrame(flagged_pmb_rows)
-
-# Variant A: all PMB-triggered ΔS months
-flagged_deltaS_table_all = flagged_pmb_table[["time", "basin"]].copy()
-flagged_deltaS_table_all["time"] = (
-    pd.to_datetime(flagged_deltaS_table_all["time"])
-    .dt.to_period("M")
-    .dt.to_timestamp()
-)
-
-# Variant B: only PMB-triggered months where original forward ΔS is negative
-dS_original_long_for_filter = (
-    dS_original
-    .reset_index(names="time")
-    .melt(id_vars="time", var_name="basin", value_name="dS_original_Gt")
-)
-
-flagged_deltaS_table_neg_only = (
-    flagged_deltaS_table_all
-    .merge(
-        dS_original_long_for_filter,
-        on=["time", "basin"],
-        how="left"
-    )
-)
-
-flagged_deltaS_table_neg_only = (
-    flagged_deltaS_table_neg_only[
-        flagged_deltaS_table_neg_only["dS_original_Gt"] < 0
-    ][["time", "basin"]]
-    .reset_index(drop=True)
-)
-
-# Choose correction variant
-# Variant A = correct all PMB-triggered ΔS months
-# Variant B = correct only PMB-triggered months where forward ΔS is negative
-GRACE_DELTAS_CORRECTION_VARIANT = "Variant_B_negative_deltaS_only"
-# GRACE_DELTAS_CORRECTION_VARIANT = "Variant_A_all_PMB_triggered"
-
-if GRACE_DELTAS_CORRECTION_VARIANT == "Variant_A_all_PMB_triggered":
-    flagged_deltaS_table_active = flagged_deltaS_table_all.copy()
-elif GRACE_DELTAS_CORRECTION_VARIANT == "Variant_B_negative_deltaS_only":
-    flagged_deltaS_table_active = flagged_deltaS_table_neg_only.copy()
-else:
-    raise ValueError(
-        "Unknown GRACE_DELTAS_CORRECTION_VARIANT: "
-        f"{GRACE_DELTAS_CORRECTION_VARIANT}"
-    )
-
-print("\n[GRACE forward-ΔS correction] PMB-triggered basin-months:")
-print(flagged_pmb_table)
-
-print("\n[GRACE forward-ΔS correction] Variant A candidate targets: all PMB-triggered months")
-print(flagged_deltaS_table_all)
-
-print("\n[GRACE forward-ΔS correction] Variant B candidate targets: negative-forward-ΔS-only")
-print(flagged_deltaS_table_neg_only)
-
-print(f"\n[GRACE forward-ΔS correction] Active correction variant: {GRACE_DELTAS_CORRECTION_VARIANT}")
-print(flagged_deltaS_table_active)
-
-
-# =============================================================================
-# Safety checks
-# =============================================================================
-
-missing_flagged_basins = sorted(
-    set(flagged_deltaS_table_all["basin"]) - set(dS_original.columns)
-)
-
-if missing_flagged_basins:
-    raise ValueError(
-        "Some flagged basins are not present in the GRACE forward-ΔS dataframe: "
-        f"{missing_flagged_basins}"
-    )
-
-flagged_times_all = (
-    pd.to_datetime(flagged_deltaS_table_all["time"])
-    .dt.to_period("M")
-    .dt.to_timestamp()
-)
-
-missing_flagged_times = sorted(set(flagged_times_all) - set(dS_original.index))
-
-if missing_flagged_times:
-    raise ValueError(
-        "Some flagged correction months are not present in the GRACE forward-ΔS index: "
-        f"{missing_flagged_times}"
-    )
-
-
-# =============================================================================
-# Apply optional GRACE-derived ΔS monthly-climatology correction
-# =============================================================================
-
-if APPLY_GRACE_DELTAS_CLIM_CORRECTION:
-
-    dS_used, deltaS_correction_log = replace_flagged_deltaS_with_monthly_climatology(
-        dS_df=dS_original,
-        flagged_deltaS_table=flagged_deltaS_table_active,
-        clim_stat=GRACE_CLIM_STAT,
-        exclude_flagged_from_clim=EXCLUDE_FLAGGED_FROM_GRACE_CLIM,
-    )
-
-    deltaS_correction_log["correction_variant"] = GRACE_DELTAS_CORRECTION_VARIANT
-    deltaS_correction_log["deltaS_convention"] = "forward_difference_S_next_minus_S_current"
-    deltaS_correction_log["clim_stat"] = GRACE_CLIM_STAT
-    deltaS_correction_log["exclude_flagged_from_clim"] = EXCLUDE_FLAGGED_FROM_GRACE_CLIM
-
-    print("\n[GRACE forward-ΔS correction] ΔS values replaced:")
-    print(deltaS_correction_log)
-
-    deltaS_log_file = os.path.join(
-        basin_path,
-        (
-            "grace_forward_deltaS_monthly_climatology_correction_log_"
-            f"{GRACE_DELTAS_CORRECTION_VARIANT}_{cde_run_dte}.csv"
-        )
-    )
-
-    deltaS_correction_log.to_csv(deltaS_log_file, index=False)
-    print(f"[GRACE forward-ΔS correction] Log saved to: {deltaS_log_file}")
-
-else:
-    dS_used = dS_original.copy()
-    deltaS_correction_log = pd.DataFrame()
-
-    print("\n[GRACE forward-ΔS correction] Correction is OFF. Using original LI-derived forward ΔS.")
-
-
+print("\n[GRACE forward-ΔS] No climatology correction applied.")
+print("[GRACE forward-ΔS] Using original LI-derived forward ΔS.")
 # =============================================================================
 # Convert active ΔS to long dataframe for basin-raster painting
 # =============================================================================
@@ -582,98 +423,6 @@ print(
 
 print(f"[David] Number of active forward ΔS rows: {len(dS_long)}")
 
-
-# =============================================================================
-# Diagnostic: compare original LI-derived forward ΔS and active ΔS
-# =============================================================================
-
-dS_original_long = (
-    dS_original
-    .reset_index(names="date")
-    .melt(id_vars="date", var_name="basin", value_name="dS_original_Gt")
-    .dropna(subset=["dS_original_Gt"])
-    .reset_index(drop=True)
-)
-
-dS_compare_all_triggers = (
-    dS_long
-    .rename(columns={"dS_Gt": "dS_used_Gt"})
-    .merge(
-        dS_original_long,
-        on=["date", "basin"],
-        how="left"
-    )
-)
-
-flagged_keys_all = flagged_deltaS_table_all.rename(columns={"time": "date"}).copy()
-flagged_keys_all["date"] = pd.to_datetime(flagged_keys_all["date"])
-
-flagged_keys_active = flagged_deltaS_table_active.rename(columns={"time": "date"}).copy()
-flagged_keys_active["date"] = pd.to_datetime(flagged_keys_active["date"])
-
-dS_compare_all_triggers = dS_compare_all_triggers.merge(
-    flagged_keys_all.assign(pmb_triggered=True),
-    on=["date", "basin"],
-    how="inner"
-)
-
-dS_compare_all_triggers = dS_compare_all_triggers.merge(
-    flagged_keys_active.assign(was_actively_corrected=True),
-    on=["date", "basin"],
-    how="left"
-)
-
-dS_compare_all_triggers["was_actively_corrected"] = (
-    dS_compare_all_triggers["was_actively_corrected"].fillna(False)
-)
-
-dS_compare_all_triggers["dS_change_Gt"] = (
-    dS_compare_all_triggers["dS_used_Gt"] -
-    dS_compare_all_triggers["dS_original_Gt"]
-)
-
-dS_compare_all_triggers["correction_variant"] = GRACE_DELTAS_CORRECTION_VARIANT
-dS_compare_all_triggers["deltaS_convention"] = "forward_difference_S_next_minus_S_current"
-
-dS_compare_active = dS_compare_all_triggers[
-    dS_compare_all_triggers["was_actively_corrected"]
-].copy()
-
-print("\n[GRACE forward-ΔS correction] ΔS before/after comparison for ACTIVE correction targets:")
-print(dS_compare_active)
-
-print("\n[GRACE forward-ΔS correction] ΔS before/after comparison for ALL PMB-triggered months:")
-print(dS_compare_all_triggers)
-
-if APPLY_GRACE_DELTAS_CLIM_CORRECTION:
-
-    dS_compare_active_file = os.path.join(
-        basin_path,
-        (
-            "grace_forward_deltaS_before_after_ACTIVE_targets_"
-            f"{GRACE_DELTAS_CORRECTION_VARIANT}_{cde_run_dte}.csv"
-        )
-    )
-
-    dS_compare_all_file = os.path.join(
-        basin_path,
-        (
-            "grace_forward_deltaS_before_after_ALL_PMB_triggers_"
-            f"{GRACE_DELTAS_CORRECTION_VARIANT}_{cde_run_dte}.csv"
-        )
-    )
-
-    dS_compare_active.to_csv(dS_compare_active_file, index=False)
-    dS_compare_all_triggers.to_csv(dS_compare_all_file, index=False)
-
-    print(
-        "[GRACE forward-ΔS correction] Active-target ΔS before/after comparison saved to: "
-        f"{dS_compare_active_file}"
-    )
-    print(
-        "[GRACE forward-ΔS correction] All-trigger ΔS before/after comparison saved to: "
-        f"{dS_compare_all_file}"
-    )
 #%%
 # =============================================================================
 # CREATE ΔS RASTER FROM ACTIVE FORWARD-DIFFERENCE ΔS DATAFRAME
@@ -737,17 +486,8 @@ attributes = {
     ),
 }
 
-if APPLY_GRACE_DELTAS_CLIM_CORRECTION:
-    attributes["correction"] = (
-        "Selected flagged GRACE-derived ΔS basin-months were replaced "
-        "with basin-specific monthly climatological ΔS values before computing PMB."
-    )
-    attributes["correction_variant"] = GRACE_DELTAS_CORRECTION_VARIANT
-    attributes["clim_stat"] = GRACE_CLIM_STAT
-    attributes["exclude_flagged_from_clim"] = str(EXCLUDE_FLAGGED_FROM_GRACE_CLIM)
-else:
-    attributes["correction"] = "No GRACE-derived ΔS climatology correction applied."
-    attributes["correction_variant"] = "none"
+attributes["correction"] = "No GRACE-derived ΔS climatology correction applied."
+attributes["correction_variant"] = "none"
 
 dS_raster = create_basin_xrr(
     basin_id_da[0],
@@ -783,11 +523,7 @@ print(np.unique(non_nan))
 # Save to disk
 # =============================================================================
 
-correction_tag = (
-    f"forward_deltaS_{GRACE_DELTAS_CORRECTION_VARIANT}"
-    if APPLY_GRACE_DELTAS_CLIM_CORRECTION
-    else "forward_deltaS_uncorrected"
-)
+correction_tag = "forward_deltaS_uncorrected"
 
 out_flnme = os.path.join(
     basin_path,
