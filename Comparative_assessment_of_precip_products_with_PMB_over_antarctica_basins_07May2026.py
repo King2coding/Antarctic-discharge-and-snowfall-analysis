@@ -32,7 +32,7 @@ Pmb_mm_fle_old = os.path.join(
 # New PMB generated using GRACE-derived ΔS monthly climatology correction
 Pmb_mm_fle_corr = os.path.join(
     basins_path,
-    "Monthly_mass_budget_precip_RignotBasin_in_mm_forward_deltaS_Variant_B_negative_deltaS_only_20260507.nc"
+    "Monthly_mass_budget_precip_RignotBasin_in_mm_forward_deltaS_Variant_B_negative_deltaS_only_positive_sublimation_loss_20260507.nc"
 )
 
 PMB_VERSION_LABEL_OLD = r"$P_{\mathrm{MB}}$ old"
@@ -48,7 +48,7 @@ all_gpcp_v3pt3_mnthly_files_2013_2020 = [
     if 2013 <= int(os.path.basename(f).split('_')[2][:4]) <= 2020
 ]
 
-ANNUAL_YEAR_START = 2014
+ANNUAL_YEAR_START = 2013
 ANNUAL_YEAR_END = 2020
 # =============================================================================
 # SECTION 3. BASIN DEFINITIONS
@@ -1335,9 +1335,9 @@ gc.collect()
 # the same complete-year period used in the annual scatter/spread analysis.
 #
 # Important:
-# Corrected PMB starts in March 2013, so annual diagnostics should use complete
+# Corrected PMB starts in Feb 2013, so annual diagnostics should use complete
 # years only:
-#     ANNUAL_YEAR_START = 2014
+#     ANNUAL_YEAR_START = 2013
 #     ANNUAL_YEAR_END   = 2020
 # =============================================================================
 
