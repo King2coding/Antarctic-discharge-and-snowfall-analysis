@@ -726,7 +726,190 @@ def replace_flagged_storage_with_monthly_climatology(
 
 
 #-------------------------------------------------------------------------------
+def normalize_basin_name_for_grace(name):
+    """
+    Normalize basin names to match David's GRACE storage dataframe.
+    Currently David's file uses 'Ep-f' rather than 'Ep-F'.
+    """
+    name_map = {
+        "Ep-F": "Ep-f",
+    }
+    return name_map.get(name, name)
 
+#-------------------------------------------------------------------------------
+# =============================================================================
+# Diagnostic: inspect storage anomaly S around flagged months
+# =============================================================================
+
+def inspect_storage_neighbors(S_df, flagged_table):
+    rows = []
+
+    S = S_df.copy()
+    S.index = pd.to_datetime(S.index).to_period("M").to_timestamp()
+    S = S.sort_index()
+
+    ft = flagged_table.copy()
+    ft["time"] = pd.to_datetime(ft["time"]).dt.to_period("M").dt.to_timestamp()
+
+    for _, r in ft.iterrows():
+        t = r["time"]
+        b = r["basin"]
+
+        prev_t = t - pd.DateOffset(months=1)
+        next_t = t + pd.DateOffset(months=1)
+
+        S_prev = S.loc[prev_t, b] if prev_t in S.index else np.nan
+        S_curr = S.loc[t, b] if t in S.index else np.nan
+        S_next = S.loc[next_t, b] if next_t in S.index else np.nan
+
+        rows.append({
+            "time": t,
+            "basin": b,
+            "S_prev": S_prev,
+            "S_curr": S_curr,
+            "S_next": S_next,
+            "dS_curr": S_curr - S_prev if np.isfinite(S_prev) and np.isfinite(S_curr) else np.nan,
+            "dS_next": S_next - S_curr if np.isfinite(S_next) and np.isfinite(S_curr) else np.nan,
+        })
+
+    return pd.DataFrame(rows)
+
+
+#-------------------------------------------------------------------------------
+def replace_flagged_deltaS_with_monthly_climatology(
+    dS_df,
+    flagged_deltaS_table,
+    clim_stat="mean",
+    exclude_flagged_from_clim=True,
+):
+    """
+    Replace selected monthly ΔS basin values with basin-specific
+    calendar-month ΔS climatology.
+
+    Parameters
+    ----------
+    dS_df : pd.DataFrame
+        Wide monthly ΔS dataframe.
+        index = monthly dates
+        columns = basin names
+        values = ΔS [Gt/month]
+
+    flagged_deltaS_table : pd.DataFrame
+        Must contain:
+            time, basin
+
+        These are the ΔS basin-months selected for replacement.
+
+    clim_stat : str
+        "mean" or "median".
+
+    exclude_flagged_from_clim : bool
+        If True, flagged ΔS months are excluded from climatology calculation.
+
+    Returns
+    -------
+    dS_corr : pd.DataFrame
+        Corrected ΔS dataframe.
+
+    correction_log : pd.DataFrame
+        Diagnostic table showing original and replacement ΔS values.
+    """
+
+    dS = dS_df.copy()
+    dS.index = pd.to_datetime(dS.index).to_period("M").to_timestamp()
+    dS = dS.sort_index()
+
+    flagged = flagged_deltaS_table.copy()
+    flagged["time"] = (
+        pd.to_datetime(flagged["time"])
+        .dt.to_period("M")
+        .dt.to_timestamp()
+    )
+    flagged["basin"] = flagged["basin"].astype(str)
+
+    dS_long = (
+        dS
+        .reset_index(names="time")
+        .melt(id_vars="time", var_name="basin", value_name="dS_Gt")
+    )
+
+    dS_long["basin"] = dS_long["basin"].astype(str)
+    dS_long["month"] = dS_long["time"].dt.month
+
+    flagged_key = flagged[["time", "basin"]].copy()
+    flagged_key["_flagged"] = True
+
+    dS_long = dS_long.merge(
+        flagged_key,
+        on=["time", "basin"],
+        how="left"
+    )
+
+    dS_long["_flagged"] = dS_long["_flagged"].fillna(False)
+
+    clim_source = dS_long.copy()
+
+    if exclude_flagged_from_clim:
+        clim_source = clim_source[~clim_source["_flagged"]].copy()
+
+    if clim_stat == "mean":
+        clim = (
+            clim_source
+            .groupby(["basin", "month"], as_index=False)["dS_Gt"]
+            .mean()
+            .rename(columns={"dS_Gt": "dS_clim_Gt"})
+        )
+    elif clim_stat == "median":
+        clim = (
+            clim_source
+            .groupby(["basin", "month"], as_index=False)["dS_Gt"]
+            .median()
+            .rename(columns={"dS_Gt": "dS_clim_Gt"})
+        )
+    else:
+        raise ValueError("clim_stat must be 'mean' or 'median'")
+
+    dS_long = dS_long.merge(
+        clim,
+        on=["basin", "month"],
+        how="left"
+    )
+
+    dS_long["dS_original_Gt"] = dS_long["dS_Gt"]
+
+    mask = dS_long["_flagged"]
+    dS_long.loc[mask, "dS_Gt"] = dS_long.loc[mask, "dS_clim_Gt"]
+
+    dS_long["dS_correction_Gt"] = (
+        dS_long["dS_Gt"] - dS_long["dS_original_Gt"]
+    )
+
+    correction_log = (
+        dS_long[dS_long["_flagged"]]
+        [
+            [
+                "time",
+                "basin",
+                "month",
+                "dS_original_Gt",
+                "dS_clim_Gt",
+                "dS_Gt",
+                "dS_correction_Gt",
+            ]
+        ]
+        .sort_values(["time", "basin"])
+        .reset_index(drop=True)
+    )
+
+    dS_corr = (
+        dS_long
+        .pivot(index="time", columns="basin", values="dS_Gt")
+        .sort_index()
+    )
+
+    dS_corr = dS_corr.reindex(columns=dS.columns)
+
+    return dS_corr, correction_log
 
 
 #%% PLOT MONTHLY PMB TIME SERIES BY BASIN FOR SELECTED REGION/YEAR

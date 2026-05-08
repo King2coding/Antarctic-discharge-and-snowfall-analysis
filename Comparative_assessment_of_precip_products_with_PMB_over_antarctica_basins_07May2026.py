@@ -22,7 +22,21 @@ era5_mnhtly_file = r'/ra1/pubdat/GPCP/GPCP_Reproduce_GJ/era5_tp_198001202412_mon
 
 # --- Basin / PMB data ---
 basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
-Pmb_mm_fle  = os.path.join(basins_path, 'Monthly_mass_budget_precip_RignotBasin_in_mm_20260226.nc')
+
+# Original / previous PMB used in old slides
+Pmb_mm_fle_old = os.path.join(
+    basins_path,
+    "Monthly_mass_budget_precip_RignotBasin_in_mm_20260226.nc"
+)
+
+# New PMB generated using GRACE-derived ΔS monthly climatology correction
+Pmb_mm_fle_corr = os.path.join(
+    basins_path,
+    "Monthly_mass_budget_precip_RignotBasin_in_mm_forward_deltaS_Variant_B_negative_deltaS_only_20260507.nc"
+)
+
+PMB_VERSION_LABEL_OLD = r"$P_{\mathrm{MB}}$ old"
+PMB_VERSION_LABEL_CORR = r"$P_{\mathrm{MB}}$ $\Delta S$-corr."
 
 # --- File lists: 2013–2020 only ---
 all_gpcp_v3pt3_mnthly_files = sorted(
@@ -34,7 +48,8 @@ all_gpcp_v3pt3_mnthly_files_2013_2020 = [
     if 2013 <= int(os.path.basename(f).split('_')[2][:4]) <= 2020
 ]
 
-
+ANNUAL_YEAR_START = 2014
+ANNUAL_YEAR_END = 2020
 # =============================================================================
 # SECTION 3. BASIN DEFINITIONS
 # =============================================================================
@@ -298,8 +313,10 @@ era5_mnth = era5_mnth.rename({"latitude": "lat", "longitude": "lon"})
 
 #----------------------------------------------------------------------------
 
-print("Loading PMB monthly dataset ...")
-P_mm_mnth = xr.open_dataarray(Pmb_mm_fle)
+print("Loading PMB monthly datasets ...")
+
+P_mm_mnth_old = xr.open_dataarray(Pmb_mm_fle_old)
+P_mm_mnth_corr = xr.open_dataarray(Pmb_mm_fle_corr)
 
 
 gc.collect()
@@ -339,8 +356,19 @@ gpcp_mon_01 = gpcp_mon_01.where(gpcp_mon_01["lat"] < -60)
 #----------------------------------------------------------------------------
 
 print("Reprojecting PMB monthly to common 0.1° grid ...")
-pmb_mon_01 = prepare_pmb_monthly_on_target(P_mm_mnth, target_template_01deg)
-pmb_mon_01 = subset_common_period(pmb_mon_01)
+print("Reprojecting old PMB monthly to common 0.1° grid ...")
+pmb_mon_01_old = prepare_pmb_monthly_on_target(
+    P_mm_mnth_old,
+    target_template_01deg
+)
+pmb_mon_01_old = subset_common_period(pmb_mon_01_old)
+
+print("Reprojecting corrected PMB monthly to common 0.1° grid ...")
+pmb_mon_01_corr = prepare_pmb_monthly_on_target(
+    P_mm_mnth_corr,
+    target_template_01deg
+)
+pmb_mon_01_corr = subset_common_period(pmb_mon_01_corr)
 #----------------------------------------------------------------------------
 
 # Attach CRS metadata
@@ -383,7 +411,11 @@ valid_basin_mask = basin_mask_01deg.notnull()
 
 gpcp_mon_01 = gpcp_mon_01.where(valid_basin_mask)
 era5_mon_01 = era5_mnth_01.where(valid_basin_mask)
-pmb_mon_01  = pmb_mon_01.where(valid_basin_mask)
+pmb_mon_01_old  = pmb_mon_01_old.where(valid_basin_mask)
+pmb_mon_01_corr = pmb_mon_01_corr.where(valid_basin_mask)
+
+# Main PMB version used for product comparison
+pmb_mon_01 = pmb_mon_01_corr.copy()
 
 print("✅ Common masked monthly fields ready")
 print("GPCP  :", gpcp_mon_01.shape)
@@ -403,6 +435,203 @@ print("GPCP time range:", str(gpcp_mon_01.time.min().values), "->", str(gpcp_mon
 print("ERA5 time range:", str(era5_mon_01.time.min().values), "->", str(era5_mon_01.time.max().values))
 print("PMB time range :", str(pmb_mon_01.time.min().values),  "->", str(pmb_mon_01.time.max().values))
 
+#%% PMB OLD VS ΔS-CORRECTED DIAGNOSTIC
+# =============================================================================
+# Purpose:
+# Compare the old PMB and the new ΔS-corrected PMB before any negative-value
+# masking/filtering is applied.
+#
+# This directly tests whether the GRACE-derived ΔS climatology correction reduced
+# the problematic PMB months/seasons identified in the diagnostic slides:
+#   - WAIS 2014 SON, especially Nov: G-H, Ep-F, I-Ipp
+#   - EAIS 2017 DJF, especially Jan/Feb: Dp-E, E-Ep
+# =============================================================================
+
+BASIN_IDS = sorted(AIS_BASINS)
+BASIN_ID_TO_NAME = {v: k for k, v in BASIN_NAME_TO_ID.items()}
+
+pmb_old_basin_month_df = compute_basin_month_series_from_grid(
+    da=pmb_mon_01_old,
+    basin_mask=basin_mask_01deg,
+    basin_ids=BASIN_IDS,
+    value_name="pmb_old_mm_month",
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+pmb_corr_basin_month_df = compute_basin_month_series_from_grid(
+    da=pmb_mon_01_corr,
+    basin_mask=basin_mask_01deg,
+    basin_ids=BASIN_IDS,
+    value_name="pmb_corr_mm_month",
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+pmb_compare_basin_month_df = (
+    pmb_old_basin_month_df
+    .merge(
+        pmb_corr_basin_month_df,
+        on=["time", "year", "month", "basin"],
+        how="outer"
+    )
+    .sort_values(["time", "basin"])
+    .reset_index(drop=True)
+)
+
+pmb_compare_basin_month_df["basin_name"] = (
+    pmb_compare_basin_month_df["basin"].map(BASIN_ID_TO_NAME)
+)
+
+pmb_compare_basin_month_df["pmb_change_mm_month"] = (
+    pmb_compare_basin_month_df["pmb_corr_mm_month"] -
+    pmb_compare_basin_month_df["pmb_old_mm_month"]
+)
+
+print("\nPMB old-vs-corrected basin-month comparison:")
+print(pmb_compare_basin_month_df.head())
+
+# =============================================================================
+# Targeted PMB comparison for diagnostic-slide problem months
+# =============================================================================
+# Purpose:
+# Extract the basin/months identified in the old diagnostic slides and compare
+# old PMB versus ΔS-corrected PMB directly.
+#
+# Key targets:
+#   - WAIS 2014 SON issue: November 2014, basins G-H, Ep-F, I-Ipp
+#   - EAIS 2017 DJF issue: January/February 2017, basins Dp-E, E-Ep
+# =============================================================================
+
+TARGETED_PROBLEM_MONTHS_BY_NAME = [
+    {"year": 2014, "month": 11, "basins": ["G-H", "Ep-F", "I-Ipp"]},
+    {"year": 2017, "month": 1,  "basins": ["Dp-E", "E-Ep"]},
+    {"year": 2017, "month": 2,  "basins": ["Dp-E", "E-Ep"]},
+]
+
+target_rows = []
+
+for item in TARGETED_PROBLEM_MONTHS_BY_NAME:
+    yy = int(item["year"])
+    mm = int(item["month"])
+
+    for basin_name in item["basins"]:
+
+        if basin_name not in BASIN_NAME_TO_ID:
+            raise ValueError(f"Basin name not found in BASIN_NAME_TO_ID: {basin_name}")
+
+        basin_id = BASIN_NAME_TO_ID[basin_name]
+
+        sub = pmb_compare_basin_month_df[
+            (pmb_compare_basin_month_df["year"] == yy) &
+            (pmb_compare_basin_month_df["month"] == mm) &
+            (pmb_compare_basin_month_df["basin"] == basin_id)
+        ].copy()
+
+        if sub.empty:
+            print(f"Warning: no PMB comparison row found for {yy}-{mm:02d}, {basin_name}")
+            continue
+
+        sub["target_basin_name"] = basin_name
+        target_rows.append(sub)
+
+targeted_pmb_compare = (
+    pd.concat(target_rows, ignore_index=True)
+    if target_rows else pd.DataFrame()
+)
+
+targeted_cols = [
+    "time",
+    "basin",
+    "target_basin_name",
+    "pmb_old_mm_month",
+    "pmb_corr_mm_month",
+    "pmb_change_mm_month",
+]
+
+print("\nTargeted old-vs-ΔS-corrected PMB comparison:")
+print(targeted_pmb_compare[targeted_cols])
+
+targeted_pmb_compare.to_csv(
+    os.path.join(
+        path_to_dfs,
+        f"targeted_old_vs_deltaS_corrected_PMB_{cde_run_dte}.csv"
+    ),
+    index=False
+)
+
+# =============================================================================
+# Regional seasonal comparison: old PMB vs ΔS-corrected PMB
+# =============================================================================
+# Purpose:
+# Compare the affected seasons at regional scale before any masking:
+#   - WAIS SON 2014
+#   - EAIS DJF 2017
+# =============================================================================
+
+product_monthly_dict_pmb_compare = {
+    PMB_VERSION_LABEL_OLD: pmb_mon_01_old,
+    PMB_VERSION_LABEL_CORR: pmb_mon_01_corr,
+}
+
+regional_monthly_pmb_compare_df = build_all_region_monthly_series_cosine(
+    product_dict=product_monthly_dict_pmb_compare,
+    region_masks=region_masks_01deg,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+seasonal_pmb_compare_df = monthly_regional_df_to_conventional_seasonal(
+    regional_monthly_pmb_compare_df,
+    time_col="time",
+    region_col="region",
+    product_col="product",
+    value_col="precipitation",
+    require_complete_season=True,
+)
+
+pmb_old_corr_seasonal_wide = (
+    seasonal_pmb_compare_df
+    .pivot_table(
+        index=["region", "season_year", "season", "time"],
+        columns="product",
+        values="precipitation"
+    )
+    .reset_index()
+)
+
+pmb_old_corr_seasonal_wide["corr_minus_old"] = (
+    pmb_old_corr_seasonal_wide[PMB_VERSION_LABEL_CORR] -
+    pmb_old_corr_seasonal_wide[PMB_VERSION_LABEL_OLD]
+)
+
+problem_season_compare = pmb_old_corr_seasonal_wide[
+    (
+        (pmb_old_corr_seasonal_wide["region"] == "West Antarctica") &
+        (pmb_old_corr_seasonal_wide["season_year"] == 2014) &
+        (pmb_old_corr_seasonal_wide["season"] == "SON")
+    )
+    |
+    (
+        (pmb_old_corr_seasonal_wide["region"] == "East Antarctica") &
+        (pmb_old_corr_seasonal_wide["season_year"] == 2017) &
+        (pmb_old_corr_seasonal_wide["season"] == "DJF")
+    )
+].copy()
+
+print("\nProblem-season old-vs-ΔS-corrected PMB comparison:")
+print(problem_season_compare)
+
+problem_season_compare.to_csv(
+    os.path.join(
+        path_to_dfs,
+        f"problem_season_old_vs_deltaS_corrected_PMB_{cde_run_dte}.csv"
+    ),
+    index=False
+)
 #%% Build GMP Data Series
 # =============================================================================
 # SECTION 1D. GPM MICROWAVE MONTHLY INPUT PREPARATION
@@ -424,24 +653,24 @@ gpm_pmw_v07_mon_01 = build_gpm_pmw_mean(
 # print(gpm_pmw_v07_mon_01)
 print(gpm_pmw_v07_mon_01.shape)
 
-#%% COMMON VALID PMB BASIN/MONTH MASK
+#%% OPTIONAL COMMON PMB-NEGATIVE BASIN/MONTH MASK
 # =============================================================================
 # Purpose:
-# Exclude basin/months where PMB precipitation is negative.
+# Old workflow masked extreme negative PMB basin-months from all products.
+# New workflow first evaluates the ΔS-corrected PMB without this mask.
 #
-# Important:
-# The exclusion is defined from PMB only, but applied to PMB, ERA5, GPCP, and GPM
-# so all products are compared over the same basin/month support.
-#
-# Logic:
-#   1. Compute basin-month PMB means.
-#   2. Identify basin/months where basin-mean PMB < 0.
-#   3. Mask those same basin/months from every product.
+# Set APPLY_NEGATIVE_PMB_MASK_FOR_PRODUCT_COMPARISON = False for the main
+# ΔS-corrected PMB evaluation.
+# Set it to True only for a legacy/sensitivity test.
 # =============================================================================
+
+APPLY_NEGATIVE_PMB_MASK_FOR_PRODUCT_COMPARISON = False
+
 BASIN_IDS = sorted(AIS_BASINS)
 
+# Compute corrected PMB basin/month table for diagnostics either way
 pmb_basin_month_df = compute_basin_month_series_from_grid(
-    da=pmb_mon_01,
+    da=pmb_mon_01_corr,
     basin_mask=basin_mask_01deg,
     basin_ids=BASIN_IDS,
     value_name="pmb_mm_month",
@@ -457,25 +686,8 @@ negative_pmb_basin_months = (
     .reset_index(drop=True)
 )
 
-print("Number of negative PMB basin/months:", len(negative_pmb_basin_months))
+print("Number of negative corrected-PMB basin/months:", len(negative_pmb_basin_months))
 print(negative_pmb_basin_months.head(30))
-
-TARGETED_EAIS_DJF_2017_BY_NAME = [
-    {"year": 2017, "month": 1, "basins": ["Dp-E", "E-Ep"]},
-    {"year": 2017, "month": 2, "basins": ["Dp-E", "E-Ep"]},
-    {"year":2017, "month":12, "basins": ["Ap-B", "A-Ap"]},
-]
-
-targeted_eais_djf_2017 = convert_outlier_basin_names_to_ids(
-    TARGETED_EAIS_DJF_2017_BY_NAME,
-    BASIN_NAME_TO_ID,
-)
-
-
-targeted_eais_djf_2017_table = outlier_id_list_to_table(
-    targeted_eais_djf_2017,
-    pmb_basin_month_df,
-)
 
 extreme_negative_pmb_basin_months_region_specific = build_region_specific_negative_pmb_table(
     pmb_basin_month_df=pmb_basin_month_df,
@@ -485,136 +697,140 @@ extreme_negative_pmb_basin_months_region_specific = build_region_specific_negati
 )
 
 print(
-    "Number of region-specific extreme negative PMB basin/months:",
+    "Number of region-specific extreme negative corrected-PMB basin/months:",
     len(extreme_negative_pmb_basin_months_region_specific)
 )
 
-print(
-    extreme_negative_pmb_basin_months_region_specific
-    .groupby(["region", "threshold_mm_month"])
-    .size()
-    .reset_index(name="n_removed")
-)
+if len(extreme_negative_pmb_basin_months_region_specific) > 0:
+    print(
+        extreme_negative_pmb_basin_months_region_specific
+        .groupby(["region", "threshold_mm_month"])
+        .size()
+        .reset_index(name="n_removed")
+    )
 
 print(extreme_negative_pmb_basin_months_region_specific.head(50))
 
-combined_extreme_negative_pmb_basin_months = (
-    pd.concat(
-        [
-            extreme_negative_pmb_basin_months_region_specific,
-            targeted_eais_djf_2017_table,
-        ],
-        ignore_index=True,
-    )
-    .drop_duplicates(subset=["time", "basin"])
-    .sort_values(["time", "basin"])
-    .reset_index(drop=True)
-)
 
-print("Total combined excluded basin/months:", len(combined_extreme_negative_pmb_basin_months))
+# -----------------------------------------------------------------------------
+# Main branch
+# -----------------------------------------------------------------------------
+if APPLY_NEGATIVE_PMB_MASK_FOR_PRODUCT_COMPARISON:
 
-print(
-    combined_extreme_negative_pmb_basin_months
-    .groupby("region")
-    .size()
-    .reset_index(name="n_removed")
-)
+    print("\nApplying legacy/common PMB-negative mask to all products...")
 
-# Apply negative PMB basin/months mask
-# pmb_mon_01_valid = mask_basin_months_from_negative_pmb_table(
-#     da=pmb_mon_01,
-#     basin_mask=basin_mask_01deg,
-#     negative_table=negative_pmb_basin_months,
-#     time_name="time",
-# )
-
-# era5_mnth_01_valid = mask_basin_months_from_negative_pmb_table(
-#     da=era5_mnth_01,
-#     basin_mask=basin_mask_01deg,
-#     negative_table=negative_pmb_basin_months,
-#     time_name="time",
-# )
-
-# gpcp_mon_01_valid = mask_basin_months_from_negative_pmb_table(
-#     da=gpcp_mon_01,
-#     basin_mask=basin_mask_01deg,
-#     negative_table=negative_pmb_basin_months,
-#     time_name="time",
-# )
-
-# gpm_pmw_v07_mon_01_valid = mask_basin_months_from_negative_pmb_table(
-#     da=gpm_pmw_v07_mon_01,
-#     basin_mask=basin_mask_01deg,
-#     negative_table=negative_pmb_basin_months,
-#     time_name="time",
-# )
-pmb_mon_01_filtered = mask_basin_months_from_negative_pmb_table(
-    da=pmb_mon_01,
-    basin_mask=basin_mask_01deg,
-    negative_table=extreme_negative_pmb_basin_months_region_specific,
-    time_name="time",
-)
-
-era5_mnth_01_filtered = mask_basin_months_from_negative_pmb_table(
-    da=era5_mnth_01,
-    basin_mask=basin_mask_01deg,
-    negative_table=extreme_negative_pmb_basin_months_region_specific,
-    time_name="time",
-)
-
-gpcp_mon_01_filtered = mask_basin_months_from_negative_pmb_table(
-    da=gpcp_mon_01,
-    basin_mask=basin_mask_01deg,
-    negative_table=extreme_negative_pmb_basin_months_region_specific,
-    time_name="time",
-)
-
-gpm_pmw_v07_mon_01_filtered = mask_basin_months_from_negative_pmb_table(
-    da=gpm_pmw_v07_mon_01,
-    basin_mask=basin_mask_01deg,
-    negative_table=extreme_negative_pmb_basin_months_region_specific,
-    time_name="time",
-)
-
-gpm_family_monthly_dict_filtered = {}
-
-for name, da in gpm_family_monthly_dict.items():
-    gpm_family_monthly_dict_filtered[name] = mask_basin_months_from_negative_pmb_table(
-        da=da,
+    pmb_mon_01_filtered = mask_basin_months_from_negative_pmb_table(
+        da=pmb_mon_01_corr,
         basin_mask=basin_mask_01deg,
         negative_table=extreme_negative_pmb_basin_months_region_specific,
         time_name="time",
     )
 
+    era5_mnth_01_filtered = mask_basin_months_from_negative_pmb_table(
+        da=era5_mnth_01,
+        basin_mask=basin_mask_01deg,
+        negative_table=extreme_negative_pmb_basin_months_region_specific,
+        time_name="time",
+    )
+
+    gpcp_mon_01_filtered = mask_basin_months_from_negative_pmb_table(
+        da=gpcp_mon_01,
+        basin_mask=basin_mask_01deg,
+        negative_table=extreme_negative_pmb_basin_months_region_specific,
+        time_name="time",
+    )
+
+    gpm_family_monthly_dict_filtered = {}
+
+    for name, da in gpm_family_monthly_dict.items():
+        gpm_family_monthly_dict_filtered[name] = mask_basin_months_from_negative_pmb_table(
+            da=da,
+            basin_mask=basin_mask_01deg,
+            negative_table=extreme_negative_pmb_basin_months_region_specific,
+            time_name="time",
+        )
+
+    mask_tag = "with_negative_PMB_mask"
+
+else:
+
+    print("\nNegative-PMB mask is OFF. Using ΔS-corrected PMB directly.")
+
+    pmb_mon_01_filtered = pmb_mon_01_corr.copy()
+    era5_mnth_01_filtered = era5_mnth_01.copy()
+    gpcp_mon_01_filtered = gpcp_mon_01.copy()
+
+    gpm_family_monthly_dict_filtered = {
+        name: da.copy() for name, da in gpm_family_monthly_dict.items()
+    }
+
+    mask_tag = "no_negative_PMB_mask"
+
+
 gpm_pmw_v07_mon_01_filtered = build_gpm_pmw_mean(
     gpm_family_dict=gpm_family_monthly_dict_filtered,
     mean_name="GPM PMW V07"
 )
-#----------------------------------------------------------------------------
-region_specific_threshold_summary = (
-    extreme_negative_pmb_basin_months_region_specific
-    .groupby("region")
-    .agg(
-        n_removed=("pmb_mm_month", "size"),
-        min_removed=("pmb_mm_month", "min"),
-        max_removed=("pmb_mm_month", "max"),
-        threshold=("threshold_mm_month", "first"),
+
+# Summary table for optional mask diagnostic
+if len(extreme_negative_pmb_basin_months_region_specific) > 0:
+    region_specific_threshold_summary = (
+        extreme_negative_pmb_basin_months_region_specific
+        .groupby("region")
+        .agg(
+            n_removed=("pmb_mm_month", "size"),
+            min_removed=("pmb_mm_month", "min"),
+            max_removed=("pmb_mm_month", "max"),
+            threshold=("threshold_mm_month", "first"),
+        )
+        .reset_index()
     )
-    .reset_index()
-)
 
-region_specific_threshold_summary["n_possible"] = region_specific_threshold_summary["region"].map(
-    {region: len(basins) * pmb_basin_month_df["time"].nunique()
-     for region, basins in REGION_BASINS.items()}
-)
+    region_specific_threshold_summary["n_possible"] = region_specific_threshold_summary["region"].map(
+        {
+            region: len(basin_ids) * pmb_basin_month_df["time"].nunique()
+            for region, basin_ids in REGION_BASINS.items()
+        }
+    )
 
-region_specific_threshold_summary["percent_removed"] = (
-    100 * region_specific_threshold_summary["n_removed"] /
-    region_specific_threshold_summary["n_possible"]
-)
+    region_specific_threshold_summary["percent_removed"] = (
+        100 * region_specific_threshold_summary["n_removed"] /
+        region_specific_threshold_summary["n_possible"]
+    )
 
-print(region_specific_threshold_summary)
+    print(region_specific_threshold_summary)
+else:
+    region_specific_threshold_summary = pd.DataFrame()
+    print("No extreme negative corrected-PMB basin/months found using current thresholds.")
 #%%
+# =============================================================================
+# FORCE COMMON MONTHLY TIME AXIS FOR MAIN PRODUCT COMPARISON
+# =============================================================================
+# Corrected PMB starts in March 2013 because ΔS requires a previous monthly
+# storage anomaly. Therefore, ERA5/GPCP/GPM must be restricted to the same
+# PMB-valid months before monthly climatology, seasonal climatology, seasonal
+# time series, seasonal anomalies, and annual regional series are built.
+#
+# This avoids Jan/Feb climatologies being based on 8 years for ERA5/GPCP/GPM
+# but only 7 years for PMB.
+# =============================================================================
+
+common_time = pd.DatetimeIndex(pmb_mon_01_filtered["time"].values)
+
+era5_mnth_01_filtered = era5_mnth_01_filtered.sel(time=common_time)
+gpcp_mon_01_filtered = gpcp_mon_01_filtered.sel(time=common_time)
+gpm_pmw_v07_mon_01_filtered = gpm_pmw_v07_mon_01_filtered.sel(time=common_time)
+
+gpm_family_monthly_dict_filtered = {
+    name: da.sel(time=common_time)
+    for name, da in gpm_family_monthly_dict_filtered.items()
+}
+
+print("\n✅ Common monthly time axis enforced for main product comparison")
+print("PMB :", str(pmb_mon_01_filtered.time.min().values), "->", str(pmb_mon_01_filtered.time.max().values), pmb_mon_01_filtered.sizes["time"])
+print("ERA5:", str(era5_mnth_01_filtered.time.min().values), "->", str(era5_mnth_01_filtered.time.max().values), era5_mnth_01_filtered.sizes["time"])
+print("GPCP:", str(gpcp_mon_01_filtered.time.min().values), "->", str(gpcp_mon_01_filtered.time.max().values), gpcp_mon_01_filtered.sizes["time"])
+print("GPM :", str(gpm_pmw_v07_mon_01_filtered.time.min().values), "->", str(gpm_pmw_v07_mon_01_filtered.time.max().values), gpm_pmw_v07_mon_01_filtered.sizes["time"])
 # =============================================================================
 # SECTION 2B. BUILD MONTHLY REGIONAL SERIES FOR PMB, ERA5, GPCP
 # =============================================================================
@@ -745,6 +961,12 @@ region_annual_cos = compute_annual_totals_from_regional_series(
     regional_monthly_cos_df_filtered
 )
 
+# Drop incomplete 2013 annual totals because corrected PMB starts in March 2013.
+region_annual_cos = region_annual_cos[
+    (region_annual_cos["year"] >= ANNUAL_YEAR_START) &
+    (region_annual_cos["year"] <= ANNUAL_YEAR_END)
+].copy()
+
 region_annual_corr = add_scalar_corrected_pmw_to_annual_df(
     region_annual_df=region_annual_cos,
     scalar_factors_df=pmw_scalar_factors_df,
@@ -767,7 +989,6 @@ fig, axes = plot_interannual_variability(
 fig.savefig(svnme, dpi=300)
 plt.show()
 gc.collect()
-
 
 #%% Seasonal Anomalies
 # =============================================================================
@@ -852,20 +1073,98 @@ stats_table_wide = seasonal_scatter_stats_to_wide_table(
 
 print(stats_table_wide)
 
-#%% ANNUAL TOTALS AND 2013–2020 MEAN ANNUAL FIELDS
+#%% ANNUAL TOTALS AND 2014–2020 MEAN ANNUAL FIELDS
+# =============================================================================
+# Purpose:
+# Build annual-total fields and multi-year mean annual fields for basin-scale
+# scatter/spread analysis.
+#
+# Important:
+# The corrected PMB product starts in March 2013 because ΔS requires a valid
+# previous monthly storage anomaly. Therefore, 2013 is incomplete for PMB.
+#
+# For annual-total diagnostics, use complete years only:
+#     ANNUAL_YEAR_START = 2014
+#     ANNUAL_YEAR_END   = 2020
+# =============================================================================
 
-# Build annual fields [mm/year]
-pmb_annual_01  = monthly_to_annual_totals_field(pmb_mon_01_filtered)
-era5_annual_01 = monthly_to_annual_totals_field(era5_mnth_01_filtered)
-gpcp_annual_01 = monthly_to_annual_totals_field(gpcp_mon_01_filtered)
-gpm_pmw_v07_01 = monthly_to_annual_totals_field(gpm_pmw_v07_mon_01_filtered)
-# Build 2013–2020 mean annual fields [mm/year]
-pmb_annual_mean_01  = annual_to_multiyear_mean_field(pmb_annual_01,  2013, 2020)
-era5_annual_mean_01 = annual_to_multiyear_mean_field(era5_annual_01, 2013, 2020)
-gpcp_annual_mean_01 = annual_to_multiyear_mean_field(gpcp_annual_01, 2013, 2020)
-gpm_pmw_v07_01 = annual_to_multiyear_mean_field(gpm_pmw_v07_01, 2013, 2020)
+annual_period_tag = f"{ANNUAL_YEAR_START}_{ANNUAL_YEAR_END}"
 
-print(pmb_annual_mean_01.shape, era5_annual_mean_01.shape, gpcp_annual_mean_01.shape)
+# -----------------------------------------------------------------------------
+# 1. Build annual fields [mm/year]
+# -----------------------------------------------------------------------------
+
+pmb_annual_01 = monthly_to_annual_totals_field(
+    pmb_mon_01_filtered
+)
+
+era5_annual_01 = monthly_to_annual_totals_field(
+    era5_mnth_01_filtered
+)
+
+gpcp_annual_01 = monthly_to_annual_totals_field(
+    gpcp_mon_01_filtered
+)
+
+gpm_pmw_v07_annual_01 = monthly_to_annual_totals_field(
+    gpm_pmw_v07_mon_01_filtered
+)
+
+# -----------------------------------------------------------------------------
+# 2. Restrict annual fields to complete annual-analysis period
+# -----------------------------------------------------------------------------
+
+pmb_annual_01 = pmb_annual_01.sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+era5_annual_01 = era5_annual_01.sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+gpcp_annual_01 = gpcp_annual_01.sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+gpm_pmw_v07_annual_01 = gpm_pmw_v07_annual_01.sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+# -----------------------------------------------------------------------------
+# 3. Build multi-year mean annual fields [mm/year]
+# -----------------------------------------------------------------------------
+
+pmb_annual_mean_01 = annual_to_multiyear_mean_field(
+    pmb_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+era5_annual_mean_01 = annual_to_multiyear_mean_field(
+    era5_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+gpcp_annual_mean_01 = annual_to_multiyear_mean_field(
+    gpcp_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+gpm_pmw_v07_annual_mean_01 = annual_to_multiyear_mean_field(
+    gpm_pmw_v07_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+print(
+    f"Annual mean fields built for {ANNUAL_YEAR_START}–{ANNUAL_YEAR_END}"
+)
+print("PMB :", pmb_annual_mean_01.shape)
+print("ERA5:", era5_annual_mean_01.shape)
+print("GPCP:", gpcp_annual_mean_01.shape)
+print("GPM :", gpm_pmw_v07_annual_mean_01.shape)
 
 
 # =============================================================================
@@ -874,7 +1173,9 @@ print(pmb_annual_mean_01.shape, era5_annual_mean_01.shape, gpcp_annual_mean_01.s
 
 BASIN_IDS = sorted(AIS_BASINS)
 
-basin_mask_01deg_clean = basin_mask_01deg.where(basin_mask_01deg.isin(BASIN_IDS))
+basin_mask_01deg_clean = basin_mask_01deg.where(
+    basin_mask_01deg.isin(BASIN_IDS)
+)
 
 df_pmb_basin = compute_basin_cosine_weighted_means_from_field(
     da_2d=pmb_annual_mean_01,
@@ -898,13 +1199,16 @@ df_gpcp_basin = compute_basin_cosine_weighted_means_from_field(
 )
 
 df_gpm_pmw_v07 = compute_basin_cosine_weighted_means_from_field(
-    da_2d=gpm_pmw_v07_01,
+    da_2d=gpm_pmw_v07_annual_mean_01,
     basin_mask_2d=basin_mask_01deg_clean,
     basin_ids=BASIN_IDS,
     value_name="GPM PMW V07",
 )
 
-# Merge
+# -----------------------------------------------------------------------------
+# Merge basin mean annual dataframe
+# -----------------------------------------------------------------------------
+
 df_basin_mean_annual = (
     df_pmb_basin
     .merge(df_era5_basin, on="basin", how="outer")
@@ -914,8 +1218,28 @@ df_basin_mean_annual = (
     .reset_index(drop=True)
 )
 
-# print(df_basin_mean_annual)
-svnme = os.path.join(path_to_plots, f'annual_precip_basin_mean_scatter_{cde_run_dte}.png')
+print("\nBasin mean annual dataframe:")
+print(df_basin_mean_annual)
+
+# Optional: save basin mean annual dataframe
+df_basin_mean_annual.to_csv(
+    os.path.join(
+        path_to_dfs,
+        f"basin_mean_annual_precip_{annual_period_tag}_{mask_tag}_{cde_run_dte}.csv"
+    ),
+    index=False,
+)
+
+
+# =============================================================================
+# SECTION 10.4. BASIN MEAN ANNUAL SCATTERPLOTS
+# =============================================================================
+
+svnme = os.path.join(
+    path_to_plots,
+    f"annual_precip_basin_mean_scatter_{annual_period_tag}_{mask_tag}_{cde_run_dte}.png"
+)
+
 fig_sc_basin, axes_sc_basin, stats_sc_basin = plot_pmb_scatter_oldstyle(
     df_mean_yr_acc=df_basin_mean_annual,
     ref=r"$P_{\mathrm{MB}}$",
@@ -931,19 +1255,39 @@ fig_sc_basin, axes_sc_basin, stats_sc_basin = plot_pmb_scatter_oldstyle(
     show_ylabel_only_left=False,
 )
 
-fig_sc_basin.savefig(svnme, dpi=300)
+fig_sc_basin.savefig(svnme, dpi=300, bbox_inches="tight")
 plt.show()
 
+print("\nBasin scatter statistics:")
 print(stats_sc_basin)
+
+# Optional: save scatter stats
+if isinstance(stats_sc_basin, pd.DataFrame):
+    stats_sc_basin.to_csv(
+        os.path.join(
+            path_to_dfs,
+            f"annual_basin_scatter_stats_{annual_period_tag}_{mask_tag}_{cde_run_dte}.csv"
+        ),
+        index=False,
+    )
+
 gc.collect()
 
-#----------------------------------------------------------------------------------
-svnme = os.path.join(path_to_plots, f'basin_spread_points_precip_over_imbie_basins_{cde_run_dte}.png')
+
+# =============================================================================
+# SECTION 10.5. BASIN SPREAD POINTS
+# =============================================================================
+
+svnme = os.path.join(
+    path_to_plots,
+    f"basin_spread_points_precip_over_imbie_basins_{annual_period_tag}_{mask_tag}_{cde_run_dte}.png"
+)
+
 fig_spread, ax_spread, spread_non_gpm, spread_gpm = plot_basin_spread_points_dual(
     df=df_basin_mean_annual,
     basin_col="basin",
     ref_col=r"$P_{\mathrm{MB}}$",
-    prod_cols=["ERA5", "GPCP V3.3", "GPM PMW V07"],   # GPM placeholder okay if absent
+    prod_cols=["ERA5", "GPCP V3.3", "GPM PMW V07"],
     prod_labels=None,
     product_styles=product_styles_corr,
     non_gpm_group=[r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3"],
@@ -955,88 +1299,256 @@ fig_spread, ax_spread, spread_non_gpm, spread_gpm = plot_basin_spread_points_dua
     place_key=True,
 )
 
-fig_spread.savefig(svnme, dpi=300)
-
+fig_spread.savefig(svnme, dpi=300, bbox_inches="tight")
 plt.show()
-gc.collect()
 
-#%% ANnual Mean 
+# Optional: print/save spread diagnostics if they are dataframes
+print("\nSpread diagnostics excluding GPM:")
+print(spread_non_gpm)
+
+print("\nSpread diagnostics including/for GPM:")
+print(spread_gpm)
+
+if isinstance(spread_non_gpm, pd.DataFrame):
+    spread_non_gpm.to_csv(
+        os.path.join(
+            path_to_dfs,
+            f"basin_spread_non_gpm_{annual_period_tag}_{mask_tag}_{cde_run_dte}.csv"
+        ),
+        index=False,
+    )
+
+if isinstance(spread_gpm, pd.DataFrame):
+    spread_gpm.to_csv(
+        os.path.join(
+            path_to_dfs,
+            f"basin_spread_gpm_{annual_period_tag}_{mask_tag}_{cde_run_dte}.csv"
+        ),
+        index=False,
+    )
+
+gc.collect()
+#%% ANNUAL MEAN MAPS AND REGIONAL MEAN BARS
+# =============================================================================
+# Purpose:
+# Build basin-mean annual precipitation maps and regional mean annual bars using
+# the same complete-year period used in the annual scatter/spread analysis.
+#
+# Important:
+# Corrected PMB starts in March 2013, so annual diagnostics should use complete
+# years only:
+#     ANNUAL_YEAR_START = 2014
+#     ANNUAL_YEAR_END   = 2020
+# =============================================================================
+
 BASIN_IDS = sorted(AIS_BASINS)
+annual_period_tag = f"{ANNUAL_YEAR_START}_{ANNUAL_YEAR_END}"
+
 basin_mask_01deg_clean = basin_mask_01deg.where(basin_mask_01deg < 1e10)
-basin_mask_01deg_clean = basin_mask_01deg_clean.where(basin_mask_01deg_clean.isin(BASIN_IDS))
+basin_mask_01deg_clean = basin_mask_01deg_clean.where(
+    basin_mask_01deg_clean.isin(BASIN_IDS)
+)
+
+# =============================================================================
+# 1. Build annual-total fields and multi-year mean fields
+# =============================================================================
+# These should already exist from the previous annual section, but rebuilding
+# here makes this section self-contained and avoids accidentally using monthly
+# fields in the annual map panels.
+
+pmb_annual_01 = monthly_to_annual_totals_field(
+    pmb_mon_01_filtered
+).sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+era5_annual_01 = monthly_to_annual_totals_field(
+    era5_mnth_01_filtered
+).sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+gpcp_annual_01 = monthly_to_annual_totals_field(
+    gpcp_mon_01_filtered
+).sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+gpm_pmw_annual_01 = monthly_to_annual_totals_field(
+    gpm_pmw_v07_mon_01_filtered
+).sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+# Individual GPM-family products
+atms_annual_01 = monthly_to_annual_totals_field(
+    gpm_family_monthly_dict_filtered["ATMS"]
+).sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+mhs_annual_01 = monthly_to_annual_totals_field(
+    gpm_family_monthly_dict_filtered["MHS"]
+).sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+dmsp_annual_01 = monthly_to_annual_totals_field(
+    gpm_family_monthly_dict_filtered["DMSP SSMIS"]
+).sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+amsr2_annual_01 = monthly_to_annual_totals_field(
+    gpm_family_monthly_dict_filtered["AMSR2"]
+).sel(
+    year=slice(ANNUAL_YEAR_START, ANNUAL_YEAR_END)
+)
+
+# Multi-year mean annual fields [mm/year]
+pmb_annual_mean_01 = annual_to_multiyear_mean_field(
+    pmb_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+era5_annual_mean_01 = annual_to_multiyear_mean_field(
+    era5_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+gpcp_annual_mean_01 = annual_to_multiyear_mean_field(
+    gpcp_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+gpm_pmw_annual_mean_01 = annual_to_multiyear_mean_field(
+    gpm_pmw_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+atms_annual_mean_01 = annual_to_multiyear_mean_field(
+    atms_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+mhs_annual_mean_01 = annual_to_multiyear_mean_field(
+    mhs_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+dmsp_annual_mean_01 = annual_to_multiyear_mean_field(
+    dmsp_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+amsr2_annual_mean_01 = annual_to_multiyear_mean_field(
+    amsr2_annual_01,
+    ANNUAL_YEAR_START,
+    ANNUAL_YEAR_END,
+)
+
+print(f"\nAnnual map fields prepared for {ANNUAL_YEAR_START}–{ANNUAL_YEAR_END}")
+print("PMB annual mean:", pmb_annual_mean_01.shape)
+print("ERA5 annual mean:", era5_annual_mean_01.shape)
+print("GPCP annual mean:", gpcp_annual_mean_01.shape)
+print("GPM PMW annual mean:", gpm_pmw_annual_mean_01.shape)
+
+
+# =============================================================================
+# 2. Build basin-mean plotting packs
+# =============================================================================
+# IMPORTANT:
+# build_basin_mean_plot_product() expects MONTHLY fields, not already-annual
+# mean fields. It internally does:
+#     monthly -> annual totals -> multi-year annual mean -> basin plot pack
+#
+# Therefore, pass the monthly fields and control the period using
+# year_start/year_end.
 
 pmb_pack = build_basin_mean_plot_product(
-    pmb_mon_01_filtered, basin_mask_01deg_clean, BASIN_IDS, r"P$_{MB}$"
-)
-era5_pack = build_basin_mean_plot_product(
-    era5_mnth_01_filtered, basin_mask_01deg_clean, BASIN_IDS, "ERA5"
-)
-gpcp_pack = build_basin_mean_plot_product(
-    gpcp_mon_01_filtered, basin_mask_01deg_clean, BASIN_IDS, "GPCP V3.3"
-)
-# =============================================================================
-# BUILD GPM MONTHLY 0.1° FIELDS, BASIN PACKS, AND FINAL DUAL-CBAR MAP
-# =============================================================================
-
-# -------------------------------------------------------------------------
-# 1. Pull GPM-family monthly 0.1° fields from the prepared dictionary
-# -------------------------------------------------------------------------
-dmsp_mon_01 = gpm_family_monthly_dict_filtered["DMSP SSMIS"]
-atms_mon_01 = gpm_family_monthly_dict_filtered["ATMS"]
-mhs_mon_01  = gpm_family_monthly_dict_filtered["MHS"]
-amsr2_mon_01 = gpm_family_monthly_dict_filtered["AMSR2"]
-
-# -------------------------------------------------------------------------
-# 2. Build overall GPM PMW V07 mean monthly 0.1° field
-# -------------------------------------------------------------------------
-gpm_pmw_mon_01 = build_gpm_pmw_mean(
-    gpm_family_dict=gpm_family_monthly_dict_filtered,
-    mean_name="GPM PMW V07"
-)
-
-print("GPM PMW V07:", gpm_pmw_mon_01.shape, gpm_pmw_mon_01.name)
-
-# -------------------------------------------------------------------------
-# 3. Build basin-aggregated annual-mean packs
-# -------------------------------------------------------------------------
-atms_pack = build_basin_mean_plot_product(
-    atms_mon_01,
+    pmb_mon_01_filtered,
     basin_mask_01deg_clean,
     BASIN_IDS,
-    "ATMS"
+    r"P$_{MB}$",
+    year_start=ANNUAL_YEAR_START,
+    year_end=ANNUAL_YEAR_END,
+)
+
+era5_pack = build_basin_mean_plot_product(
+    era5_mnth_01_filtered,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "ERA5",
+    year_start=ANNUAL_YEAR_START,
+    year_end=ANNUAL_YEAR_END,
+)
+
+gpcp_pack = build_basin_mean_plot_product(
+    gpcp_mon_01_filtered,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "GPCP V3.3",
+    year_start=ANNUAL_YEAR_START,
+    year_end=ANNUAL_YEAR_END,
+)
+
+atms_pack = build_basin_mean_plot_product(
+    gpm_family_monthly_dict_filtered["ATMS"],
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "ATMS",
+    year_start=ANNUAL_YEAR_START,
+    year_end=ANNUAL_YEAR_END,
 )
 
 mhs_pack = build_basin_mean_plot_product(
-    mhs_mon_01,
+    gpm_family_monthly_dict_filtered["MHS"],
     basin_mask_01deg_clean,
     BASIN_IDS,
-    "MHS"
+    "MHS",
+    year_start=ANNUAL_YEAR_START,
+    year_end=ANNUAL_YEAR_END,
 )
 
 dmsp_pack = build_basin_mean_plot_product(
-    dmsp_mon_01,
+    gpm_family_monthly_dict_filtered["DMSP SSMIS"],
     basin_mask_01deg_clean,
     BASIN_IDS,
-    "DMSP-SSMIS"
+    "DMSP-SSMIS",
+    year_start=ANNUAL_YEAR_START,
+    year_end=ANNUAL_YEAR_END,
 )
 
 amsr2_pack = build_basin_mean_plot_product(
-    amsr2_mon_01,
+    gpm_family_monthly_dict_filtered["AMSR2"],
     basin_mask_01deg_clean,
     BASIN_IDS,
-    "AMSR2"
+    "AMSR2",
+    year_start=ANNUAL_YEAR_START,
+    year_end=ANNUAL_YEAR_END,
 )
 
 gpm_pmw_pack = build_basin_mean_plot_product(
-    gpm_pmw_mon_01,
+    gpm_pmw_v07_mon_01_filtered,
     basin_mask_01deg_clean,
     BASIN_IDS,
-    "GPM PMW V07"
+    "GPM PMW V07",
+    year_start=ANNUAL_YEAR_START,
+    year_end=ANNUAL_YEAR_END,
 )
 
-# -------------------------------------------------------------------------
-# 4. Assemble the final list for plotting
-# -------------------------------------------------------------------------
+
+# =============================================================================
+# 3. Assemble final basin-map plot list
+# =============================================================================
+
 arr_lst_mean = [
     (pmb_pack["product"],      pmb_pack["plot_grid"],      pmb_pack["panel_mean"]),
     (era5_pack["product"],     era5_pack["plot_grid"],     era5_pack["panel_mean"]),
@@ -1049,7 +1561,11 @@ arr_lst_mean = [
 ]
 
 
-svnme = os.path.join(path_to_plots, f'basin_mean_annual_precip_over_imbie_basins_{cde_run_dte}.png')
+svnme = os.path.join(
+    path_to_plots,
+    f"basin_mean_annual_precip_over_imbie_basins_{annual_period_tag}_{mask_tag}_{cde_run_dte}.png"
+)
+
 fig, axes, cb1, cb2 = compare_mean_precip_basin_dual_cbar(
     arr_lst_mean=arr_lst_mean,
     basin_mask_latlon=basin_mask_01deg_clean,
@@ -1069,20 +1585,46 @@ fig, axes, cb1, cb2 = compare_mean_precip_basin_dual_cbar(
     panel_letters=True,
     show_panel_mean=True,
 )
-plt.show()
 
-fig.savefig(svnme, dpi=300)
-
+fig.savefig(svnme, dpi=300, bbox_inches="tight")
 plt.show()
 gc.collect()
 
-#==============================================================================
+
+# =============================================================================
+# 4. Regional mean annual precipitation bars
+# =============================================================================
+# Use the already-filtered annual dataframe from the annual section.
+# region_annual_cos was already restricted to 2014–2020 earlier.
+# If not, restrict it again here for safety.
+
+region_annual_cos_bar = region_annual_cos[
+    (region_annual_cos["year"] >= ANNUAL_YEAR_START) &
+    (region_annual_cos["year"] <= ANNUAL_YEAR_END)
+].copy()
+
 df_regional_mean_annual = compute_regional_mean_annual_precip(
-    region_annual_cos,
+    region_annual_cos_bar,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
     product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07"),
 )
-svnme = os.path.join(path_to_plots, f'regional_mean_annual_precip_over_imbie_basins_{cde_run_dte}.png')
+
+print("\nRegional mean annual precipitation:")
+print(df_regional_mean_annual)
+
+df_regional_mean_annual.to_csv(
+    os.path.join(
+        path_to_dfs,
+        f"regional_mean_annual_precip_{annual_period_tag}_{mask_tag}_{cde_run_dte}.csv"
+    ),
+    index=False,
+)
+
+svnme = os.path.join(
+    path_to_plots,
+    f"regional_mean_annual_precip_over_imbie_basins_{annual_period_tag}_{mask_tag}_{cde_run_dte}.png"
+)
+
 fig, ax = plot_regional_mean_annual_bars(
     df_regional_mean_annual,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
@@ -1090,15 +1632,13 @@ fig, ax = plot_regional_mean_annual_bars(
     product_colors=product_styles_corr,
     figsize=(9, 6),
     ylabel="[mm/year]",
-    title="2013–2020 mean annual precipitation",
+    title=f"{ANNUAL_YEAR_START}–{ANNUAL_YEAR_END} mean annual precipitation",
     annotate=True,
 )
 
-fig.savefig(svnme, dpi=300)
-
+fig.savefig(svnme, dpi=300, bbox_inches="tight")
 plt.show()
 gc.collect()
-
 #%% THE CLOUDSAT COMPARATIVE ANALYSIS
 cs_ant_file_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/CS-Antarctica_maps'
 
