@@ -15,7 +15,7 @@ from program_utile_13Apr2026 import *
 path_to_plots = r'/home/kkumah/Projects/Antarctic_discharge_work/plots'
 path_to_dfs = r'/home/kkumah/Projects/Antarctic_discharge_work/dfs'
 gpm_satellites_path = r'/ra1/pubdat/GPM-Constellation-Satellites_MI_and_Sounders'
-
+out_dfs = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/out_dfs'
 # --- Precipitation products ---
 gpcp_v3pt3_mnthly_ds_path = r'/ra1/pubdat/Satellite_eval_over_Oceans/data/GPCP/GPCP_v3_pnt_3_monthly_1983_2024'
 era5_mnhtly_file = r'/ra1/pubdat/GPCP/GPCP_Reproduce_GJ/era5_tp_198001202412_monthly.nc'
@@ -62,7 +62,7 @@ REGION_BASINS = {
 }
 
 ANNUAL_YEAR_START = 2013
-ANNUAL_YEAR_END = 2019
+ANNUAL_YEAR_END = 2020
 ANNUAL_PERIOD_TAG = f"{ANNUAL_YEAR_START}_{ANNUAL_YEAR_END}"
 
 #%%
@@ -196,7 +196,7 @@ plt.tight_layout()
 output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
 # plt.savefig(output_path, dpi=300, bbox_inches='tight')
 gc.collect()
-
+plt.close()
 
 # Common 0.1° comparison grid in lat-lon, derived from basin geometry
 target_template_01deg = build_target_latlon_template_from_basin_grid(basins)
@@ -513,36 +513,24 @@ print(gpm_pmw_v07_mon_01.shape)
 # ENFORCE COMMON MONTHLY TIME AXIS FOR MAIN PRODUCT COMPARISON
 # =============================================================================
 common_time = np.intersect1d(
-
     pmb_mon_01["time"].values,
-
     era5_mnth_01["time"].values,
-
 )
 
 common_time = np.intersect1d(
-
     common_time,
-
     gpcp_mon_01["time"].values,
-
 )
 
 common_time = np.intersect1d(
-
     common_time,
-
     gpm_pmw_v07_mon_01["time"].values,
-
 )
 
-common_time = np.intersect1d(
-
-    common_time,
-
-    uahipa_mon_01["time"].values,
-
-)
+# common_time = np.intersect1d(
+#     common_time,
+#     uahipa_mon_01["time"].values,
+# )
 
 common_time = np.sort(common_time)
 
@@ -551,7 +539,7 @@ era5_mnth_01 = era5_mnth_01.sel(time=common_time)
 gpcp_mon_01 = gpcp_mon_01.sel(time=common_time)
 gpm_pmw_v07_mon_01 = gpm_pmw_v07_mon_01.sel(time=common_time)
 
-uahipa_mon_01 = uahipa_mon_01.sel(time=common_time)
+# uahipa_mon_01 = uahipa_mon_01.sel(time=common_time)
 
 gpm_family_monthly_dict = {
     name: da.sel(time=common_time)
@@ -574,7 +562,7 @@ product_monthly_dict = {
     "ERA5": era5_mnth_01,
     "GPCP V3.3": gpcp_mon_01,
     "GPM PMW V07": gpm_pmw_v07_mon_01,
-    "UA-HIPA": uahipa_mon_01
+    # "UA-HIPA": uahipa_mon_01
 }
 
 regional_monthly_cos_df = build_all_region_monthly_series_cosine(
@@ -584,6 +572,10 @@ regional_monthly_cos_df = build_all_region_monthly_series_cosine(
     lon_name="lon",
     time_name="time",
 )
+
+# save df
+regional_monthly_cos_df.to_csv(os.path.join(out_dfs, 
+                                            f"monthly_precip_over_imbie_basins_{cde_run_dte}.csv"), index=False)
 
 # print(regional_monthly_cos_df.head())
 # print(regional_monthly_cos_df.tail())
@@ -605,13 +597,13 @@ svnme = os.path.join(path_to_plots, f'monthly_climatology_precip_over_imbie_basi
 fig, axes = plot_monthly_climatology(
     region_monthly_clim_cos,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "UA-HIPA", "GPM PMW V07"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07"),
     product_styles=product_styles_corr,
     figsize=(10, 9),
     ylabel="mm/month",
     y_nbins=4,
     legend_ncol=3,
-)
+) # "UA-HIPA", 
 
 fig.savefig(svnme, dpi=300)
 plt.show()
@@ -647,7 +639,7 @@ fig, axes = plot_seasonal_climatology(
         r"$P_{\mathrm{MB}}$",
         "ERA5",
         "GPCP V3.3",
-        "UA-HIPA",
+        # "UA-HIPA",
         "GPM PMW V07",
         "GPM PMW V07 (corr.)",
     ),
@@ -674,7 +666,7 @@ fig, axes = plot_seasonal_climatology_1x3(
         r"$P_{\mathrm{MB}}$",
         "ERA5",
         "GPCP V3.3",
-        "UA-HIPA",
+        # "UA-HIPA",
         "GPM PMW V07",
         "GPM PMW V07 (corr.)",
     ),
@@ -694,6 +686,34 @@ fig.savefig(svnme, dpi=500, bbox_inches="tight")
 plt.show()
 gc.collect()
 
+
+#--------------- study the seasonal bias structure
+bias_ratio_df = compute_seasonal_bias_and_ratio(
+    region_seasonal_clim_corr,
+    ref_product=r"$P_{\mathrm{MB}}$",
+    value_col="precipitation",
+)
+
+fig, axes = plot_seasonal_bias_or_ratio(
+    bias_ratio_df,
+    y_col="pct_diff_vs_ref",
+    product_order=("ERA5", "GPCP V3.3"),  # "UA-HIPA" removed
+    product_styles=product_styles_corr,
+    ylabel=r"% difference relative to $P_{\mathrm{MB}}$",
+    ylim=(-35, 35),
+    legend_ncol=3,
+)
+
+
+fig, axes = plot_seasonal_bias_or_ratio(
+    bias_ratio_df,
+    y_col="ref_to_product_ratio",
+    product_order=("ERA5", "GPCP V3.3", "UA-HIPA"),
+    product_styles=product_styles_corr,
+    ylabel=r"$P_{\mathrm{MB}}$ / Product",
+    ylim=(0.55, 1.55),
+    legend_ncol=3,
+)
 #%% YEAR BY YEAR SEASONAL TIMESERIES
 # Convert monthly regional values to conventional seasonal means
 seasonal_cos_df = monthly_regional_df_to_conventional_seasonal(
@@ -713,7 +733,7 @@ fig, axes = plot_seasonal_timeseries_regions(
         r"$P_{\mathrm{MB}}$",
         "ERA5",
         "GPCP V3.3",  
-        "UA-HIPA",      
+        # "UA-HIPA",      
         "GPM PMW V07",
     ),
     product_styles=product_styles_corr,
@@ -738,7 +758,8 @@ fig, axes = plot_interannual_variability(
     region_annual_corr,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
     product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", 
-                   "UA-HIPA", "GPM PMW V07", "GPM PMW V07 (corr.)"),
+                   # "UA-HIPA", 
+                   "GPM PMW V07", "GPM PMW V07 (corr.)"),
     product_styles=product_styles_corr,
     figsize=(10, 9),
     ylabel="mm/year",
@@ -917,7 +938,7 @@ df_basin_mean_annual = (
     df_pmb_basin
     .merge(df_era5_basin, on="basin", how="outer")
     .merge(df_gpcp_basin, on="basin", how="outer")
-    .merge(df_ua_haipa_basin, on="basin", how="outer")
+    # .merge(df_ua_haipa_basin, on="basin", how="outer")
     .merge(df_gpm_pmw_v07, on="basin", how="outer")
     .sort_values("basin")
     .reset_index(drop=True)
@@ -928,7 +949,7 @@ svnme = os.path.join(path_to_plots, f'annual_precip_basin_mean_scatter_{cde_run_
 fig_sc_basin, axes_sc_basin, stats_sc_basin = plot_pmb_scatter_oldstyle(
     df_mean_yr_acc=df_basin_mean_annual,
     ref=r"$P_{\mathrm{MB}}$",
-    products=["ERA5", "GPCP V3.3", "UA-HIPA", "GPM PMW V07"],
+    products=["ERA5", "GPCP V3.3", "GPM PMW V07"],
     high_thresh=500.0,
     scale="log",
     log_min=2,
@@ -999,14 +1020,14 @@ gpcp_pack = build_basin_mean_plot_product(
     year_end=ANNUAL_YEAR_END,
 )
 
-ua_hipa_pack = build_basin_mean_plot_product(
-    uahipa_mon_01,
-    basin_mask_01deg_clean,
-    BASIN_IDS,
-    "UA-HIPA",
-    year_start=ANNUAL_YEAR_START,
-    year_end=2019,  
-)
+# ua_hipa_pack = build_basin_mean_plot_product(
+#     uahipa_mon_01,
+#     basin_mask_01deg_clean,
+#     BASIN_IDS,
+#     "UA-HIPA",
+#     year_start=ANNUAL_YEAR_START,
+#     year_end=2019,  
+# )
 # =============================================================================
 # BUILD GPM MONTHLY 0.1° FIELDS, BASIN PACKS, AND FINAL DUAL-CBAR MAP
 # =============================================================================
@@ -1074,7 +1095,7 @@ arr_lst_mean = [
     (pmb_pack["product"],      pmb_pack["plot_grid"],      pmb_pack["panel_mean"]),
     (era5_pack["product"],     era5_pack["plot_grid"],     era5_pack["panel_mean"]),
     (gpcp_pack["product"],     gpcp_pack["plot_grid"],     gpcp_pack["panel_mean"]),
-    (ua_hipa_pack["product"],  ua_hipa_pack["plot_grid"],  ua_hipa_pack["panel_mean"]),
+    # (ua_hipa_pack["product"],  ua_hipa_pack["plot_grid"],  ua_hipa_pack["panel_mean"]),
     (atms_pack["product"],     atms_pack["plot_grid"],     atms_pack["panel_mean"]),
     (mhs_pack["product"],      mhs_pack["plot_grid"],      mhs_pack["panel_mean"]),
     (dmsp_pack["product"],     dmsp_pack["plot_grid"],     dmsp_pack["panel_mean"]),
@@ -1087,8 +1108,8 @@ svnme = os.path.join(path_to_plots, f'basin_mean_annual_precip_over_imbie_basins
 fig, axes, cb1, cb2 = compare_mean_precip_basin_dual_cbar(
     arr_lst_mean=arr_lst_mean,
     basin_mask_latlon=basin_mask_01deg_clean,
-    group1_idx=[0, 1, 2,3],
-    group2_idx=[4, 5, 6, 7, 8],
+    group1_idx=[0, 1, 2], # [0, 1, 2,3]
+    group2_idx=[3, 4, 5, 6, 7], # [4, 5, 6, 7, 8]
     ncols=4,
     gamma1=0.6,
     vmin1=0,
@@ -1114,13 +1135,13 @@ gc.collect()
 df_regional_mean_annual = compute_regional_mean_annual_precip(
     region_annual_cos,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "UA-HIPA", "GPM PMW V07"),
-)
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07"),
+) # "UA-HIPA", 
 svnme = os.path.join(path_to_plots, f'regional_mean_annual_precip_over_imbie_basins_{cde_run_dte}.png')
 fig, ax = plot_regional_mean_annual_bars(
     df_regional_mean_annual,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "UA-HIPA", "GPM PMW V07"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07"),
     product_colors=product_styles_corr,
     figsize=(9, 6),
     ylabel="[mm/year]",

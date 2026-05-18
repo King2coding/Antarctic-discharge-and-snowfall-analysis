@@ -3224,7 +3224,7 @@ def plot_basin_spread_points_dual(
     if place_key:
         ax.text(
             key_loc[0], key_loc[1],
-            "% = spread(P_MB, ERA5, GPCP V3.3)",
+            "% = spread($P_{\mathrm{MB}}$, ERA5, GPCP V3.3)",
             transform=ax.transAxes,
             ha="left", va="top",
             fontsize=key_fontsize,
@@ -3233,7 +3233,7 @@ def plot_basin_spread_points_dual(
         )
         ax.text(
             key_loc[0], key_loc[1] - 0.055,
-            "% = spread(P_MB, GPM PMW V07)",
+            "% = spread($P_{\mathrm{MB}}$, GPM PMW V07)",
             transform=ax.transAxes,
             ha="left", va="top",
             fontsize=key_fontsize,

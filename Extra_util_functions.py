@@ -911,6 +911,151 @@ def replace_flagged_deltaS_with_monthly_climatology(
 
     return dS_corr, correction_log
 
+#-------------------------------------------------------------------------------
+def compute_seasonal_bias_and_ratio(
+
+    clim_df,
+
+    ref_product=r"$P_{\mathrm{MB}}$",
+
+    value_col="precipitation",
+
+    product_col="product",
+
+    region_col="region",
+
+    season_col="season",
+
+    products_to_compare=None,
+
+):
+
+    """
+
+    Compute seasonal percent difference and PMB/Product ratio.
+
+    Percent difference:
+
+        (Product - P_MB) / P_MB * 100
+
+    Ratio:
+
+        P_MB / Product
+
+    Interpretation:
+
+        pct_diff_vs_ref < 0  => product underestimates P_MB
+
+        pct_diff_vs_ref > 0  => product overestimates P_MB
+
+        ref_to_product_ratio > 1 => product needs upward scaling to match P_MB
+
+        ref_to_product_ratio < 1 => product needs downward scaling to match P_MB
+
+    """
+
+    df = clim_df.copy()
+
+    if products_to_compare is None:
+
+        products_to_compare = [
+
+            p for p in df[product_col].unique()
+
+            if p != ref_product
+
+        ]
+
+    # Reference PMB values by region and season
+
+    ref_df = (
+
+        df[df[product_col] == ref_product]
+
+        [[region_col, season_col, value_col]]
+
+        .rename(columns={value_col: "ref_precipitation"})
+
+    )
+
+    # Product values to compare against PMB
+
+    prod_df = (
+
+        df[df[product_col].isin(products_to_compare)]
+
+        [[region_col, product_col, season_col, value_col]]
+
+        .rename(columns={value_col: "product_precipitation"})
+
+    )
+
+    # Merge products with PMB reference
+
+    out = prod_df.merge(
+
+        ref_df,
+
+        on=[region_col, season_col],
+
+        how="left"
+
+    )
+
+    # Percent difference: product relative to PMB
+
+    out["pct_diff_vs_ref"] = np.where(
+
+        out["ref_precipitation"] != 0,
+
+        (
+
+            (out["product_precipitation"] - out["ref_precipitation"])
+
+            / out["ref_precipitation"]
+
+            * 100
+
+        ),
+
+        np.nan
+
+    )
+
+    # Underestimation percentage, positive when product is below PMB
+
+    out["pct_underestimation_vs_ref"] = np.where(
+        out["ref_precipitation"] != 0,
+        (
+            (out["ref_precipitation"] - out["product_precipitation"])
+            / out["ref_precipitation"]
+            * 100
+        ),
+
+        np.nan
+
+    )
+
+    # PMB/Product ratio: scaling factor needed to match PMB
+
+    out["ref_to_product_ratio"] = np.where(
+        out["product_precipitation"] != 0,
+        out["ref_precipitation"] / out["product_precipitation"],
+        np.nan
+    )
+
+    # Product/PMB ratio: useful for seeing fractional closeness
+
+    out["product_to_ref_ratio"] = np.where(
+        out["ref_precipitation"] != 0,
+        out["product_precipitation"] / out["ref_precipitation"],
+        np.nan
+
+    )
+    return out
+
+#-------------------------------------------------------------------------------
+
 
 #%% PLOT MONTHLY PMB TIME SERIES BY BASIN FOR SELECTED REGION/YEAR
 # =============================================================================
@@ -2158,145 +2303,87 @@ def monthly_regional_df_to_conventional_seasonal(
     return grouped
 #---------------------------------------------------------------------------------
 def plot_seasonal_timeseries_regions(
-
     seasonal_df,
-
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-
     product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
-
     product_styles=None,
-
     figsize=(12, 8),
-
     ylabel="Precipitation [mm/month]",
-
     y_nbins=4,
-
     legend_ncol=4,
-
     title_suffix="conventional seasonal input",
-
     x_major_year_interval=1,
-
 ):
 
     """
-
     Plot conventional seasonal-mean precipitation time series
-
     for multiple regions in stacked panels.
-
     Expected seasonal_df columns:
-
         time | season_year | season | region | product | precipitation
-
     Notes
-
     -----
-
     This function assumes that the input dataframe has already been converted
-
     from monthly to conventional seasonal means.
-
     """
 
     df = seasonal_df.copy()
-
     df["time"] = pd.to_datetime(df["time"])
-
     fig, axes = plt.subplots(
-
         len(region_order),
-
         1,
-
         figsize=figsize,
-
         sharex=True
-
     )
 
     if len(region_order) == 1:
-
         axes = [axes]
 
     for ax, region in zip(axes, region_order):
-
         sub = df[df["region"] == region].copy()
 
         for prod in product_order:
-
             ss = sub[sub["product"] == prod].copy()
 
             if ss.empty:
-
                 continue
 
             ss = ss.sort_values("time")
-
             style = {} if product_styles is None else product_styles.get(prod, {}).copy()
 
             ax.plot(
-
                 ss["time"],
-
                 ss["precipitation"],
-
                 label=prod,
-
                 **style
-
             )
 
         ax.set_title(
-
-            f"{region} — {title_suffix}",
-
+            f"{region}", # — {title_suffix}
             fontweight="bold",
-
             fontsize=18
-
         )
-
         ax.grid(True, alpha=0.3)
-
         ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
 
     fig.supylabel(ylabel, x=0.06, fontweight="bold", fontsize=18)
-
     # Clean yearly x-axis
-
     axes[-1].xaxis.set_major_locator(
-
         mdates.YearLocator(base=x_major_year_interval)
-
     )
-
     axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
 
     handles, labels = axes[0].get_legend_handles_labels()
-
     fig.legend(
-
         handles,
-
         labels,
-
         loc="lower center",
-
-        bbox_to_anchor=(0.5, -0.03),
-
+        bbox_to_anchor=(0.55, -0.03),
         ncol=legend_ncol,
-
-        fontsize=15,
-
+        fontsize=20,
         frameon=False
-
     )
 
     plt.tight_layout(rect=[0.05, 0.06, 1, 1])
-
     return fig, axes
 
 
@@ -2382,5 +2469,157 @@ def plot_seasonal_climatology_1x3(
     )
 
     plt.tight_layout(rect=[0, 0.08, 1, 1])
+
+    return fig, axes
+
+
+#--------------------------------------------------------------------------------
+def plot_seasonal_bias_or_ratio(
+    bias_ratio_df,
+    y_col="pct_diff_vs_ref",
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=("ERA5", "GPCP v3.3", "UA-HIPA", "GPM PMW V07", "GPM PMW V07 (corr.)"),
+    product_styles=None,
+    figsize=(10, 8),
+    ylabel=None,
+    y_nbins=4,
+    legend_ncol=3,
+    add_reference_line=True,
+    reference_line_value=None,
+    ylim=None,
+    suptitle=None,
+):
+
+    """
+
+    Plot seasonal percent difference or seasonal ratio diagnostics.
+    Expected input dataframe columns:
+        region, product, season, pct_diff_vs_ref, ref_to_product_ratio, etc.
+    Examples:
+        y_col="pct_diff_vs_ref"
+        y_col="pct_underestimation_vs_ref"
+        y_col="ref_to_product_ratio"
+        y_col="product_to_ref_ratio"
+    """
+
+    season_labels = ["DJF", "MAM", "JJA", "SON"]
+    if ylabel is None:
+        if y_col == "pct_diff_vs_ref":
+            ylabel = r"% difference from $P_{\mathrm{MB}}$"
+        elif y_col == "pct_underestimation_vs_ref":
+            ylabel = r"% underestimation relative to $P_{\mathrm{MB}}$"
+        elif y_col == "ref_to_product_ratio":
+            ylabel = r"$P_{\mathrm{MB}}$ / Product"
+        elif y_col == "product_to_ref_ratio":
+            ylabel = r"Product / $P_{\mathrm{MB}}$"
+        else:
+            ylabel = y_col
+    if reference_line_value is None:
+
+        if "pct" in y_col:
+
+            reference_line_value = 0
+
+        elif "ratio" in y_col:
+
+            reference_line_value = 1
+
+    fig, axes = plt.subplots(len(region_order), 1, figsize=figsize, sharex=True)
+
+    if len(region_order) == 1:
+
+        axes = [axes]
+
+    for ax, region in zip(axes, region_order):
+
+        sub = bias_ratio_df[bias_ratio_df["region"] == region]
+
+        for prod in product_order:
+
+            ss = sub[sub["product"] == prod].copy()
+
+            if ss.empty:
+
+                continue
+
+            ss["season"] = pd.Categorical(
+
+                ss["season"],
+
+                categories=season_labels,
+
+                ordered=True
+
+            )
+
+            ss = ss.sort_values("season")
+
+            style = {} if product_styles is None else product_styles.get(prod, {}).copy()
+
+            ax.plot(
+
+                ss["season"],
+
+                ss[y_col],
+
+                label=prod,
+
+                **style
+
+            )
+
+        if add_reference_line and reference_line_value is not None:
+
+            ax.axhline(
+
+                reference_line_value,
+
+                color="k",
+
+                linestyle="--",
+
+                linewidth=1,
+
+                alpha=0.7
+
+            )
+
+        if ylim is not None:
+
+            ax.set_ylim(*ylim)
+
+        ax.set_title(region, fontweight="bold", fontsize=18)
+
+        ax.grid(True, alpha=0.3)
+
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
+
+    fig.supylabel(ylabel, x=0.06, fontweight="bold", fontsize=18)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+
+    fig.legend(
+
+        handles,
+
+        labels,
+
+        loc="lower center",
+
+        bbox_to_anchor=(0.5, -0.03),
+
+        ncol=legend_ncol,
+
+        fontsize=15,
+
+        frameon=False
+
+    )
+
+    if suptitle is not None:
+
+        fig.suptitle(suptitle, fontsize=20, fontweight="bold", y=1.02)
+
+    plt.tight_layout(rect=[0.05, 0.06, 1, 1])
 
     return fig, axes
