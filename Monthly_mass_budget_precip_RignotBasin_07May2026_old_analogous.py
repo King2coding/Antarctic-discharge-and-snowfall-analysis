@@ -8,9 +8,8 @@ Inputs
    - Working input: LI-filled monthly storage anomaly pickle
      DataCombo_RignotBasins_LI_tier1_20260325.pkl
    - Important: This is storage anomaly S, not ΔS.
-   - Monthly ΔS is computed after gap filling as:
-         ΔS_m = S_m - S_{m-1}
-     and assigned to the current month m.
+   - Monthly ΔS is computed after gap filling using the active forward-difference convention:
+     ΔS_m = S_{m+1} - S_m and assigned to the starting month m.
 
 2) Chad (discharge & basal melt): Excel with annual values per basin (Gt/yr)
    - Discharge sheet: "Discharge (Gt yr^-1)"
@@ -36,6 +35,7 @@ Updated for GRACE storage-anomaly correction workflow.
 # import libraries
 from program_utils import *
 from Extra_util_functions import *
+from program_utile_13Apr2026 import *
 #%%
 # define paths
 basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
@@ -58,6 +58,31 @@ GRACE_CLIM_STAT = "mean"
 
 # Exclude flagged ΔS values when computing the monthly ΔS climatology
 EXCLUDE_FLAGGED_FROM_GRACE_CLIM = True
+
+# =============================================================================
+# PMB UNCERTAINTY SETTINGS
+# =============================================================================
+# Current approach:
+#   PMB = D + BM + ΔS + SUB
+#
+# Available/usable uncertainty:
+#   1) ΔS uncertainty from David's 1-sigma_Error(Gt) sheet
+#   2) Optional fractional uncertainty for discharge
+#   3) Optional fractional uncertainty for basal melt
+#   4) Optional fractional uncertainty for RACMO sublimation
+#
+# For now, ΔS uncertainty is the main formal uncertainty term.
+# Other terms can be set to 0.0 until we decide defensible values.
+
+COMPUTE_PMB_UNCERTAINTY = True
+
+# Fractional uncertainty assumptions for budget terms.
+# Keep these at 0.0 if we want PMB uncertainty to reflect only GRACE/altimetry ΔS error.
+DISCHARGE_FRAC_UNC = 0.0
+BASAL_MELT_FRAC_UNC = 0.0
+SUBLIMATION_FRAC_UNC = 0.0
+
+
 #%%
 
 # basin_fle = os.path.join(basin_path, 'bedmap3_basins.nc')
@@ -130,7 +155,33 @@ basin_name = basin_imbie_with_name_map['basin_name']
 
 # - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
 
-rignot_deltaS_err = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='1-sigma_Error(Gt)')
+rignot_deltaS_err = pd.read_excel(
+    os.path.join(basin_path, 
+    'DataCombo_RignotBasins.xlsx'), 
+    sheet_name='1-sigma_Error(Gt)')
+
+print("\n[Rignot uncertainty] Loaded 1-sigma error table:")
+print(rignot_deltaS_err.head())
+print("Columns:")
+print(list(rignot_deltaS_err.columns))
+
+tmp = rignot_deltaS_err.copy()
+tmp.columns = [str(c).strip() for c in tmp.columns]
+
+tmp["date"] = tmp["Time"].apply(
+    lambda x: decimal_year_to_month_start(x, mode="nearest")
+)
+
+dup_dates = tmp["date"][tmp["date"].duplicated()].unique()
+
+print("Number of duplicate converted dates:", len(dup_dates))
+print("First few duplicate converted dates:")
+print(dup_dates[:10])
+
+rignot_sigmaS_filled_pkl = os.path.join(
+    basin_path,
+    "DataCombo_RignotBasins_1sigma_Error_LI_tier1_20260519.pkl"
+)
 
 # - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
 
@@ -282,6 +333,7 @@ ax.axis('off')
 # Final cleanup
 # ax.set_title("IMBIE Basins with IDs ", fontsize=18)
 plt.tight_layout()
+plt.close()
 
 # Save the imbie basin plot
 # output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
@@ -404,6 +456,32 @@ GRACE_DELTAS_CORRECTION_VARIANT = "none"
 
 print("\n[GRACE forward-ΔS] No climatology correction applied.")
 print("[GRACE forward-ΔS] Using original LI-derived forward ΔS.")
+
+# =============================================================================
+# Prepare monthly ΔS uncertainty [Gt/month]
+# =============================================================================
+# This uncertainty is kept at basin-month level first. It will later be aligned
+# with D, basal melt, ΔS, and sublimation in the PMB uncertainty propagation step.
+
+if COMPUTE_PMB_UNCERTAINTY:
+
+    dS_unc_used, dS_unc_long = prepare_rignot_deltaS_uncertainty(
+    basin_cols=basin_cols,
+    target_dates=dS_used.index,
+    deltaS_convention="forward",
+    filled_error_pickle=rignot_sigmaS_filled_pkl,
+    )
+
+    print("\n[PMB uncertainty] ΔS uncertainty prepared.")
+    print("ΔS uncertainty date range:")
+    print(dS_unc_used.index.min(), "to", dS_unc_used.index.max())
+    print("ΔS uncertainty shape:", dS_unc_used.shape)
+    print("Mean ΔS uncertainty [Gt/month]:", np.nanmean(dS_unc_used.values))
+
+else:
+    dS_unc_used = None
+    dS_unc_long = pd.DataFrame()
+
 # =============================================================================
 # Convert active ΔS to long dataframe for basin-raster painting
 # =============================================================================
@@ -538,6 +616,65 @@ dS_raster.to_netcdf(out_flnme)
 print(f"[David] ΔS raster saved to: {out_flnme}")
 
 # =============================================================================
+# CREATE ΔS UNCERTAINTY RASTER FROM RIGNOT 1-SIGMA ERROR TABLE
+# =============================================================================
+
+if COMPUTE_PMB_UNCERTAINTY:
+
+    dS_unc_long_df = generate_basin_id_mapping(
+        basin_id_da,
+        basin_name_da,
+        dS_unc_long,
+    )
+
+    unc_attributes = {
+        "description": (
+            "Monthly basin-level 1-sigma ΔS uncertainty painted to all pixels "
+            "of each basin. Values are basin-total uncertainty, not areal density."
+        ),
+        "long_name": "Monthly basin mass-change uncertainty",
+        "units": "Gt/month",
+        "source": (
+            "David/Rignot basin 1-sigma error table from "
+            "DataCombo_RignotBasins.xlsx, sheet '1-sigma_Error(Gt)'."
+        ),
+        "deltaS_convention": "forward_difference_S_next_minus_S_current",
+        "note": (
+            "This uncertainty is used as sigma_deltaS in PMB uncertainty "
+            "propagation. Islands (ID=1) excluded."
+        ),
+    }
+
+    dS_unc_raster = create_basin_xrr(
+        basin_id_da[0],
+        basin_name_da[0],
+        dS_unc_long_df,
+        "dS_unc_Gt",
+        unc_attributes,
+        "deltaS_uncertainty_Gt_per_month",
+    )
+
+    dS_unc_outfile = os.path.join(
+        basin_path,
+        (
+            f"rignot_deltaS_uncertainty_monthly_{YEAR_START}_{YEAR_END}_"
+            f"LI_gap_filled_GRACE_tier1_{correction_tag}_{cde_run_dte}.nc"
+        )
+    )
+
+    dS_unc_raster.to_netcdf(dS_unc_outfile)
+
+    print("\n[PMB uncertainty] ΔS uncertainty raster saved:")
+    print(dS_unc_outfile)
+
+    print("First ΔS uncertainty raster month:", pd.to_datetime(dS_unc_raster["date"].values[0]).date())
+    print("Last ΔS uncertainty raster month :", pd.to_datetime(dS_unc_raster["date"].values[-1]).date())
+    print("Number of ΔS uncertainty months:", dS_unc_raster.sizes["date"])
+
+else:
+    dS_unc_raster = None
+
+# =============================================================================
 # Recover basin-id and basin-name DataArrays safely
 # =============================================================================
 # This protects against accidental overwriting of "basin_id" as an integer
@@ -561,10 +698,15 @@ print("basin_id_da dims:", basin_id_da.dims)
 
 discharge_data = pd.read_excel(
     os.path.join(basin_path, "antarctic_discharge_2013-2022_imbie.xlsx"),
-    sheet_name=["Discharge (Gt yr^-1)", "Summary"]
+    sheet_name=[
+        "Discharge (Gt yr^-1)",
+        "Discharge Error (Gt yr^-1)",
+        "Summary",
+    ]
 )
 
 basin_discharge = discharge_data["Discharge (Gt yr^-1)"].copy()
+basin_discharge_err = discharge_data["Discharge Error (Gt yr^-1)"].copy()
 
 # Chad's file appears to use Ep-F, while David's GRACE file may use Ep-f.
 # For Chad's discharge/basal melt table, use Chad-style basin names.
@@ -583,6 +725,51 @@ basin_discharge = (
     .rename(columns={"IMBIE basin": "basin"})
     .copy()
 )
+
+# =============================================================================
+# Prepare Chad discharge uncertainty table
+# =============================================================================
+# Chad's discharge-error sheet contains annual 1-sigma discharge uncertainty
+# in Gt/yr for each IMBIE basin.
+#
+# For monthly PMB uncertainty, annual uncertainty is distributed to monthly
+# uncertainty as:
+#
+#     sigma_D_month = sigma_D_annual / 12
+#
+# This assumes the annual discharge uncertainty is spread uniformly across months,
+# consistent with how annual discharge itself is converted to monthly discharge.
+# =============================================================================
+
+basin_discharge_err = (
+    basin_discharge_err
+    .loc[
+        basin_discharge_err["IMBIE basin"].isin(basin_cols_chad),
+        ["IMBIE basin"] + [str(yr) for yr in YEARS]
+    ]
+    .rename(columns={"IMBIE basin": "basin"})
+    .copy()
+)
+
+# Convert annual discharge uncertainty [Gt/yr] to monthly uncertainty [Gt/month]
+D_unc_month = annual_to_monthly_long(
+    basin_discharge_err,
+    YEARS,
+    "discharge_unc_Gt"
+)
+
+# Convert from annual uncertainty to monthly uncertainty
+D_unc_month["discharge_unc_Gt"] = D_unc_month["discharge_unc_Gt"] / 12.0
+
+# Map basin names to basin IDs
+D_unc_month_df = generate_basin_id_mapping(
+    basin_id_da,
+    basin_name_da,
+    D_unc_month
+)
+
+print("[Chad] Discharge uncertainty monthly rows:", len(D_unc_month))
+print("[Chad] Mean monthly discharge uncertainty [Gt/month]:", D_unc_month["discharge_unc_Gt"].mean())
 
 # --- Basal melt ---
 basal_melt = discharge_data["Summary"].copy()
@@ -681,6 +868,56 @@ discharge_raster = create_basin_xrr(
     "discharge_Gt_per_month",
 )
 
+# =============================================================================
+# Create discharge uncertainty raster
+# =============================================================================
+
+if COMPUTE_PMB_UNCERTAINTY:
+
+    attributes = {
+        "description": (
+            "Monthly basin-total 1-sigma discharge uncertainty painted to all "
+            "pixels of each basin. Values are basin-total uncertainty, not areal density."
+        ),
+        "long_name": "Monthly basin discharge uncertainty",
+        "units": "Gt/month",
+        "source": (
+            "Computed from Chad's discharge Excel "
+            "(antarctic_discharge_2013-2022_imbie.xlsx), sheet "
+            "'Discharge Error (Gt yr^-1)'."
+        ),
+        "note": (
+            "Annual discharge uncertainty values divided by 12 to match the "
+            "monthly discharge time step. Islands (ID=1) excluded; basin names "
+            "matched via modal name per ID from the basin grid."
+        ),
+    }
+
+    discharge_unc_raster = create_basin_xrr(
+        basin_id_da[0],
+        basin_name_da[0],
+        D_unc_month_df,
+        "discharge_unc_Gt",
+        attributes,
+        "discharge_uncertainty_Gt_per_month",
+    )
+
+    discharge_unc_outfile = os.path.join(
+        basin_path,
+        (
+            f"discharge_uncertainty_monthly_{YEAR_START}_{YEAR_END}_"
+            f"Gt_per_month_{cde_run_dte}.nc"
+        )
+    )
+
+    discharge_unc_raster.to_netcdf(discharge_unc_outfile)
+
+    print("\n[PMB uncertainty] Discharge uncertainty raster saved:")
+    print(discharge_unc_outfile)
+
+else:
+    discharge_unc_raster = None
+
 
 # =============================================================================
 # Create basal melt raster
@@ -724,6 +961,16 @@ discharge_raster.isel(date=0).plot(
 )
 plt.title(f"Discharge for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
 plt.show()
+
+if discharge_unc_raster is not None:
+    discharge_unc_raster.isel(date=0).plot(
+        cmap="jet",
+        vmin=0,
+        vmax=0.5,
+        cbar_kwargs={"label": "Discharge uncertainty [Gt/month]"},
+    )
+    plt.title(f"Discharge uncertainty for {pd.to_datetime(tms_plt.values).strftime('%Y-%m-%d')}")
+    plt.show()
 
 basal_melt_raster.isel(date=0).plot(
     cmap="jet",
@@ -1204,6 +1451,95 @@ print("mean:", float(Precip_basin_mm.mean(skipna=True).values))
 print("min :", float(Precip_basin_mm.min(skipna=True).values))
 print("max :", float(Precip_basin_mm.max(skipna=True).values))
 
+# -----------------------------------------------------------------------------
+# 8b. Compute PMB uncertainty
+# -----------------------------------------------------------------------------
+# PMB uncertainty is propagated at basin-month level:
+#
+#     sigma_PMB = sqrt(
+#         sigma_D^2 +
+#         sigma_BM^2 +
+#         sigma_dS^2 +
+#         sigma_SUB^2
+#     )
+#
+# Current implemented uncertainty inputs:
+#     sigma_D  : Chad discharge uncertainty from "Discharge Error (Gt yr^-1)"
+#     sigma_dS : David/Rignot 1-sigma error table
+#
+# Optional assumption-based terms:
+#     sigma_BM  = abs(BM)  * BASAL_MELT_FRAC_UNC
+#     sigma_SUB = abs(SUB) * SUBLIMATION_FRAC_UNC
+# -----------------------------------------------------------------------------
+
+if COMPUTE_PMB_UNCERTAINTY:
+
+    if dS_unc_raster is None:
+        raise RuntimeError(
+            "COMPUTE_PMB_UNCERTAINTY=True, but dS_unc_raster was not created."
+        )
+
+    if discharge_unc_raster is None:
+        raise RuntimeError(
+            "COMPUTE_PMB_UNCERTAINTY=True, but discharge_unc_raster was not created."
+        )
+
+    # Align uncertainty rasters to the same dates used in PMB calculation
+    DS_unc = dS_unc_raster.sel(date=common_dates)
+    D_unc = discharge_unc_raster.sel(date=common_dates)
+
+    # Convert painted uncertainty rasters to basin series [Gt/month]
+    dS_unc_basin = painted_to_basin_series(DS_unc)
+    dS_unc_basin.name = "deltaS_uncertainty_Gt_per_month"
+
+    D_unc_basin = painted_to_basin_series(D_unc)
+    D_unc_basin.name = "discharge_uncertainty_Gt_per_month"
+
+    # Align all component and uncertainty series
+    D_unc_basin, dS_unc_basin, D_basin, BM_basin, dS_basin, SUB_basin = xr.align(
+        D_unc_basin,
+        dS_unc_basin,
+        D_basin,
+        BM_basin,
+        dS_basin,
+        SUB_basin,
+        join="inner",
+    )
+
+    # Optional uncertainty assumptions for terms without direct error files
+    BM_unc_basin = np.abs(BM_basin) * BASAL_MELT_FRAC_UNC
+    SUB_unc_basin = np.abs(SUB_basin) * SUBLIMATION_FRAC_UNC
+
+    BM_unc_basin.name = "basal_melt_uncertainty_Gt_per_month"
+    SUB_unc_basin.name = "sublimation_uncertainty_Gt_per_month"
+
+    # Propagate uncertainty in quadrature
+    Pmb_unc_basin_Gt = np.sqrt(
+        D_unc_basin**2 +
+        dS_unc_basin**2 +
+        BM_unc_basin**2 +
+        SUB_unc_basin**2
+    )
+
+    Pmb_unc_basin_Gt.name = "P_MB_uncertainty_Gt_per_month"
+
+    # Convert PMB uncertainty from Gt/month to mm/month
+    Pmb_unc_basin_mm = Pmb_unc_basin_Gt * 1e12 / basin_area_m2
+    Pmb_unc_basin_mm.name = "P_MB_uncertainty_mm_per_month"
+
+    print("\nPMB uncertainty diagnostic [Gt/month]:")
+    print("mean:", float(Pmb_unc_basin_Gt.mean(skipna=True).values))
+    print("min :", float(Pmb_unc_basin_Gt.min(skipna=True).values))
+    print("max :", float(Pmb_unc_basin_Gt.max(skipna=True).values))
+
+    print("\nPMB uncertainty diagnostic [mm/month]:")
+    print("mean:", float(Pmb_unc_basin_mm.mean(skipna=True).values))
+    print("min :", float(Pmb_unc_basin_mm.min(skipna=True).values))
+    print("max :", float(Pmb_unc_basin_mm.max(skipna=True).values))
+
+else:
+    Pmb_unc_basin_Gt = None
+    Pmb_unc_basin_mm = None
 
 # -----------------------------------------------------------------------------
 # 9. Paint basin series back to maps
@@ -1236,6 +1572,23 @@ Precip_map_mm = paint_basin_series_to_grid(
     Precip_basin_mm,
     template,
 )
+
+# Paint PMB uncertainty back to maps
+if COMPUTE_PMB_UNCERTAINTY:
+
+    Pmb_unc_map_Gt = paint_basin_series_to_grid(
+        Pmb_unc_basin_Gt,
+        template,
+    )
+
+    Pmb_unc_map_mm = paint_basin_series_to_grid(
+        Pmb_unc_basin_mm,
+        template,
+    )
+
+else:
+    Pmb_unc_map_Gt = None
+    Pmb_unc_map_mm = None
 
 
 # -----------------------------------------------------------------------------
@@ -1271,6 +1624,55 @@ Precip_map_mm.attrs.update({
     ),
 })
 
+if COMPUTE_PMB_UNCERTAINTY:
+
+    Pmb_unc_map_Gt.attrs.update({
+        "units": "Gt/month",
+        "description": "Monthly propagated 1-sigma uncertainty of PMB precipitation per basin, painted to pixels.",
+        "equation": (
+            "sigma_PMB = sqrt(sigma_D^2 + sigma_basal_melt^2 + "
+            "sigma_deltaS^2 + sigma_sublimation^2)"
+        ),
+        "uncertainty_source": (
+            "sigma_deltaS from DataCombo_RignotBasins.xlsx sheet "
+            "'1-sigma_Error(Gt)'; sigma_discharge from "
+            "antarctic_discharge_2013-2022_imbie.xlsx sheet "
+            "'Discharge Error (Gt yr^-1)'. Basal melt and sublimation use optional "
+            "fractional uncertainty settings if nonzero."
+        ),
+        "discharge_fractional_uncertainty": DISCHARGE_FRAC_UNC,
+        "basal_melt_fractional_uncertainty": BASAL_MELT_FRAC_UNC,
+        "sublimation_fractional_uncertainty": SUBLIMATION_FRAC_UNC,
+        "note": (
+            "This uncertainty applies only to PMB. It should not be interpreted "
+            "as uncertainty for ERA5, GPCP, GPM, or UA-HIPA."
+        ),
+    })
+
+    Pmb_unc_map_mm.attrs.update({
+        "units": "mm/month",
+        "description": "Monthly propagated 1-sigma uncertainty of PMB precipitation in water-equivalent height.",
+        "equation": (
+            "sigma_PMB = sqrt(sigma_D^2 + sigma_basal_melt^2 + "
+            "sigma_deltaS^2 + sigma_sublimation^2)"
+        ),
+        "conversion": "Gt/month converted to mm/month using basin area.",
+        "uncertainty_source": (
+                "sigma_deltaS from DataCombo_RignotBasins.xlsx sheet "
+                "'1-sigma_Error(Gt)'; sigma_discharge from "
+                "antarctic_discharge_2013-2022_imbie.xlsx sheet "
+                "'Discharge Error (Gt yr^-1)'. Basal melt and sublimation use optional "
+                "fractional uncertainty settings if nonzero."
+            ),
+        "discharge_fractional_uncertainty": DISCHARGE_FRAC_UNC,
+        "basal_melt_fractional_uncertainty": BASAL_MELT_FRAC_UNC,
+        "sublimation_fractional_uncertainty": SUBLIMATION_FRAC_UNC,
+        "note": (
+            "This uncertainty applies only to PMB. It should be carried as a "
+            "PMB-only companion field in the comparison workflow."
+        ),
+    })
+
 
 # -----------------------------------------------------------------------------
 # 11. Save outputs
@@ -1298,6 +1700,24 @@ Precip_map_mm.to_netcdf(out_mm)
 
 print("\nSaved PMB Gt/month:", out_gt)
 print("Saved PMB mm/month:", out_mm)
+
+if COMPUTE_PMB_UNCERTAINTY:
+
+    out_unc_gt = os.path.join(
+        basin_path,
+        f"Monthly_mass_budget_precip_RignotBasin_uncertainty_in_GT_{deltaS_output_tag}_{subl_tag}_{cde_run_dte}.nc"
+    )
+
+    out_unc_mm = os.path.join(
+        basin_path,
+        f"Monthly_mass_budget_precip_RignotBasin_uncertainty_in_mm_{deltaS_output_tag}_{subl_tag}_{cde_run_dte}.nc"
+    )
+
+    Pmb_unc_map_Gt.to_netcdf(out_unc_gt)
+    Pmb_unc_map_mm.to_netcdf(out_unc_mm)
+
+    print("Saved PMB uncertainty Gt/month:", out_unc_gt)
+    print("Saved PMB uncertainty mm/month:", out_unc_mm)
 
 print("\nPMB map time range:")
 print(
@@ -1335,6 +1755,12 @@ print("Number of PMB months:", Precip_map_mm.sizes["date"])
 # =============================================================================
 
 Pmm = Precip_map_mm.copy()
+
+if COMPUTE_PMB_UNCERTAINTY:
+    Punc_mm = Pmb_unc_map_mm.copy()
+    Punc_mm = Punc_mm.where(np.isfinite(Punc_mm["basin_id"]))
+else:
+    Punc_mm = None
 
 # Keep only valid basin pixels
 Pmm = Pmm.where(np.isfinite(Pmm["basin_id"]))
@@ -1680,6 +2106,52 @@ compare_mean_precp_plot(
 )
 
 gc.collect()
+
+# =============================================================================
+# PMB UNCERTAINTY MONTHLY CLIMATOLOGY MAPS
+# =============================================================================
+# This gives uncertainty of the calendar-month climatological mean:
+#
+#     sigma_clim = sqrt(sum(sigma_i^2)) / n
+#
+# where i represents all available years for that calendar month.
+# =============================================================================
+
+if COMPUTE_PMB_UNCERTAINTY and Punc_mm is not None:
+
+    def monthly_clim_uncertainty_xarray(da_unc):
+        out_list = []
+
+        for month in sorted(np.unique(da_unc["date.month"].values)):
+            sub = da_unc.where(da_unc["date.month"] == month, drop=True)
+            n = sub.notnull().sum("date")
+            sig = np.sqrt((sub ** 2).sum("date", skipna=True)) / n
+            sig = sig.where(n > 0)
+            sig = sig.expand_dims(month=[int(month)])
+            out_list.append(sig)
+
+        return xr.concat(out_list, dim="month")
+
+    Punc_clim = monthly_clim_uncertainty_xarray(Punc_mm)
+
+    Punc_clim.name = "P_MB_uncertainty_monthly_climatology_mm"
+
+    Punc_clim.attrs.update({
+        "units": "mm/month",
+        "description": "Uncertainty of monthly climatological PMB mean.",
+        "equation": "sigma_clim = sqrt(sum(sigma_monthly^2)) / n",
+        "deltaS_output_tag": deltaS_output_tag,
+    })
+
+    unc_clim_outfile = os.path.join(
+        basin_path,
+        f"Pmb_monthly_climatology_uncertainty_mm_{YEARS[0]}_{YEARS[-1]}_{deltaS_output_tag}_{cde_run_dte}.nc"
+    )
+
+    Punc_clim.to_netcdf(unc_clim_outfile)
+
+    print("\nSaved PMB monthly climatology uncertainty maps:")
+    print(unc_clim_outfile)
 
 
 # =============================================================================

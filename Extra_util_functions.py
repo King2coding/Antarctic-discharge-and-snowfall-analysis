@@ -3,18 +3,30 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.io import loadmat
 from program_utils import *
+from program_utile_13Apr2026 import *
 import math
 import matplotlib.colors as mcolors
 from matplotlib.colors import BoundaryNorm, LogNorm, PowerNorm
 from matplotlib.cm import ScalarMappable
 import cartopy.crs as ccrs
 import matplotlib.dates as mdates
+from matplotlib.patches import Patch
 
 #%%
 REGION_NEG_THRESHOLDS = {
     "West Antarctica": -50.0,
     "East Antarctica": -18, # -25.0
 }
+
+REGION_BASINS = {
+    "Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+    "West Antarctica": [10, 11, 12, 13, 14, 15, 16, 17],
+    "East Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 18, 19],
+}
+
+# Name of the date/time column in David's 1-sigma sheet, if present.
+# If the sheet uses year/month columns instead, the helper below will try to infer them.
+RIGNOT_ERR_DATE_CANDIDATES = ["date", "Date", "time", "Time"]
 
 #%%
 
@@ -913,113 +925,69 @@ def replace_flagged_deltaS_with_monthly_climatology(
 
 #-------------------------------------------------------------------------------
 def compute_seasonal_bias_and_ratio(
-
     clim_df,
-
     ref_product=r"$P_{\mathrm{MB}}$",
-
     value_col="precipitation",
-
     product_col="product",
-
     region_col="region",
-
     season_col="season",
-
     products_to_compare=None,
 
 ):
-
     """
-
     Compute seasonal percent difference and PMB/Product ratio.
-
     Percent difference:
-
         (Product - P_MB) / P_MB * 100
-
     Ratio:
-
         P_MB / Product
-
     Interpretation:
-
         pct_diff_vs_ref < 0  => product underestimates P_MB
-
         pct_diff_vs_ref > 0  => product overestimates P_MB
-
         ref_to_product_ratio > 1 => product needs upward scaling to match P_MB
-
         ref_to_product_ratio < 1 => product needs downward scaling to match P_MB
-
     """
 
     df = clim_df.copy()
-
     if products_to_compare is None:
-
         products_to_compare = [
-
             p for p in df[product_col].unique()
-
             if p != ref_product
-
         ]
 
     # Reference PMB values by region and season
 
     ref_df = (
-
         df[df[product_col] == ref_product]
-
         [[region_col, season_col, value_col]]
-
         .rename(columns={value_col: "ref_precipitation"})
-
     )
 
     # Product values to compare against PMB
 
     prod_df = (
-
         df[df[product_col].isin(products_to_compare)]
-
         [[region_col, product_col, season_col, value_col]]
-
         .rename(columns={value_col: "product_precipitation"})
-
     )
 
     # Merge products with PMB reference
 
     out = prod_df.merge(
-
         ref_df,
-
         on=[region_col, season_col],
-
         how="left"
-
     )
 
     # Percent difference: product relative to PMB
 
     out["pct_diff_vs_ref"] = np.where(
-
         out["ref_precipitation"] != 0,
-
         (
-
             (out["product_precipitation"] - out["ref_precipitation"])
-
             / out["ref_precipitation"]
-
             * 100
-
         ),
-
         np.nan
-
     )
 
     # Underestimation percentage, positive when product is below PMB
@@ -1031,9 +999,7 @@ def compute_seasonal_bias_and_ratio(
             / out["ref_precipitation"]
             * 100
         ),
-
         np.nan
-
     )
 
     # PMB/Product ratio: scaling factor needed to match PMB
@@ -1055,8 +1021,737 @@ def compute_seasonal_bias_and_ratio(
     return out
 
 #-------------------------------------------------------------------------------
+# =============================================================================
+# BASIN-LEVEL ANNUAL TABLE FROM MONTHLY GRIDDED PRODUCTS
+# =============================================================================
 
+def build_basin_monthly_dict_from_gridded_products(
+    product_monthly_dict,
+    basin_mask_2d,
+    basin_ids=range(2, 20),
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+):
+    """
+    Convert each gridded monthly product into basin-month cosine-weighted means.
 
+    Inputs
+    ------
+    product_monthly_dict : dict
+        {
+            product_name: xr.DataArray(time, lat, lon)
+        }
+
+    basin_mask_2d : xr.DataArray(lat, lon)
+        Basin ID mask already on the same lat/lon grid as the products.
+        Use basin_mask_01deg or basin_mask_latlon, NOT raw basins.
+
+    Returns
+    -------
+    monthly_df_data_mmmonth : dict
+        {
+            product_name: DataFrame with columns:
+            time, year, month, basin, precipitation
+        }
+    """
+
+    monthly_df_data_mmmonth = {}
+
+    for product_name, da in product_monthly_dict.items():
+        print(f"Computing basin-month values for {product_name} ...")
+
+        # make sure time coord is standard datetime
+        da_use = da.copy()
+        da_use = da_use.assign_coords(
+            {time_name: pd.to_datetime(da_use[time_name].values)}
+        )
+
+        df = compute_basin_month_series_from_grid(
+            da=da_use,
+            basin_mask=basin_mask_2d,
+            basin_ids=basin_ids,
+            value_name="precipitation",
+            lat_name=lat_name,
+            lon_name=lon_name,
+            time_name=time_name,
+        )
+
+        monthly_df_data_mmmonth[product_name] = df
+
+    return monthly_df_data_mmmonth
+
+#-------------------------------------------------------------------------------
+
+# =============================================================================
+# BASIN-MONTH -> BASIN-ANNUAL
+# =============================================================================
+
+def build_basin_annual_tidy_from_monthly_dict(
+    monthly_df_data_mmmonth,
+    min_months_per_year=12,
+):
+    """
+    Convert product-wise basin-month dataframes to one tidy basin-annual dataframe.
+
+    Output columns:
+        year, basin, product, precipitation
+    where precipitation = annual total [mm/year].
+    """
+
+    rows = []
+
+    for product_name, df in monthly_df_data_mmmonth.items():
+        d = df.copy()
+        d["time"] = pd.to_datetime(d["time"])
+        d["year"] = d["time"].dt.year
+        d["month"] = d["time"].dt.month
+        d["basin"] = d["basin"].astype(int)
+
+        # count valid months per basin-year
+        counts = (
+            d.dropna(subset=["precipitation"])
+             .groupby(["year", "basin"], as_index=False)
+             .size()
+             .rename(columns={"size": "n_months"})
+        )
+
+        annual = (
+            d.groupby(["year", "basin"], as_index=False)["precipitation"]
+             .sum(min_count=1)
+        )
+
+        annual = annual.merge(counts, on=["year", "basin"], how="left")
+
+        if min_months_per_year is not None:
+            annual = annual[annual["n_months"] >= min_months_per_year].copy()
+
+        annual["product"] = product_name
+
+        rows.append(
+            annual[["year", "basin", "product", "precipitation", "n_months"]]
+        )
+
+    return pd.concat(rows, ignore_index=True)
+
+# =============================================================================
+# 2. BASIN-LEVEL ANNUAL TOTALS — ONLY FOR SPREAD/BAND
+# =============================================================================
+
+def build_basin_annual_spread_from_monthly_dict(
+    monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    min_months_per_year=12,
+    spread_q=(25, 75),
+):
+    """
+    Build basin-to-basin annual spread by region/product/year.
+
+    Important:
+    This is used ONLY for shading.
+    The plotted regional mean line should still come from
+    compute_annual_totals_from_regional_series().
+    """
+
+    basin_annual_rows = []
+
+    for product_name, df in monthly_df_data_mmmonth.items():
+        d = df.copy()
+        d["time"] = pd.to_datetime(d["time"])
+        d["year"] = d["time"].dt.year
+        d["month"] = d["time"].dt.month
+        d["basin"] = d["basin"].astype(int)
+
+        counts = (
+            d.dropna(subset=["precipitation"])
+             .groupby(["year", "basin"], as_index=False)
+             .size()
+             .rename(columns={"size": "n_months"})
+        )
+
+        annual = (
+            d.groupby(["year", "basin"], as_index=False)["precipitation"]
+             .sum(min_count=1)
+        )
+
+        annual = annual.merge(counts, on=["year", "basin"], how="left")
+
+        if min_months_per_year is not None:
+            annual = annual[annual["n_months"] >= min_months_per_year].copy()
+
+        annual["product"] = product_name
+        basin_annual_rows.append(annual)
+
+    basin_annual_df = pd.concat(basin_annual_rows, ignore_index=True)
+
+    spread_rows = []
+
+    for region_name, basin_ids in region_defs:
+        basin_ids = [int(b) for b in basin_ids]
+
+        sub = basin_annual_df[
+            basin_annual_df["basin"].isin(basin_ids)
+        ].copy()
+
+        if sub.empty:
+            continue
+
+        grouped = sub.groupby(["product", "year"])
+
+        spread = grouped["precipitation"].agg(
+            basin_mean="mean",
+            basin_std="std",
+            basin_min="min",
+            basin_max="max",
+            n_basins="count",
+        ).reset_index()
+
+        qlo, qhi = spread_q
+
+        qdf = grouped["precipitation"].quantile(
+            [qlo / 100, qhi / 100]
+        ).unstack().reset_index()
+
+        qdf = qdf.rename(columns={
+            qlo / 100: f"basin_q{qlo}",
+            qhi / 100: f"basin_q{qhi}",
+        })
+
+        spread = spread.merge(qdf, on=["product", "year"], how="left")
+        spread["region"] = region_name
+
+        spread_rows.append(spread)
+
+    spread_df = pd.concat(spread_rows, ignore_index=True)
+
+    return basin_annual_df, spread_df
+
+#-------------------------------------------------------------------------------
+
+# =============================================================================
+# REGIONAL ANNUAL MEAN + BASIN-TO-BASIN SPREAD
+# =============================================================================
+
+def build_region_annual_mean_and_spread_from_basin_annual(
+    basin_annual_df,
+    region_defs=REGION_DEFS,
+    spread_q=(25, 75),
+):
+    """
+    Compute regional annual mean and basin-to-basin spread.
+
+    This treats each basin as one unit when computing the spread.
+    The spread is therefore basin-to-basin variability, not formal uncertainty.
+
+    Output columns:
+        region, product, year,
+        precipitation_mean,
+        precipitation_std,
+        precipitation_q25,
+        precipitation_q75,
+        precipitation_min,
+        precipitation_max,
+        n_basins
+    """
+
+    rows = []
+
+    for region_name, basin_ids in region_defs:
+        basin_ids = [int(b) for b in basin_ids]
+
+        sub = basin_annual_df[
+            basin_annual_df["basin"].isin(basin_ids)
+        ].copy()
+
+        if sub.empty:
+            continue
+
+        grouped = sub.groupby(["product", "year"])
+
+        out = grouped["precipitation"].agg(
+            precipitation_mean="mean",
+            precipitation_std="std",
+            precipitation_min="min",
+            precipitation_max="max",
+            n_basins="count",
+        ).reset_index()
+
+        qlo, qhi = spread_q
+
+        qdf = grouped["precipitation"].quantile(
+            [qlo / 100, qhi / 100]
+        ).unstack()
+
+        qdf = qdf.rename(columns={
+            qlo / 100: f"precipitation_q{qlo}",
+            qhi / 100: f"precipitation_q{qhi}",
+        }).reset_index()
+
+        out = out.merge(qdf, on=["product", "year"], how="left")
+        out["region"] = region_name
+
+        rows.append(out)
+
+    region_spread_df = pd.concat(rows, ignore_index=True)
+
+    region_spread_df = region_spread_df[
+        [
+            "region",
+            "product",
+            "year",
+            "precipitation_mean",
+            "precipitation_std",
+            f"precipitation_q{spread_q[0]}",
+            f"precipitation_q{spread_q[1]}",
+            "precipitation_min",
+            "precipitation_max",
+            "n_basins",
+        ]
+    ]
+
+    return region_spread_df
+
+#-------------------------------------------------------------------------------
+# =============================================================================
+# HELPER FUNCTIONS FOR PMB UNCERTAINTY
+# =============================================================================
+
+def standardize_monthly_index_from_error_table(df, decimal_year_mode="nearest"):
+
+    """
+    Standardize Dave/Rignot uncertainty table to month-start datetime index.
+    Handles:
+      1) Decimal-year Time column, e.g., 2003.958
+      2) Regular datetime-like date/time column
+      3) Year and Month columns
+      4) Datetime-like index
+    """
+
+    df_out = df.copy()
+    # -------------------------------------------------------------------------
+    # Case 1: Dave-style decimal-year Time column
+    # -------------------------------------------------------------------------
+
+    if "Time" in df_out.columns:
+        time_numeric = pd.to_numeric(df_out["Time"], errors="coerce")
+        # Treat as decimal year if values look like years, e.g., 2002.292
+        if time_numeric.notnull().sum() > 0:
+            median_time = float(time_numeric.dropna().median())
+            if 1900 <= median_time <= 2100:
+                df_out["date"] = time_numeric.apply(
+                    lambda v: decimal_year_to_month_start(v, mode=decimal_year_mode)
+                    if np.isfinite(v) else pd.NaT
+                )
+
+                df_out = (
+                    df_out
+                    .dropna(subset=["date"])
+                    .set_index("date")
+                    .sort_index()
+                )
+                return df_out
+
+    # -------------------------------------------------------------------------
+    # Case 2: other date/time columns that are actually datetime-like
+    # -------------------------------------------------------------------------
+    date_candidates = ["date", "Date", "time"]
+    for c in date_candidates:
+        if c in df_out.columns:
+            parsed = pd.to_datetime(df_out[c], errors="coerce")
+            if parsed.notnull().sum() > 0:
+                df_out["date"] = parsed.dt.to_period("M").dt.to_timestamp()
+                df_out = (
+                    df_out
+                    .dropna(subset=["date"])
+                    .set_index("date")
+                    .sort_index()
+                )
+                return df_out
+
+    # -------------------------------------------------------------------------
+    # Case 3: Year and Month columns
+    # -------------------------------------------------------------------------
+    year_candidates = [c for c in df_out.columns if str(c).lower() == "year"]
+    month_candidates = [c for c in df_out.columns if str(c).lower() == "month"]
+    if len(year_candidates) > 0 and len(month_candidates) > 0:
+        ycol = year_candidates[0]
+        mcol = month_candidates[0]
+        df_out["date"] = pd.to_datetime(
+            dict(
+                year=df_out[ycol].astype(int),
+                month=df_out[mcol].astype(int),
+                day=1,
+            )
+        )
+        df_out = df_out.set_index("date").sort_index()
+        return df_out
+
+    # -------------------------------------------------------------------------
+    # Case 4: datetime-like index
+    # -------------------------------------------------------------------------
+    try:
+        idx = pd.to_datetime(df_out.index, errors="coerce")
+        if idx.notnull().sum() > 0:
+            df_out.index = idx.to_period("M").to_timestamp()
+            df_out = df_out.sort_index()
+            return df_out
+    except Exception:
+        pass
+    raise ValueError(
+        "Could not infer monthly datetime index from Rignot 1-sigma error table. "
+        "Expected decimal-year 'Time', datetime column, Year/Month columns, or datetime index."
+    )
+
+#-------------------------------------------------------------------------------
+def prepare_rignot_deltaS_uncertainty(
+    rignot_deltaS_err=None,
+    basin_cols=None,
+    target_dates=None,
+    deltaS_convention="forward",
+    filled_error_pickle=None,
+    decimal_year_mode="nearest",
+    ):
+    """
+    Prepare basin-month ΔS uncertainty [Gt/month] from David/Rignot 1-sigma
+    storage/mass anomaly uncertainty.
+
+    Preferred use:
+        Provide filled_error_pickle created by the GRACE uncertainty gap-fill
+        workflow.
+
+    If using raw rignot_deltaS_err:
+        The function converts decimal-year Time to month-start dates, averages
+        duplicate converted months, and reindexes. However, raw gaps will remain
+        unless the input has already been filled.
+
+    Important:
+        The input uncertainty is treated as sigma_S, i.e. uncertainty of storage
+        anomaly S [Gt]. The uncertainty of ΔS is propagated as:
+
+            forward:
+                ΔS_m = S_{m+1} - S_m
+                sigma_ΔS_m = sqrt(sigma_S_{m+1}^2 + sigma_S_m^2)
+
+            backward:
+                ΔS_m = S_m - S_{m-1}
+                sigma_ΔS_m = sqrt(sigma_S_m^2 + sigma_S_{m-1}^2)
+    """
+
+    if target_dates is None:
+        raise ValueError("target_dates must be provided.")
+
+    target_dates = (
+        pd.to_datetime(target_dates)
+        .to_period("M")
+        .to_timestamp()
+    )
+
+    if filled_error_pickle is not None:
+        err_S = pd.read_pickle(filled_error_pickle)
+        err_S = err_S.copy()
+        err_S.index = (
+            pd.to_datetime(err_S.index)
+            .to_period("M")
+            .to_timestamp()
+        )
+
+        if basin_cols is not None:
+            err_S = err_S[basin_cols]
+
+        print("\n[PMB uncertainty] Loaded gap-filled Rignot 1-sigma storage error:")
+        print(filled_error_pickle)
+
+    else:
+        if rignot_deltaS_err is None:
+            raise ValueError(
+                "Either filled_error_pickle or rignot_deltaS_err must be provided."
+            )
+
+        err = rignot_deltaS_err.copy()
+
+        if "Time" not in err.columns:
+            raise ValueError("rignot_deltaS_err must contain a 'Time' column.")
+
+        if basin_cols is None:
+            basin_cols = [
+                c for c in err.columns
+                if c not in ("Time", "date", "Year", "Month")
+            ]
+
+        err["date"] = err["Time"].apply(
+            lambda x: decimal_year_to_month_start(x, mode=decimal_year_mode)
+        )
+
+        err["Year"] = err["date"].dt.year
+        err["Month"] = err["date"].dt.month
+
+        err_dS = (
+            err
+            .groupby(["Year", "Month"], as_index=False)[basin_cols]
+            .mean()
+        )
+
+        err_dS["date"] = pd.to_datetime(
+            dict(year=err_dS["Year"], month=err_dS["Month"], day=1)
+        )
+
+        err_S = err_dS.set_index("date").sort_index()
+        err_S = err_S[basin_cols]
+
+        if not err_S.index.is_unique:
+            print(
+                "[PMB uncertainty] Duplicate monthly labels found in Rignot "
+                "1-sigma error table after decimal-year conversion. "
+                "Averaging duplicate months before reindexing."
+            )
+            err_S = err_S.groupby(err_S.index).mean()
+
+        print(
+            "\n[PMB uncertainty] WARNING: using raw Rignot uncertainty table. "
+            "Any missing months will remain NaN unless the raw input was "
+            "already gap-filled."
+        )
+
+    # Make sure values are positive
+    err_S = err_S.abs()
+
+    # Create enough monthly support to compute forward/backward difference uncertainty
+    min_date = min(target_dates.min(), err_S.index.min())
+    max_date = max(target_dates.max(), err_S.index.max())
+
+    full_index = pd.date_range(min_date, max_date, freq="MS")
+    err_S = err_S.reindex(full_index)
+
+    # If any small internal gaps remain, fill them here as a safety net.
+    # The preferred fill should already have happened upstream.
+    if err_S.isna().any().any():
+        print(
+            "[PMB uncertainty] WARNING: NaNs found in storage uncertainty after "
+            "reindexing. Applying internal linear interpolation as safety net."
+        )
+        err_S = err_S.interpolate(method="linear", limit_area="inside").abs()
+
+    if deltaS_convention.lower() == "forward":
+        err_S_next = err_S.shift(-1)
+        err_dS = np.sqrt(err_S**2 + err_S_next**2)
+
+    elif deltaS_convention.lower() == "backward":
+        err_S_prev = err_S.shift(1)
+        err_dS = np.sqrt(err_S**2 + err_S_prev**2)
+
+    else:
+        raise ValueError("deltaS_convention must be 'forward' or 'backward'.")
+
+    # Keep only active ΔS target months
+    err_dS = err_dS.reindex(target_dates)
+    err_dS.index.name = "date"
+
+    err_long = (
+        err_dS
+        .reset_index()
+        .melt(id_vars="date", var_name="basin", value_name="dS_unc_Gt")
+        .dropna(subset=["dS_unc_Gt"])
+        .reset_index(drop=True)
+    )
+
+    err_long["dS_unc_Gt"] = err_long["dS_unc_Gt"].abs()
+
+    print("\n[PMB uncertainty] Rignot ΔS uncertainty preparation complete.")
+    print("Convention label:", deltaS_convention)
+    print("Date range:", err_dS.index.min(), "to", err_dS.index.max())
+    print("Shape:", err_dS.shape)
+    print("Remaining NaN count:", int(err_dS.isna().sum().sum()))
+    print("Mean sigma_ΔS [Gt/month]:", float(np.nanmean(err_dS.values)))
+
+    return err_dS, err_long
+
+#-----------------------------------------------------------------------------
+def prepare_monthly_error_table_from_decimal_year(
+    df_err,
+    start_date,
+    end_date,
+    basin_cols=None,
+    time_col="Time",
+    mode="nearest",
+):
+    """
+    Convert a decimal-year basin uncertainty/error table to a full monthly DataFrame.
+
+    Handles:
+      1. decimal year -> month-start date
+      2. duplicate converted months
+      3. reindexing to complete monthly grid
+
+    Output remains in the same units as the input table.
+    """
+
+    df = df_err.copy()
+
+    df["date"] = df[time_col].apply(
+        lambda x: decimal_year_to_month_start(x, mode=mode)
+    )
+
+    df["Year"] = df["date"].dt.year
+    df["Month"] = df["date"].dt.month
+
+    if basin_cols is None:
+        basin_cols = [
+            c for c in df.columns
+            if c not in (time_col, "date", "Year", "Month")
+        ]
+
+    # Monthly mean handles duplicate converted dates
+    dfm = (
+        df
+        .groupby(["Year", "Month"], as_index=False)[basin_cols]
+        .mean()
+    )
+
+    dfm["date"] = pd.to_datetime(
+        dict(year=dfm["Year"], month=dfm["Month"], day=1)
+    )
+
+    dfm = dfm.set_index("date").sort_index()
+
+    full_index = pd.date_range(
+        start=start_date,
+        end=end_date,
+        freq="MS",
+    )
+
+    E_full = dfm[basin_cols].reindex(full_index)
+    E_full.index.name = "date"
+
+    print("\n[Uncertainty monthly table]")
+    print("Total months expected:", len(full_index))
+    print("Observed monthly rows:", dfm.shape[0])
+    print("Missing months before fill:", E_full.isna().any(axis=1).sum())
+    print("Duplicate dates after monthly grouping:", not E_full.index.is_unique)
+
+    return E_full
+#-------------------------------------------------------------------------------
+def propagate_pmb_uncertainty_basin_level(
+    D_basin,
+    BM_basin,
+    dS_basin,
+    SUB_basin,
+    dS_unc_basin,
+    basin_area_m2,
+    discharge_frac_unc=0.0,
+    basal_melt_frac_unc=0.0,
+    sublimation_frac_unc=0.0,
+):
+    """
+    Propagate basin-level PMB uncertainty.
+    PMB equation:
+        P_MB = D + BM + ΔS + SUB
+    Assuming independent errors:
+        sigma_PMB = sqrt(
+            sigma_D^2 +
+            sigma_BM^2 +
+            sigma_dS^2 +
+            sigma_SUB^2
+        )
+
+    Inputs
+    ------
+    D_basin, BM_basin, dS_basin, SUB_basin : xarray.DataArray
+        Basin monthly terms in Gt/month.
+
+    dS_unc_basin : xarray.DataArray
+        Basin monthly ΔS uncertainty in Gt/month.
+    basin_area_m2 : xarray.DataArray
+        Basin area in m2, indexed by basin_id.
+
+    Returns
+    -------
+    pmb_unc_Gt : xarray.DataArray
+        PMB uncertainty in Gt/month.
+    pmb_unc_mm : xarray.DataArray
+        PMB uncertainty in mm/month.
+    """
+
+    # Align all terms
+    D_basin, BM_basin, dS_basin, SUB_basin, dS_unc_basin = xr.align(
+        D_basin,
+        BM_basin,
+        dS_basin,
+        SUB_basin,
+        dS_unc_basin,
+        join="inner",
+    )
+
+    sigma_D = np.abs(D_basin) * float(discharge_frac_unc)
+    sigma_BM = np.abs(BM_basin) * float(basal_melt_frac_unc)
+    sigma_SUB = np.abs(SUB_basin) * float(sublimation_frac_unc)
+    sigma_dS = np.abs(dS_unc_basin)
+
+    pmb_unc_Gt = np.sqrt(
+        sigma_D**2 +
+        sigma_BM**2 +
+        sigma_dS**2 +
+        sigma_SUB**2
+    )
+
+    pmb_unc_Gt.name = "pmb_uncertainty_Gt_per_month"
+
+    pmb_unc_mm = pmb_unc_Gt * 1e12 / basin_area_m2
+    pmb_unc_mm.name = "pmb_uncertainty_mm_per_month"
+
+    pmb_unc_Gt.attrs.update({
+        "units": "Gt/month",
+        "description": "Propagated 1-sigma PMB uncertainty at basin-month scale.",
+        "equation": (
+            "sigma_PMB = sqrt(sigma_D^2 + sigma_BM^2 + "
+            "sigma_deltaS^2 + sigma_SUB^2)"
+        ),
+        "note": (
+            "Currently sigma_deltaS comes from David/Rignot 1-sigma error input. "
+            "Discharge, basal melt, and sublimation uncertainty are optional "
+            "fractional terms controlled by workflow settings."
+        ),
+    })
+
+    pmb_unc_mm.attrs.update({
+        "units": "mm/month",
+        "description": "Propagated 1-sigma PMB uncertainty at basin-month scale in water-equivalent height.",
+        "equation": (
+            "sigma_PMB = sqrt(sigma_D^2 + sigma_BM^2 + "
+            "sigma_deltaS^2 + sigma_SUB^2)"
+        ),
+        "conversion": "Gt/month converted to mm/month using basin area.",
+        "note": (
+            "This uncertainty is intended only for PMB. It should not be applied "
+            "to ERA5, GPCP, GPM, or UA-HIPA."
+        ),
+    })
+    return pmb_unc_Gt, pmb_unc_mm
+
+#-------------------------------------------------------------------------------
+def fill_monthly_uncertainty_linear(E_full, limit_area="inside"):
+    """
+    Fill missing monthly uncertainty values using linear interpolation.
+
+    For uncertainty/error fields, this is preferred over deseasonalized
+    interpolation because the uncertainty is not itself a seasonal mass-anomaly
+    signal. Values are forced positive after filling.
+    """
+
+    E_filled = E_full.copy()
+
+    for basin in E_full.columns:
+        E_filled[basin] = (
+            E_full[basin]
+            .interpolate(method="linear", limit_area=limit_area)
+        )
+
+    E_filled = E_filled.abs()
+
+    print("\n[Uncertainty gap fill]")
+    print("Missing months after fill:", E_filled.isna().any(axis=1).sum())
+    print("Any negative values after abs():", bool((E_filled < 0).any().any()))
+
+    return E_filled
 #%% PLOT MONTHLY PMB TIME SERIES BY BASIN FOR SELECTED REGION/YEAR
 # =============================================================================
 # Purpose:
@@ -1064,6 +1759,187 @@ def compute_seasonal_bias_and_ratio(
 # This is the PMB-based diagnostic used to identify outlier basin/month values.
 # =============================================================================
 
+def plot_region_interannual_original_mean_with_basin_spread(
+    region_annual_df,
+    basin_spread_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07"),
+    product_styles=None,
+    spread_type="iqr",   # "iqr", "std", or "minmax"
+    figsize=(10, 10),
+    ylabel="Precipitation [mm/year]",
+    y_nbins=4,
+    legend_ncol=3,
+    alpha_fill=0.16,
+    include_band_legend=True,
+):
+    """
+    Lines:
+        original regional annual totals from compute_annual_totals_from_regional_series()
+
+    Bands:
+        basin-to-basin annual spread within each region.
+    """
+
+    if product_styles is None:
+        product_styles = {}
+
+    fig, axes = plt.subplots(
+        len(region_order), 1,
+        figsize=figsize,
+        sharex=True
+    )
+
+    axes = np.atleast_1d(axes)
+
+    line_handles = []
+    line_labels = []
+    band_handles = []
+    band_labels = []
+
+    for ax, region in zip(axes, region_order):
+
+        sub_line_region = region_annual_df[
+            region_annual_df["region"] == region
+        ].copy()
+
+        sub_band_region = basin_spread_df[
+            basin_spread_df["region"] == region
+        ].copy()
+
+        for prod in product_order:
+
+            # -----------------------------
+            # Line values: original workflow
+            # -----------------------------
+            ss_line = sub_line_region[
+                sub_line_region["product"] == prod
+            ].sort_values("year").copy()
+
+            if ss_line.empty:
+                continue
+
+            years = ss_line["year"].to_numpy()
+            yline = ss_line["precipitation"].to_numpy(dtype=float)
+
+            style = product_styles.get(prod, {}).copy()
+            color = style.get("color", None)
+
+            line, = ax.plot(
+                years,
+                yline,
+                label=prod,
+                zorder=4,
+                **style
+            )
+
+            if prod not in line_labels:
+                line_handles.append(line)
+                line_labels.append(prod)
+
+            # -----------------------------
+            # Band values: basin spread
+            # -----------------------------
+            ss_band = sub_band_region[
+                sub_band_region["product"] == prod
+            ].sort_values("year").copy()
+
+            if ss_band.empty:
+                continue
+
+            # keep only years also present in line data
+            ss_band = ss_band[ss_band["year"].isin(years)].copy()
+
+            if ss_band.empty:
+                continue
+
+            band_years = ss_band["year"].to_numpy()
+
+            if spread_type == "iqr":
+                ylo = ss_band["basin_q25"].to_numpy(dtype=float)
+                yhi = ss_band["basin_q75"].to_numpy(dtype=float)
+                band_label = "Basin IQR spread"
+
+            elif spread_type == "std":
+                # spread around basin mean, not regional line
+                ymean_basin = ss_band["basin_mean"].to_numpy(dtype=float)
+                ystd = ss_band["basin_std"].to_numpy(dtype=float)
+                ylo = ymean_basin - ystd
+                yhi = ymean_basin + ystd
+                band_label = "Basin ±1 std. spread"
+
+            elif spread_type == "minmax":
+                ylo = ss_band["basin_min"].to_numpy(dtype=float)
+                yhi = ss_band["basin_max"].to_numpy(dtype=float)
+                band_label = "Basin min–max spread"
+
+            else:
+                raise ValueError("spread_type must be 'iqr', 'std', or 'minmax'")
+
+            ax.fill_between(
+                band_years,
+                ylo,
+                yhi,
+                color=color,
+                alpha=alpha_fill,
+                linewidth=0,
+                zorder=1,
+            )
+
+            if include_band_legend:
+                patch_label = f"{prod} {band_label}"
+                if patch_label not in band_labels:
+                    band_handles.append(
+                        Patch(
+                            facecolor=color,
+                            edgecolor="none",
+                            alpha=alpha_fill,
+                            label=patch_label,
+                        )
+                    )
+                    band_labels.append(patch_label)
+
+        ax.set_title(region, fontsize=18, fontweight="bold", pad=8)
+        ax.grid(True, alpha=0.3)
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
+        ax.tick_params(axis="y", labelsize=16)
+
+    axes[-1].set_xlabel("Year", fontsize=16, fontweight="bold")
+    axes[-1].tick_params(axis="x", labelsize=16)
+
+    fig.supylabel(ylabel, fontsize=20, fontweight="bold")
+
+    # Main product legend
+    fig.legend(
+        line_handles,
+        line_labels,
+        loc="lower center",
+        ncol=legend_ncol,
+        frameon=False,
+        fontsize=16,
+        bbox_to_anchor=(0.5, -0.02),
+    )
+
+    # Optional separate band legend
+    if include_band_legend and len(band_handles) > 0:
+        fig.legend(
+            band_handles,
+            band_labels,
+            loc="lower center",
+            ncol=2,
+            frameon=False,
+            fontsize=11,
+            bbox_to_anchor=(0.5, -0.105),
+        )
+        bottom_pad = 0.14
+    else:
+        bottom_pad = 0.07
+
+    fig.tight_layout(rect=[0, bottom_pad, 1, 1])
+
+    return fig, axes
+
+#-------------------------------------------------------------------------------
 def plot_monthly_pmb_by_basin(
     pmb_basin_month_df,
     year,
@@ -1701,51 +2577,29 @@ def reproject_basin_ids_to_match(basin_da, target_da):
 #---------------------------------------------------------------------------------
 
 def build_region_specific_negative_pmb_table(
-
     pmb_basin_month_df,
-
     region_basins,
-
     region_thresholds,
-
     value_col="pmb_mm_month",
-
 ):
 
     """
-
     Build a basin/month exclusion table using region-specific PMB thresholds.
-
     Parameters
-
     ----------
-
     pmb_basin_month_df : DataFrame
-
         Must include time, year, month, basin, and value_col.
-
     region_basins : dict
-
         Region -> list of basin IDs.
-
     region_thresholds : dict
-
         Region -> threshold in mm/month.
-
         Example: {"West Antarctica": -50, "East Antarctica": -25}
-
     value_col : str
-
         PMB monthly value column.
-
     Returns
-
     -------
-
     exclusion_table : DataFrame
-
         Basin/month rows where PMB is below the region-specific threshold.
-
     """
 
     rows = []
@@ -1753,29 +2607,20 @@ def build_region_specific_negative_pmb_table(
     for region, threshold in region_thresholds.items():
 
         basins = region_basins[region]
-
         sub = pmb_basin_month_df[
-
             (pmb_basin_month_df["basin"].isin(basins)) &
-
             (pmb_basin_month_df[value_col] < threshold)
-
         ].copy()
 
         sub["region"] = region
-
         sub["threshold_mm_month"] = threshold
-
         rows.append(sub)
 
     exclusion_table = (
         pd.concat(rows, ignore_index=True)
-
         .sort_values(["time", "basin"])
-
         .reset_index(drop=True)
     )
-
     return exclusion_table
 #---------------------------------------------------------------------------------
 def outlier_id_list_to_table(outlier_list, pmb_basin_month_df):
@@ -2089,11 +2934,7 @@ def get_zonal_timeseries(data_3d, mask, y):
         out[t] = get_zonal(data_3d[t], mask, y)
 
     return out
-REGION_BASINS = {
-    "Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
-    "West Antarctica": [10, 11, 12, 13, 14, 15, 16, 17],
-    "East Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 18, 19],
-}
+
 
 def compute_pmb_cosine_weighted_annual(
     pmb_monthly_latlon,
@@ -2386,7 +3227,126 @@ def plot_seasonal_timeseries_regions(
     plt.tight_layout(rect=[0.05, 0.06, 1, 1])
     return fig, axes
 
+#--------------------------------------------------------------------------------
+# =============================================================================
+# PLOT REGIONAL ANNUAL MEAN WITH BASIN-TO-BASIN SPREAD
+# =============================================================================
 
+def plot_region_interannual_with_basin_spread(
+    region_spread_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V07"),
+    product_styles=None,
+    spread_type="iqr",   # "iqr", "std", or "minmax"
+    figsize=(10, 10),
+    ylabel="Precipitation [mm/year]",
+    y_nbins=4,
+    legend_ncol=3,
+    alpha_fill=0.15,
+):
+    """
+    Plot annual regional mean lines with basin-to-basin spread shading.
+
+    spread_type:
+        "iqr"    -> q25 to q75
+        "std"    -> mean ± std
+        "minmax" -> basin min to basin max
+    """
+
+    if product_styles is None:
+        product_styles = {}
+
+    fig, axes = plt.subplots(
+        len(region_order), 1,
+        figsize=figsize,
+        sharex=True
+    )
+
+    axes = np.atleast_1d(axes)
+
+    legend_handles = []
+    legend_labels = []
+
+    for ax, region in zip(axes, region_order):
+        sub_region = region_spread_df[
+            region_spread_df["region"] == region
+        ].copy()
+
+        for prod in product_order:
+            ss = sub_region[
+                sub_region["product"] == prod
+            ].sort_values("year").copy()
+
+            if ss.empty:
+                continue
+
+            years = ss["year"].to_numpy()
+            ymean = ss["precipitation_mean"].to_numpy(dtype=float)
+
+            style = product_styles.get(prod, {}).copy()
+            color = style.get("color", None)
+
+            line, = ax.plot(
+                years,
+                ymean,
+                label=prod,
+                **style
+            )
+
+            if prod not in legend_labels:
+                legend_handles.append(line)
+                legend_labels.append(prod)
+
+            # determine spread bounds
+            if spread_type == "iqr":
+                ylo = ss["precipitation_q25"].to_numpy(dtype=float)
+                yhi = ss["precipitation_q75"].to_numpy(dtype=float)
+
+            elif spread_type == "std":
+                ystd = ss["precipitation_std"].to_numpy(dtype=float)
+                ylo = ymean - ystd
+                yhi = ymean + ystd
+
+            elif spread_type == "minmax":
+                ylo = ss["precipitation_min"].to_numpy(dtype=float)
+                yhi = ss["precipitation_max"].to_numpy(dtype=float)
+
+            else:
+                raise ValueError("spread_type must be 'iqr', 'std', or 'minmax'")
+
+            ax.fill_between(
+                years,
+                ylo,
+                yhi,
+                color=color,
+                alpha=alpha_fill,
+                linewidth=0,
+                zorder=1,
+            )
+
+        ax.set_title(region, fontsize=18, fontweight="bold", pad=8)
+        ax.grid(True, alpha=0.3)
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
+        ax.tick_params(axis="y", labelsize=16)
+
+    axes[-1].set_xlabel("Year", fontsize=16, fontweight="bold")
+    axes[-1].tick_params(axis="x", labelsize=16)
+
+    fig.supylabel(ylabel, fontsize=20, fontweight="bold")
+
+    fig.legend(
+        legend_handles,
+        legend_labels,
+        loc="lower center",
+        ncol=legend_ncol,
+        frameon=False,
+        fontsize=16,
+        bbox_to_anchor=(0.5, -0.03),
+    )
+
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
+
+    return fig, axes
 #--------------------------------------------------------------------------------
 def plot_seasonal_climatology_1x3(
     clim_df,

@@ -1,5 +1,7 @@
 #%% Packages
 from program_utils import *
+from Extra_util_functions import *
+from program_utile_13Apr2026 import *
 
 #%% Paths
 basin_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
@@ -80,6 +82,58 @@ for basin in basin_cols:
 
 # save df to disk
 S_tier1.to_pickle(os.path.join(basin_path, f"DataCombo_RignotBasins_LI_tier1_{cde_run_dte}.pkl"))
+
+#%% Step B2 — Prepare and gap-fill GRACE/altimetry 1-sigma uncertainty
+
+# =============================================================================
+# Purpose:
+# Build a monthly gap-filled version of David's 1-sigma GRACE/altimetry error
+# table, using the same monthly grid as the filled storage anomaly series.
+#
+# Important:
+# This table is an uncertainty/error estimate, not a storage-anomaly state.
+# Therefore, we use direct linear interpolation in time, not deseasonalized
+# interpolation.
+# =============================================================================
+
+rignot_deltaS_err = pd.read_excel(
+    os.path.join(basin_path, "DataCombo_RignotBasins.xlsx"),
+    sheet_name="1-sigma_Error(Gt)",
+)
+
+# Use the same basin columns as the storage anomaly table.
+# This ensures column order and basin names match S_tier1.
+E_full = prepare_monthly_error_table_from_decimal_year(
+    df_err=rignot_deltaS_err,
+    start_date=start_date,
+    end_date=end_date,
+    basin_cols=basin_cols,
+    time_col="Time",
+    mode="nearest",
+)
+
+E_tier1 = fill_monthly_uncertainty_linear(
+    E_full,
+    limit_area="inside",
+)
+
+# Save outputs
+err_pkl = os.path.join(
+    basin_path,
+    f"DataCombo_RignotBasins_1sigma_Error_LI_tier1_{cde_run_dte}.pkl"
+)
+
+# err_csv = os.path.join(
+#     basin_path,
+#     f"DataCombo_RignotBasins_1sigma_Error_LI_tier1_{cde_run_dte}.csv"
+# )
+
+E_tier1.to_pickle(err_pkl)
+# E_tier1.to_csv(err_csv)
+
+print("\nSaved gap-filled GRACE/altimetry 1-sigma uncertainty:")
+print(err_pkl)
+# print(err_csv)
 #%%
 # ---------------------------------------------------------
 # TIER 2: Harmonic Trend + Annual Cycle Fit

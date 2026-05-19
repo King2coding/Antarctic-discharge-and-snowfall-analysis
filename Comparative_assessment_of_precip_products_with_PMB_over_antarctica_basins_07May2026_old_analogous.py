@@ -771,6 +771,46 @@ fig.savefig(svnme, dpi=300)
 plt.show()
 gc.collect()
 
+#%%
+# =============================================================================
+# RUN FULL WORKFLOW
+# =============================================================================
+
+# IMPORTANT:
+# Use the basin mask already reprojected to the common lat/lon grid.
+# This should be your basin_mask_01deg / basin_mask_latlon, not raw basins.
+
+basin_ids = range(2, 20)
+
+monthly_df_data_mmmonth = build_basin_monthly_dict_from_gridded_products(
+    product_monthly_dict=product_monthly_dict,
+    basin_mask_2d=basin_mask_01deg,   # or basin_mask_latlon
+    basin_ids=basin_ids,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+basin_annual_df, basin_spread_df = build_basin_annual_spread_from_monthly_dict(
+    monthly_df_data_mmmonth=monthly_df_data_mmmonth,
+    region_defs=REGION_DEFS,
+    min_months_per_year=12,
+    spread_q=(25, 75),
+)
+
+
+fig, axes = plot_region_interannual_original_mean_with_basin_spread(
+    region_annual_df=region_annual_cos,
+    basin_spread_df=basin_spread_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=product_order,
+    product_styles=product_styles_corr,
+    spread_type="iqr",
+    figsize=(10, 10),
+    ylabel="Precipitation [mm/year]",
+    legend_ncol=4,
+    include_band_legend=True,
+)
 
 #%% Seasonal Anomalies
 # =============================================================================
