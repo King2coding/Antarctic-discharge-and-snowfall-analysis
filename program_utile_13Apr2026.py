@@ -2164,6 +2164,150 @@ def plot_seasonal_climatology(
     plt.tight_layout(rect=[0.05, 0.06, 1, 1])
     return fig, axes
 
+#-----------------------------------------------------------------------------
+def plot_seasonal_climatology_with_pmb_uncertainty(
+    clim_df,
+    pmb_unc_df=None,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3"),
+    product_styles=None,
+    figsize=(10, 8),
+    ylabel="mm/season",
+    y_nbins=4,
+    legend_ncol=3,
+    pmb_product=r"$P_{\mathrm{MB}}$",
+    unc_col="pmb_uncertainty",
+    unc_label=r"$P_{\mathrm{MB}}$ uncertainty ($\pm 1\sigma$)",
+    unc_color="0.8",
+    unc_alpha=0.6,
+):
+    season_labels = ["DJF", "MAM", "JJA", "SON"]
+    season_x = np.arange(len(season_labels))
+
+    fig, axes = plt.subplots(len(region_order), 1, figsize=figsize, sharex=True)
+
+    if len(region_order) == 1:
+        axes = [axes]
+
+    for ax, region in zip(axes, region_order):
+        sub = clim_df[clim_df["region"] == region].copy()
+
+        # ---------------------------------------------------------
+        # PMB uncertainty band
+        # ---------------------------------------------------------
+        if pmb_unc_df is not None:
+            pmb_sub = sub[sub["product"] == pmb_product].copy()
+
+            unc_sub = pmb_unc_df[pmb_unc_df["region"] == region].copy()
+
+            if (not pmb_sub.empty) and (not unc_sub.empty):
+                pmb_sub["season"] = pd.Categorical(
+                    pmb_sub["season"],
+                    categories=season_labels,
+                    ordered=True
+                )
+                unc_sub["season"] = pd.Categorical(
+                    unc_sub["season"],
+                    categories=season_labels,
+                    ordered=True
+                )
+
+                pmb_sub = pmb_sub.sort_values("season")
+                unc_sub = unc_sub.sort_values("season")
+
+                pmb_band_df = pmb_sub[["season", "precipitation"]].merge(
+                    unc_sub[["season", unc_col]],
+                    on="season",
+                    how="inner"
+                )
+
+                pmb_band_df = pmb_band_df.dropna(subset=["precipitation", unc_col])
+
+                if not pmb_band_df.empty:
+                    x = np.array([
+                        season_labels.index(str(s))
+                        for s in pmb_band_df["season"]
+                    ])
+
+                    y = pmb_band_df["precipitation"].astype(float).values
+                    sigma = pmb_band_df[unc_col].astype(float).values
+
+                    ax.fill_between(
+                        x,
+                        y - sigma,
+                        y + sigma,
+                        color=unc_color,
+                        alpha=unc_alpha,
+                        linewidth=0,
+                        label=unc_label,
+                        zorder=1,
+                    )
+
+        # ---------------------------------------------------------
+        # Product lines
+        # ---------------------------------------------------------
+        for prod in product_order:
+            ss = sub[sub["product"] == prod].copy()
+            if ss.empty:
+                continue
+
+            ss["season"] = pd.Categorical(
+                ss["season"],
+                categories=season_labels,
+                ordered=True
+            )
+            ss = ss.sort_values("season")
+
+            x = np.array([
+                season_labels.index(str(s))
+                for s in ss["season"]
+            ])
+
+            style = {} if product_styles is None else product_styles.get(prod, {}).copy()
+
+            ax.plot(
+                x,
+                ss["precipitation"],
+                label=prod,
+                zorder=3,
+                **style
+            )
+
+        ax.set_title(region, fontweight="bold", fontsize=18)
+        ax.grid(True, alpha=0.3)
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
+        ax.set_xticks(season_x)
+        ax.set_xticklabels(season_labels)
+
+    fig.supylabel(ylabel, x=0.06, fontweight="bold", fontsize=18)
+
+    # ---------------------------------------------------------
+    # Clean duplicate legend entries
+    # ---------------------------------------------------------
+    handles, labels = [], []
+    for ax in axes:
+        h, l = ax.get_legend_handles_labels()
+        handles.extend(h)
+        labels.extend(l)
+
+    unique = {}
+    for h, l in zip(handles, labels):
+        if l not in unique:
+            unique[l] = h
+
+    fig.legend(
+        unique.values(),
+        unique.keys(),
+        loc="lower center",
+        bbox_to_anchor=(0.58, -0.03),
+        ncol=legend_ncol,
+        fontsize=13,
+        frameon=False,
+    )
+
+    plt.tight_layout(rect=[0.05, 0.06, 1, 1])
+    return fig, axes
+
 # =============================================================================
 # PLOT HELPER 3. INTERANNUAL VARIABILITY
 # =============================================================================

@@ -33,9 +33,15 @@ ua_file = (
 
 # --- Basin / PMB data ---
 basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
-Pmb_mm_fle  = os.path.join(basins_path, "Monthly_mass_budget_precip_RignotBasin_in_mm_forward_deltaS_uncorrected_positive_sublimation_loss_20260507.nc")
+Pmb_mm_fle  = os.path.join(
+    basins_path, 
+    "Monthly_mass_budget_precip_RignotBasin_in_mm_forward_deltaS_uncorrected_positive_sublimation_loss_20260507.nc")
 #    'Monthly_mass_budget_precip_RignotBasin_in_mm_20260226.nc')
+Pmb_unc_mm_fle = os.path.join(
+    basins_path,
+    "Monthly_mass_budget_precip_RignotBasin_uncertainty_in_mm_forward_deltaS_uncorrected_positive_sublimation_loss_20260519.nc"
 
+)
 # --- File lists: 2013–2020 only ---
 all_gpcp_v3pt3_mnthly_files = sorted(
     [os.path.join(gpcp_v3pt3_mnthly_ds_path, f) for f in os.listdir(gpcp_v3pt3_mnthly_ds_path) if f.endswith('.nc4')]
@@ -313,9 +319,11 @@ era5_mnth = era5_mnth.sel(latitude=slice(-60, -90))
 era5_mnth = era5_mnth.rename({"latitude": "lat", "longitude": "lon"})
 
 #----------------------------------------------------------------------------
-
 print("Loading PMB monthly dataset ...")
 P_mm_mnth = xr.open_dataarray(Pmb_mm_fle)
+
+print("Loading PMB monthly uncertainty dataset ...")
+P_unc_mm_mnth = xr.open_dataarray(Pmb_unc_mm_fle)
 
 print("Loading UA-HIPA monthly dataset ...")
 uahipa_ds = xr.open_dataset(ua_file)
@@ -361,6 +369,13 @@ gpcp_mon_01 = gpcp_mon_01.where(gpcp_mon_01["lat"] < -60)
 print("Reprojecting PMB monthly to common 0.1° grid ...")
 pmb_mon_01 = prepare_pmb_monthly_on_target(P_mm_mnth, target_template_01deg)
 pmb_mon_01 = subset_common_period(pmb_mon_01)
+
+print("Reprojecting PMB monthly uncertainty to common 0.1° grid ...")
+pmb_unc_mon_01 = prepare_pmb_monthly_on_target(P_unc_mm_mnth, target_template_01deg)
+pmb_unc_mon_01 = subset_common_period(pmb_unc_mon_01)
+
+# Ensure uncertainty is positive
+pmb_unc_mon_01 = abs(pmb_unc_mon_01)
 #----------------------------------------------------------------------------
 
 print("Reprojecting UA-HIPA monthly to common 0.1° grid ...")
@@ -463,13 +478,15 @@ valid_basin_mask = basin_mask_01deg.notnull()
 
 gpcp_mon_01 = gpcp_mon_01.where(valid_basin_mask)
 era5_mon_01 = era5_mnth_01.where(valid_basin_mask)
-pmb_mon_01  = pmb_mon_01.where(valid_basin_mask)
+pmb_mon_01 = pmb_mon_01.where(valid_basin_mask)
+pmb_unc_mon_01 = pmb_unc_mon_01.where(valid_basin_mask)
 uahipa_mon_01 = uahipa_mon_01.where(valid_basin_mask)
 
 print("✅ Common masked monthly fields ready")
 print("GPCP  :", gpcp_mon_01.shape)
 print("ERA5  :", era5_mon_01.shape)
 print("PMB   :", pmb_mon_01.shape)
+print("PMB unc:", pmb_unc_mon_01.shape)
 print("UA-HIPA:", uahipa_mon_01.shape)
 
 
@@ -484,6 +501,7 @@ print("Basin mask CRS :", basin_mask_01deg.rio.crs)
 print("GPCP time range:", str(gpcp_mon_01.time.min().values), "->", str(gpcp_mon_01.time.max().values))
 print("ERA5 time range:", str(era5_mon_01.time.min().values), "->", str(era5_mon_01.time.max().values))
 print("PMB time range :", str(pmb_mon_01.time.min().values),  "->", str(pmb_mon_01.time.max().values))
+print("PMB uncertainty time range :", str(pmb_unc_mon_01.time.min().values), "->", str(pmb_unc_mon_01.time.max().values))
 print("UA-HIPA time range:", str(uahipa_mon_01.time.min().values), "->", str(uahipa_mon_01.time.max().values))
 
 #%% Build GMP Data Series
@@ -527,6 +545,11 @@ common_time = np.intersect1d(
     gpm_pmw_v07_mon_01["time"].values,
 )
 
+common_time = np.intersect1d(
+    common_time,
+    pmb_unc_mon_01["time"].values,
+)
+
 # common_time = np.intersect1d(
 #     common_time,
 #     uahipa_mon_01["time"].values,
@@ -535,6 +558,7 @@ common_time = np.intersect1d(
 common_time = np.sort(common_time)
 
 pmb_mon_01 = pmb_mon_01.sel(time=common_time)
+pmb_unc_mon_01 = pmb_unc_mon_01.sel(time=common_time)
 era5_mnth_01 = era5_mnth_01.sel(time=common_time)
 gpcp_mon_01 = gpcp_mon_01.sel(time=common_time)
 gpm_pmw_v07_mon_01 = gpm_pmw_v07_mon_01.sel(time=common_time)
@@ -548,6 +572,7 @@ gpm_family_monthly_dict = {
 
 print("\n✅ Common monthly time axis enforced for main product comparison")
 print("PMB :", str(pmb_mon_01.time.min().values), "->", str(pmb_mon_01.time.max().values), pmb_mon_01.sizes["time"])
+print("PMB uncertainty:", str(pmb_unc_mon_01.time.min().values), "->", str(pmb_unc_mon_01.time.max().values), pmb_unc_mon_01.sizes["time"])
 print("ERA5:", str(era5_mnth_01.time.min().values), "->", str(era5_mnth_01.time.max().values), era5_mnth_01.sizes["time"])
 print("GPCP:", str(gpcp_mon_01.time.min().values), "->", str(gpcp_mon_01.time.max().values), gpcp_mon_01.sizes["time"])
 print("GPM :", str(gpm_pmw_v07_mon_01.time.min().values), "->", str(gpm_pmw_v07_mon_01.time.max().values), gpm_pmw_v07_mon_01.sizes["time"])
@@ -581,6 +606,27 @@ regional_monthly_cos_df.to_csv(os.path.join(out_dfs,
 # print(regional_monthly_cos_df.tail())
 # print(regional_monthly_cos_df.groupby(["region", "product"]).size())
 
+#----------------------------------------------------------------------------
+regional_pmb_unc_monthly_df = build_region_monthly_uncertainty_from_basin_painted_field(
+
+    unc_da=pmb_unc_mon_01,
+    basin_mask=basin_mask_01deg,
+    region_defs=REGION_BASINS,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+    value_name="pmb_uncertainty",
+    )
+
+regional_pmb_unc_monthly_df.to_csv(
+    os.path.join(out_dfs, 
+                 f"monthly_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"),
+    index=False,
+)
+
+print("\nPMB regional monthly uncertainty:")
+print(regional_pmb_unc_monthly_df.head())
+print(regional_pmb_unc_monthly_df.tail())
 
 #%% Monthly Climatology
 
@@ -608,6 +654,20 @@ fig, axes = plot_monthly_climatology(
 fig.savefig(svnme, dpi=300)
 plt.show()
 gc.collect()
+
+#----------------------------------------------------------------------------
+region_monthly_clim_pmb_unc = compute_monthly_climatology_uncertainty_from_monthly_unc_df(
+    regional_pmb_unc_monthly_df
+)
+
+region_monthly_clim_pmb_unc.to_csv(
+    os.path.join(out_dfs, 
+                 f"monthly_climatology_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"),
+    index=False,
+)
+
+print("\nPMB monthly climatology uncertainty:")
+print(region_monthly_clim_pmb_unc.head())
 
 #%% Seasonal Climatology
 region_seasonal_clim_cos = compute_seasonal_climatology_from_regional_series(
@@ -714,6 +774,62 @@ fig, axes = plot_seasonal_bias_or_ratio(
     ylim=(0.55, 1.55),
     legend_ncol=3,
 )
+
+#----------------------------------------------------------------------------
+seasonal_pmb_unc_df = monthly_uncertainty_df_to_conventional_seasonal_uncertainty(
+    regional_pmb_unc_monthly_df,
+    require_complete_season=True,
+)
+
+region_seasonal_clim_pmb_unc = compute_seasonal_climatology_uncertainty_from_seasonal_unc_df(
+    seasonal_pmb_unc_df
+)
+
+seasonal_pmb_unc_df.to_csv(
+    os.path.join(out_dfs, 
+                 f"seasonal_timeseries_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"),
+    index=False,
+    )
+
+region_seasonal_clim_pmb_unc.to_csv(
+    os.path.join(out_dfs, 
+                 f"seasonal_climatology_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"),
+    index=False,
+)
+
+print("\nPMB seasonal climatology uncertainty:")
+
+print(region_seasonal_clim_pmb_unc)
+
+
+#----------------------------------------------------------------------------
+fig, axes = plot_seasonal_climatology_with_pmb_uncertainty(
+    region_seasonal_clim_corr,
+    pmb_unc_df=seasonal_pmb_unc_df,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(
+        r"$P_{\mathrm{MB}}$",
+        "ERA5",
+        "GPCP V3.3",
+        "GPM PMW V07",
+        "GPM PMW V07 (corr.)",
+    ),
+    product_styles=product_styles_corr,
+    figsize=(10, 8),
+    ylabel="mm/season",
+    y_nbins=4,
+    legend_ncol=3,
+    unc_label=r"$P_{\mathrm{MB}}$ uncertainty ($\pm 1\sigma$)",
+)
+
+svnme = os.path.join(
+    path_to_plots,
+    f"seasonal_climatology_precip_with_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.png"
+)
+
+fig.savefig(svnme, dpi=500, bbox_inches="tight")
+plt.show()
+gc.collect()
 #%% YEAR BY YEAR SEASONAL TIMESERIES
 # Convert monthly regional values to conventional seasonal means
 seasonal_cos_df = monthly_regional_df_to_conventional_seasonal(
@@ -742,6 +858,10 @@ fig, axes = plot_seasonal_timeseries_regions(
 
 
 #%% Interannual Variability
+# -----------------------------------------------------------------------------
+# 1. Annual product totals
+# -----------------------------------------------------------------------------
+
 region_annual_cos = compute_annual_totals_from_regional_series(
     regional_monthly_cos_df
 )
@@ -768,6 +888,143 @@ fig, axes = plot_interannual_variability(
 )
 
 fig.savefig(svnme, dpi=300)
+plt.show()
+gc.collect()
+
+# -----------------------------------------------------------------------------
+
+# 2. Annual PMB uncertainty
+
+# -----------------------------------------------------------------------------
+
+region_annual_pmb_unc = compute_annual_uncertainty_from_monthly_unc_df(
+    regional_pmb_unc_monthly_df,
+    min_months_per_year=11,
+)
+
+region_annual_pmb_unc.to_csv(
+    os.path.join(
+        out_dfs,
+        f"annual_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"
+    ),
+    index=False,
+)
+
+print("\nPMB annual uncertainty:")
+print(region_annual_pmb_unc.head())
+print(region_annual_pmb_unc.tail())
+
+svnme = os.path.join(
+    path_to_plots,
+    f'interannual_variability_precip_over_imbie_basins_with_PMB_uncertainty_{cde_run_dte}.png'
+)
+
+fig, axes = plot_interannual_variability(
+    region_annual_corr,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=(
+        r"$P_{\mathrm{MB}}$",
+        "ERA5",
+        "GPCP V3.3",
+        "GPM PMW V07",
+        "GPM PMW V07 (corr.)",
+    ),
+    product_styles=product_styles_corr,
+    figsize=(10, 9),
+    ylabel="mm/year",
+    y_nbins=4,
+    legend_ncol=3,
+)
+# -----------------------------------------------------------------------------
+# 3. Add PMB ± 1σ uncertainty band
+# -----------------------------------------------------------------------------
+region_order = ("Antarctica", "West Antarctica", "East Antarctica")
+pmb_label = r"$P_{\mathrm{MB}}$"
+
+for ax, region in zip(axes, region_order):
+
+    pmb_sub = region_annual_corr[
+        (region_annual_corr["region"] == region) &
+        (region_annual_corr["product"] == pmb_label)
+    ].copy()
+
+    unc_sub = region_annual_pmb_unc[
+        region_annual_pmb_unc["region"] == region
+    ].copy()
+
+    pmb_sub = pmb_sub.sort_values("year")
+    unc_sub = unc_sub.sort_values("year")
+
+    band_df = pmb_sub.merge(
+        unc_sub[["region", "year", "pmb_uncertainty"]],
+        on=["region", "year"],
+        how="inner",
+    )
+
+    x = band_df["year"].values
+    y = band_df["precipitation"].values
+    sig = band_df["pmb_uncertainty"].values
+
+    ax.fill_between(
+        x,
+        y - sig,
+        y + sig,
+        color="0.75",
+        alpha=0.45,
+        linewidth=0,
+        label=r"$P_{\mathrm{MB}}$ uncertainty ($\pm 1\sigma$)",
+        zorder=1,
+    )
+
+    # Redraw PMB line above the band
+    ax.plot(
+        x,
+        y,
+        color="black",
+        marker="o",
+        linewidth=2.5,
+        label=pmb_label,
+        zorder=5,
+    )
+
+
+# -----------------------------------------------------------------------------
+# 4. Clean and rebuild legend only once
+# -----------------------------------------------------------------------------
+
+for ax in axes:
+    leg = ax.get_legend()
+    if leg is not None:
+        leg.remove()
+
+for leg in fig.legends:
+    leg.remove()
+
+handles, labels = axes[0].get_legend_handles_labels()
+
+clean_handles = []
+clean_labels = []
+seen = set()
+
+for h, lab in zip(handles, labels):
+    if lab not in seen and not lab.startswith("_"):
+        clean_handles.append(h)
+        clean_labels.append(lab)
+        seen.add(lab)
+
+fig.legend(
+    clean_handles,
+    clean_labels,
+    loc="lower center",
+    ncol=3,
+    frameon=False,
+    bbox_to_anchor=(0.5, -0.015),
+    fontsize=13,
+)
+
+fig.subplots_adjust(bottom=0.16)
+
+fig.savefig(svnme, dpi=300, bbox_inches="tight")
 plt.show()
 gc.collect()
 

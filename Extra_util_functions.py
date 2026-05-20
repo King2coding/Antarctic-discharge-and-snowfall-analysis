@@ -1752,6 +1752,301 @@ def fill_monthly_uncertainty_linear(E_full, limit_area="inside"):
     print("Any negative values after abs():", bool((E_filled < 0).any().any()))
 
     return E_filled
+
+# =============================================================================
+# PMB-ONLY REGIONAL MONTHLY UNCERTAINTY SERIES
+# =============================================================================
+
+# pmb_unc_mon_01 is a basin-level uncertainty field painted to pixels.
+# Therefore, do not treat every pixel as independent.
+#
+# We first reduce uncertainty to basin-level values, then propagate to each
+# regional cosine-weighted mean as:
+#
+#     sigma_region = sqrt(sum((w_basin * sigma_basin)^2))
+#
+# where w_basin is the normalized cosine-area weight of each basin in the region.
+# =============================================================================
+
+def build_region_monthly_uncertainty_from_basin_painted_field(
+    unc_da,
+    basin_mask,
+    region_defs,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+    value_name="pmb_uncertainty",
+):
+    """
+    Build regional PMB monthly uncertainty from basin-painted PMB uncertainty maps.
+
+    Important:
+    The PMB uncertainty field is painted constant within each basin. Therefore,
+    pixels inside the same basin are not independent. We first recover one
+    basin-level uncertainty value per month, then propagate to the regional
+    cosine-weighted mean using basin weights:
+
+        sigma_region = sqrt(sum((w_basin * sigma_basin)^2))
+
+    where w_basin is the normalized cosine-area weight of each basin within
+    the region.
+    """
+
+    rows = []
+
+    # Make sure basin mask matches uncertainty grid
+    basin_mask = basin_mask.where(np.isfinite(basin_mask))
+
+    # Cosine latitude weights on target grid
+    lat_weights = np.cos(np.deg2rad(unc_da[lat_name]))
+    weight_2d = xr.ones_like(basin_mask) * lat_weights
+
+    for region_name, basin_ids in region_defs.items():
+
+        region_basin_mask = basin_mask.where(basin_mask.isin(basin_ids))
+        region_weight = weight_2d.where(region_basin_mask.notnull())
+
+        # Basin area/cosine weights for the regional mean
+        basin_weight_sum = (
+            region_weight
+            .groupby(region_basin_mask.rename("basin_id"))
+            .sum(skipna=True)
+        )
+
+        basin_weight_sum = basin_weight_sum.where(
+            np.isfinite(basin_weight_sum),
+            drop=True
+        )
+
+        basin_weights_norm = basin_weight_sum / basin_weight_sum.sum(skipna=True)
+
+        # Recover one uncertainty value per basin/month.
+        # xarray stacks lat/lon internally when grouping by a 2D basin mask,
+        # so reduce over the stacked spatial dimension.
+        unc_grouped = (
+            unc_da
+            .where(region_basin_mask.notnull())
+            .groupby(region_basin_mask.rename("basin_id"))
+            .mean(dim="stacked_lat_lon", skipna=True)
+        )
+
+        # Keep only common basin IDs
+        common_basin_ids = np.intersect1d(
+            unc_grouped["basin_id"].values,
+            basin_weights_norm["basin_id"].values,
+        )
+
+        unc_grouped = unc_grouped.sel(basin_id=common_basin_ids)
+        basin_weights_norm = basin_weights_norm.sel(basin_id=common_basin_ids)
+
+        # Propagate uncertainty of weighted regional mean
+        sigma_region = np.sqrt(
+            ((unc_grouped * basin_weights_norm) ** 2).sum("basin_id", skipna=True)
+        )
+
+        for t in sigma_region[time_name].values:
+            rows.append({
+                "time": pd.to_datetime(t),
+                "region": region_name,
+                value_name: float(sigma_region.sel({time_name: t}).values),
+            })
+
+    return pd.DataFrame(rows)
+
+#-------------------------------------------------------------------------------
+# =============================================================================
+
+# PMB monthly climatology uncertainty by region
+
+# =============================================================================
+
+# For climatological monthly mean:
+
+#
+
+#     sigma_clim = sqrt(sum(sigma_i^2)) / n
+
+#
+
+# where i is the number of years contributing to each calendar month.
+
+# =============================================================================
+
+def compute_monthly_climatology_uncertainty_from_monthly_unc_df(
+
+    unc_df,
+    time_col="time",
+    region_col="region",
+    unc_col="pmb_uncertainty",
+):
+
+    df = unc_df.copy()
+    df[time_col] = pd.to_datetime(df[time_col])
+    df["month"] = df[time_col].dt.month
+    rows = []
+
+    for (region, month), g in df.groupby([region_col, "month"]):
+        vals = g[unc_col].dropna().values
+        n = len(vals)
+        if n == 0:
+            sigma = np.nan
+        else:
+            sigma = np.sqrt(np.sum(vals ** 2)) / n
+        rows.append({
+            "region": region,
+            "month": int(month),
+            "pmb_uncertainty": sigma,
+            "n": n,
+        })
+
+    return pd.DataFrame(rows)
+
+# =============================================================================
+
+# PMB seasonal climatology uncertainty by region
+
+# =============================================================================
+
+# For each complete season:
+
+#     sigma_season = sqrt(sum(sigma_month^2))
+
+#
+
+# For climatological mean seasonal uncertainty:
+
+#     sigma_clim_season = sqrt(sum(sigma_season_i^2)) / n
+
+# =============================================================================
+
+def monthly_uncertainty_df_to_conventional_seasonal_uncertainty(
+
+    unc_df,
+    time_col="time",
+    region_col="region",
+    unc_col="pmb_uncertainty",
+    require_complete_season=True,
+):
+
+    df = unc_df.copy()
+    df[time_col] = pd.to_datetime(df[time_col])
+    # Assign conventional season-year:
+    # DJF belongs to the year of Jan/Feb.
+    df["year"] = df[time_col].dt.year
+    df["month"] = df[time_col].dt.month
+    df["season"] = np.select(
+        [
+            df["month"].isin([12, 1, 2]),
+            df["month"].isin([3, 4, 5]),
+            df["month"].isin([6, 7, 8]),
+            df["month"].isin([9, 10, 11]),
+        ],
+
+        ["DJF", "MAM", "JJA", "SON"],
+        default=np.nan,
+
+    )
+
+    # December belongs to next DJF year
+    df["season_year"] = df["year"]
+    df.loc[df["month"] == 12, "season_year"] = df.loc[df["month"] == 12, "year"] + 1
+
+    rows = []
+
+    for (region, season_year, season), g in df.groupby([region_col, "season_year", "season"]):
+        vals = g[unc_col].dropna().values
+        n_months = len(vals)
+
+        if require_complete_season and n_months != 3:
+            continue
+
+        sigma = np.sqrt(np.sum(vals ** 2))
+        rows.append({
+            "region": region,
+            "year": int(season_year),
+            "season": season,
+            "pmb_uncertainty": sigma,
+            "n_months": n_months,
+        })
+
+    out = pd.DataFrame(rows)
+
+    season_order = ["DJF", "MAM", "JJA", "SON"]
+    out["season"] = pd.Categorical(out["season"], categories=season_order, ordered=True)
+
+    return out.sort_values(["region", "year", "season"]).reset_index(drop=True)
+#-------------------------------------------------------------------------------
+def compute_seasonal_climatology_uncertainty_from_seasonal_unc_df(
+
+    seasonal_unc_df,
+    region_col="region",
+    season_col="season",
+    unc_col="pmb_uncertainty",
+
+    ):
+    rows = []
+
+    for (region, season), g in seasonal_unc_df.groupby([region_col, season_col]):
+        
+        vals = g[unc_col].dropna().values
+        n = len(vals)
+
+        if n == 0:
+            sigma = np.nan
+
+        else:
+            sigma = np.sqrt(np.sum(vals ** 2)) / n
+
+        rows.append({
+            "region": region,
+            "season": season,
+            "pmb_uncertainty": sigma,
+            "n": n,
+        })
+
+    return pd.DataFrame(rows)
+
+#-------------------------------------------------------------------------------
+# =============================================================================
+# PMB annual regional uncertainty
+# =============================================================================
+# For each year:
+#     sigma_annual = sqrt(sum(sigma_month^2))
+# using complete 12-month years only.
+# =============================================================================
+
+def compute_annual_uncertainty_from_monthly_unc_df(
+    unc_df,
+    time_col="time",
+    region_col="region",
+    unc_col="pmb_uncertainty",
+    min_months_per_year=12,
+):
+    df = unc_df.copy()
+    df[time_col] = pd.to_datetime(df[time_col])
+    df["year"] = df[time_col].dt.year
+
+    rows = []
+
+    for (region, year), g in df.groupby([region_col, "year"]):
+        vals = g[unc_col].dropna().values
+        n_months = len(vals)
+
+        if n_months < min_months_per_year:
+            continue
+
+        sigma = np.sqrt(np.sum(vals ** 2))
+
+        rows.append({
+            "region": region,
+            "year": int(year),
+            "pmb_uncertainty": sigma,
+            "n_months": n_months,
+        })
+
+    return pd.DataFrame(rows)
+
+
 #%% PLOT MONTHLY PMB TIME SERIES BY BASIN FOR SELECTED REGION/YEAR
 # =============================================================================
 # Purpose:
