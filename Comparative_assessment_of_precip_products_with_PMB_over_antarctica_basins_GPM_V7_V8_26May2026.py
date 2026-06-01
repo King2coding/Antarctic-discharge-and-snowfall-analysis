@@ -828,10 +828,10 @@ bias_ratio_df = compute_seasonal_bias_and_ratio(
 fig, axes = plot_seasonal_bias_or_ratio(
     bias_ratio_df,
     y_col="pct_diff_vs_ref",
-    product_order=("ERA5", "GPCP V3.3"),  # "UA-HIPA" removed
+    product_order=("ERA5", "GPCP V3.3", "GPM PMW V08"),  # "UA-HIPA" removed
     product_styles=product_styles_corr,
     ylabel=r"% difference relative to $P_{\mathrm{MB}}$",
-    ylim=(-35, 35),
+    ylim=(-40, 40),
     legend_ncol=3,
 )
 
@@ -839,10 +839,10 @@ fig, axes = plot_seasonal_bias_or_ratio(
 fig, axes = plot_seasonal_bias_or_ratio(
     bias_ratio_df,
     y_col="ref_to_product_ratio",
-    product_order=("ERA5", "GPCP V3.3", "UA-HIPA"),
+    product_order=("ERA5", "GPCP V3.3", "GPM PMW V08"),
     product_styles=product_styles_corr,
     ylabel=r"$P_{\mathrm{MB}}$ / Product",
-    ylim=(0.55, 1.55),
+    ylim=(0.55, 1.85),
     legend_ncol=3,
 )
 
@@ -1355,7 +1355,7 @@ fig_sc_basin, axes_sc_basin, stats_sc_basin = plot_pmb_scatter_oldstyle(
     scale="log",
     log_min=2,
     log_ticks=(5, 10, 20, 50, 100, 200, 500, 1000, 2000),
-    ncols=3,
+    ncols=4,
     figsize_per_col=4.8,
     figsize_per_row=4.5,
     share_axes=False,
@@ -1382,7 +1382,7 @@ fig_spread, ax_spread, spread_non_gpm, spread_gpm = plot_basin_spread_points_dua
     figsize=(13, 5.2),
     log_scale=True,
     ylim=(2, 2000),
-    legend_ncol=4,
+    legend_ncol=5,
     place_key=True,
 )
 
@@ -1470,8 +1470,33 @@ gpm_pmw_mon_08 = build_gpm_pmw_v8_mean(
 
 print("GPM PMW V08:", gpm_pmw_mon_08.shape, gpm_pmw_mon_08.name)
 
+atms_pack_v08 = build_basin_mean_plot_product(
+    atms_mon_01_v08,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "ATMS V08"
+)
 
+mhs_pack_v08 = build_basin_mean_plot_product(
+    mhs_mon_01_v08,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "MHS V08"
+)
 
+dmsp_pack_v08 = build_basin_mean_plot_product(
+    dmsp_mon_01_v08,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "DMSP-SSMIS V08"
+)
+
+amsr2_pack_v08 = build_basin_mean_plot_product(
+    amsr2_mon_01_v08,
+    basin_mask_01deg_clean,
+    BASIN_IDS,
+    "AMSR2 V08"
+)
 # -------------------------------------------------------------------------
 # 3. Build basin-aggregated annual-mean packs
 # -------------------------------------------------------------------------
@@ -1524,12 +1549,16 @@ arr_lst_mean = [
     (pmb_pack["product"],      pmb_pack["plot_grid"],      pmb_pack["panel_mean"]),
     (era5_pack["product"],     era5_pack["plot_grid"],     era5_pack["panel_mean"]),
     (gpcp_pack["product"],     gpcp_pack["plot_grid"],     gpcp_pack["panel_mean"]),
+    (atms_pack_v08["product"],     atms_pack_v08["plot_grid"],     atms_pack_v08["panel_mean"]),
+    (mhs_pack_v08["product"],      mhs_pack_v08["plot_grid"],      mhs_pack_v08["panel_mean"]),
+    (dmsp_pack_v08["product"],     dmsp_pack_v08["plot_grid"],     dmsp_pack_v08["panel_mean"]),
+    (amsr2_pack_v08["product"],    amsr2_pack_v08["plot_grid"],    amsr2_pack_v08["panel_mean"]),
     (gpm_pmw_v08_pack["product"],  gpm_pmw_v08_pack["plot_grid"],  gpm_pmw_v08_pack["panel_mean"]),
     # (ua_hipa_pack["product"],  ua_hipa_pack["plot_grid"],  ua_hipa_pack["panel_mean"]),
-    # (atms_pack["product"],     atms_pack["plot_grid"],     atms_pack["panel_mean"]),
-    # (mhs_pack["product"],      mhs_pack["plot_grid"],      mhs_pack["panel_mean"]),
-    # (dmsp_pack["product"],     dmsp_pack["plot_grid"],     dmsp_pack["panel_mean"]),
-    # (amsr2_pack["product"],    amsr2_pack["plot_grid"],    amsr2_pack["panel_mean"]),
+    (atms_pack["product"] + " V07",     atms_pack["plot_grid"],     atms_pack["panel_mean"]), # atms_pack["product"],     atms_pack["plot_grid"],     atms_pack["panel_mean"]),
+    (mhs_pack["product"] + " V07",      mhs_pack["plot_grid"],      mhs_pack["panel_mean"]),
+    (dmsp_pack["product"] + " V07",     dmsp_pack["plot_grid"],     dmsp_pack["panel_mean"]),
+    (amsr2_pack["product"] + " V07",    amsr2_pack["plot_grid"],    amsr2_pack["panel_mean"]),
     (gpm_pmw_pack["product"],  gpm_pmw_pack["plot_grid"],  gpm_pmw_pack["panel_mean"]),
     
 ]
@@ -1539,19 +1568,19 @@ svnme = os.path.join(path_to_plots, f'basin_mean_annual_precip_over_imbie_basins
 fig, axes, cb1, cb2 = compare_mean_precip_basin_dual_cbar(
     arr_lst_mean=arr_lst_mean,
     basin_mask_latlon=basin_mask_01deg_clean,
-    group1_idx=[0, 1, 2,3], # [0, 1, 2,3]
-    group2_idx=[4],#[3, 4, 5, 6, 7], # [4, 5, 6, 7, 8]
+    group1_idx=[0, 1, 2, 3, 4, 5, 6, 7], # [0, 1, 2,3]
+    group2_idx=[8, 9, 10, 11, 12],#[3, 4, 5, 6, 7], # 
     ncols=4,
     gamma1=0.6,
     vmin1=0,
     vmax1=400,
     cbar_tcks1=[0, 25, 50, 100, 200, 300, 400],
-    cbar_label1="axes (a, b, c, d)",
+    cbar_label1="axes (a, b, c, d,e, f, g, h)",
     gamma2=0.6,
     vmin2=0,
     vmax2=80,
     cbar_tcks2=[0, 5, 10, 20, 40, 60, 80],
-    cbar_label2="axes e", # (e, f, g, h, i)
+    cbar_label2="axes (i, j, k, l, m)",
     panel_letters=True,
     show_panel_mean=True,
 )
@@ -1560,6 +1589,46 @@ plt.show()
 fig.savefig(svnme, dpi=300)
 
 plt.show()
+gc.collect()
+
+#------------------------------------------------------------------------------
+svnme = os.path.join(
+    path_to_plots,
+    f"basin_mean_annual_precip_over_imbie_basins_GPM_V7_V8_{cde_run_dte}.png"
+)
+
+fig, axes, cb1, cb2 = compare_mean_precip_basin_v7_v8_three_row_cbar(
+    arr_lst_mean=arr_lst_mean,
+    basin_mask_latlon=basin_mask_01deg_clean,
+
+    # Row 1: PMB, ERA5, GPCP V3.3
+    row1_idx=[0, 1, 2],
+
+    # Row 2: GPM PMW V8 members + V8 mean
+    row2_idx=[3, 4, 5, 6, 7],
+
+    # Row 3: GPM PMW V7 members + V7 mean
+    row3_idx=[8, 9, 10, 11, 12],
+
+    gamma_main=0.6,
+    vmin_main=0,
+    vmax_main=400,
+    cbar_tcks_main=[0, 25, 50, 100, 200, 300, 400],
+    cbar_label_main="Rows 1–2: PMB, ERA5, GPCP V3.3, and GPM PMW V8",
+
+    gamma_v7=0.6,
+    vmin_v7=0,
+    vmax_v7=80,
+    cbar_tcks_v7=[0, 5, 10, 20, 40, 60, 80],
+    cbar_label_v7="Row 3: GPM PMW V7",
+
+    panel_letters=True,
+    show_panel_mean=True,
+)
+
+plt.show()
+
+fig.savefig(svnme, dpi=300, bbox_inches="tight")
 gc.collect()
 
 #==============================================================================

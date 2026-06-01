@@ -4241,7 +4241,7 @@ def compare_mean_precip_basin_dual_cbar(
     sm1 = ScalarMappable(norm=norm1, cmap=cmap)
     sm1.set_array([])
 
-    cb1 = fig.colorbar(sm1, cax=cax1, orientation="vertical")
+    cb1 = fig.colorbar(sm1, cax=cax1, orientation="vertical", extend="max")
     if cbar_tcks1 is not None:
         cb1.set_ticks(cbar_tcks1)
     cb1.ax.tick_params(labelsize=11)
@@ -4254,7 +4254,7 @@ def compare_mean_precip_basin_dual_cbar(
     sm2 = ScalarMappable(norm=norm2, cmap=cmap)
     sm2.set_array([])
 
-    cb2 = fig.colorbar(sm2, cax=cax2, orientation="vertical")
+    cb2 = fig.colorbar(sm2, cax=cax2, orientation="vertical", extend="max")
     if cbar_tcks2 is not None:
         cb2.set_ticks(cbar_tcks2)
     cb2.ax.tick_params(labelsize=11)
@@ -4263,6 +4263,188 @@ def compare_mean_precip_basin_dual_cbar(
     cb2.set_label(cbar_label2, fontsize=10)
 
     return fig, axes, cb1, cb2
+
+#===============================================================================
+def compare_mean_precip_basin_v7_v8_three_row_cbar(
+    arr_lst_mean,
+    basin_mask_latlon,
+    row1_idx=(0, 1, 2),
+    row2_idx=(3, 4, 5, 6, 7),
+    row3_idx=(8, 9, 10, 11, 12),
+    ncols=5,
+    figsize=None,
+    cmap=None,
+    gamma_main=0.6,
+    vmin_main=0,
+    vmax_main=400,
+    cbar_tcks_main=None,
+    cbar_label_main="Rows 1–2: PMB, ERA5, GPCP V3.3, and GPM PMW V8",
+    gamma_v7=0.6,
+    vmin_v7=0,
+    vmax_v7=80,
+    cbar_tcks_v7=None,
+    cbar_label_v7="Row 3: GPM PMW V7",
+    panel_letters=True,
+    show_panel_mean=True,
+    mean_fmt="Mean: {:.0f}",
+    mean_xy=(0.07, 0.93),
+    mean_fontsize=15,
+):
+    """
+    Three-row Antarctic basin precipitation figure.
+
+    Row 1:
+        PMB, ERA5, GPCP V3.3
+
+    Row 2:
+        GPM PMW V8 constellation members and/or mean
+
+    Row 3:
+        GPM PMW V7 constellation members and/or mean
+
+    Rows 1–2 share the main 0–400 mm/year color scale.
+    Row 3 uses a separate low-magnitude color scale for V7.
+    """
+
+    if len(arr_lst_mean) == 0:
+        raise ValueError("arr_lst_mean is empty.")
+
+    row1_idx = list(row1_idx)
+    row2_idx = list(row2_idx)
+    row3_idx = list(row3_idx)
+
+    idx_all = set(range(len(arr_lst_mean)))
+    idx_rows = set(row1_idx).union(row2_idx).union(row3_idx)
+
+    if idx_rows != idx_all:
+        raise ValueError(
+            "row1_idx, row2_idx, and row3_idx must cover all panels exactly. "
+            f"len(arr_lst_mean)={len(arr_lst_mean)}, expected indices={sorted(idx_all)}, "
+            f"provided indices={sorted(idx_rows)}"
+        )
+
+    if (
+        set(row1_idx).intersection(row2_idx)
+        or set(row1_idx).intersection(row3_idx)
+        or set(row2_idx).intersection(row3_idx)
+    ):
+        raise ValueError("row1_idx, row2_idx, and row3_idx must not overlap.")
+
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet if cmap is None else cmap
+
+    norm_main = PowerNorm(gamma=gamma_main, vmin=vmin_main, vmax=vmax_main)
+    norm_v7 = PowerNorm(gamma=gamma_v7, vmin=vmin_v7, vmax=vmax_v7)
+
+    if cbar_tcks_main is None:
+        cbar_tcks_main = [0, 25, 50, 100, 200, 300, 400]
+
+    if cbar_tcks_v7 is None:
+        cbar_tcks_v7 = [0, 5, 10, 20, 40, 60, 80]
+
+    # Fixed 3-row, 5-column layout.
+    nrows = 3
+    ncols = 5
+
+    if figsize is None:
+        figsize = (4.0 * ncols + 1.4, 4.2 * nrows)
+
+    fig, axes2d = plt.subplots(
+        nrows,
+        ncols,
+        subplot_kw={"projection": proj},
+        figsize=figsize
+    )
+
+    fig.subplots_adjust(
+        left=0.035,
+        right=0.865,
+        top=0.96,
+        bottom=0.06,
+        wspace=0.06,
+        hspace=0.18
+    )
+
+    axes2d = np.asarray(axes2d)
+
+    # Hide all axes first.
+    for ax in axes2d.ravel():
+        ax.set_visible(False)
+
+    # Layout positions:
+    # Row 1 has 3 panels centered in columns 1, 2, 3.
+    # Row 2 has 5 panels across all columns.
+    # Row 3 has 5 panels across all columns.
+    layout_positions = {}
+
+    row1_cols = [1, 2, 3]
+    for idx, col in zip(row1_idx, row1_cols):
+        layout_positions[idx] = (0, col)
+
+    for idx, col in zip(row2_idx, range(5)):
+        layout_positions[idx] = (1, col)
+
+    for idx, col in zip(row3_idx, range(5)):
+        layout_positions[idx] = (2, col)
+
+    letters = list("abcdefghijklmnopqrstuvwxyz")
+
+    axes_out = []
+
+    for i, (product_name, plot_grid, panel_mean) in enumerate(arr_lst_mean):
+        r, c = layout_positions[i]
+        ax = axes2d[r, c]
+        ax.set_visible(True)
+
+        panel_label = letters[i] if panel_letters and i < len(letters) else None
+
+        if i in row3_idx:
+            norm = norm_v7
+        else:
+            norm = norm_main
+
+        _plot_single_polar_basin_panel(
+            ax=ax,
+            product_name=product_name,
+            basin_plot_grid=plot_grid,
+            basin_mask_latlon=basin_mask_latlon,
+            panel_mean=panel_mean if show_panel_mean else np.nan,
+            proj=proj,
+            cmap=cmap,
+            norm=norm,
+            panel_label=panel_label,
+            mean_fmt=mean_fmt,
+            mean_xy=mean_xy,
+            mean_fontsize=mean_fontsize,
+        )
+
+        axes_out.append(ax)
+
+    # Main colorbar for rows 1 and 2.
+    cax1 = fig.add_axes([0.89, 0.43, 0.016, 0.42])
+    sm1 = ScalarMappable(norm=norm_main, cmap=cmap)
+    sm1.set_array([])
+
+    cb1 = fig.colorbar(sm1, cax=cax1, orientation="vertical", extend="max")
+    cb1.set_ticks(cbar_tcks_main)
+    cb1.ax.tick_params(labelsize=11)
+    cb1.ax.minorticks_off()
+    cb1.ax.set_title("mm/year", fontsize=12, pad=12)
+    cb1.set_label(cbar_label_main, fontsize=10)
+
+    # Separate V7 colorbar for row 3.
+    cax2 = fig.add_axes([0.89, 0.10, 0.016, 0.22])
+    sm2 = ScalarMappable(norm=norm_v7, cmap=cmap)
+    sm2.set_array([])
+
+    cb2 = fig.colorbar(sm2, cax=cax2, orientation="vertical", extend="max")
+    cb2.set_ticks(cbar_tcks_v7)
+    cb2.ax.tick_params(labelsize=11)
+    cb2.ax.minorticks_off()
+    cb2.ax.set_title("mm/year", fontsize=12, pad=12)
+    cb2.set_label(cbar_label_v7, fontsize=10)
+
+    return fig, axes_out, cb1, cb2
 
 #===============================================================================
 # plot_regional_mean_annual_bars
