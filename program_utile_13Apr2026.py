@@ -2,6 +2,9 @@
 from program_utils import *
 from Extra_util_functions import *
 import matplotlib.patheffects as pe
+import re
+import glob
+
 #%%
 # Floating Variables
 # -----------------------------------------------------------------------------
@@ -55,6 +58,8 @@ product_order_corr = [
     # "AMSR2 (corr.)",   
     "GPM PMW V07 (corr.)",
     "GPM PMW V07",
+    "GPM PMW V08 (corr.)",
+    "GPM PMW V08",
 ]
 #---------------------------------------------------------------------------------
 
@@ -79,6 +84,9 @@ product_styles_corr = {
     "GPM PMW V07": {"color": "cyan", "lw": 3.5},
     "GPM PMW V07 (corr.)": {"color": "cyan", "ls": "--", "lw": 3.5},
 
+    "GPM PMW V08": {"color": "green", "lw": 3.5},
+    "GPM PMW V08 (corr.)": {"color": "green", "ls": "--", "lw": 3.5},
+
     "UA-HIPA": {"color": "magenta", "lw": 2.5},
 }
 #---------------------------------------------------------------------------------
@@ -89,6 +97,7 @@ corr_targets = [
     # "DMSP SSMIS",
     # "AMSR2",
     "GPM PMW V07",
+    "GPM PMW V08",
 ]
 
 product_order = [
@@ -101,6 +110,7 @@ product_order = [
     "DMSP SSMIS",
     "AMSR2",
     "GPM PMW V07",
+    "GPM PMW V08",
 ]
 #---------------------------------------------------------------------------------
 
@@ -114,6 +124,7 @@ product_styles = {
     "DMSP SSMIS": {"lw": 1.5},
     "AMSR2": {"lw": 1.5},
     "GPM PMW V07": {"lw": 1.5},
+    "GPM PMW V08": {"lw": 1.5},
 }
 
 #%%
@@ -802,6 +813,54 @@ def cosine_weighted_mean_masked(da_2d, region_mask, lat_name="lat", lon_name="lo
 
     return num / den
 # =============================================================================
+
+def average_duplicate_time_months_safe(da, time_name="time"):
+    """
+    Safely average duplicate monthly timestamps in a DataArray.
+
+    This avoids xarray groupby(time).mean() issues that can occur when
+    the grouped object no longer exposes 'time' as a normal reducible dimension.
+    """
+    if time_name not in da.dims:
+        raise ValueError(
+            f"Expected '{time_name}' to be a dimension, but got dims={da.dims}"
+        )
+
+    # Normalize all timestamps to month-start
+    time_values = pd.to_datetime(da[time_name].values).to_period("M").to_timestamp()
+    da = da.assign_coords({time_name: time_values})
+
+    # Sort by time
+    da = da.sortby(time_name)
+
+    # If no duplicate months, return directly
+    time_index = pd.Index(da[time_name].values)
+
+    if not time_index.has_duplicates:
+        return da
+
+    print("Duplicate monthly timestamps detected; averaging duplicates safely.")
+
+    unique_times = pd.Index(sorted(time_index.unique()))
+    out = []
+
+    for t in unique_times:
+        idx = np.where(time_index == t)[0]
+
+        tmp = da.isel({time_name: idx})
+
+        if tmp.sizes[time_name] > 1:
+            tmp = tmp.mean(dim=time_name, skipna=True)
+        else:
+            tmp = tmp.isel({time_name: 0}, drop=True)
+
+        tmp = tmp.expand_dims({time_name: [pd.Timestamp(t)]})
+        out.append(tmp)
+
+    da_out = xr.concat(out, dim=time_name)
+    da_out = da_out.sortby(time_name)
+
+    return da_out
 
 # =============================================================================
 
@@ -1887,6 +1946,447 @@ def build_basin_mean_plot_product(
         "panel_mean": panel_mean,
     }
 
+# =============================================================================
+# GPM / GPROF V8 MONTHLY NETCDF PREPROCESSING
+# =============================================================================
+
+
+def collect_gpm_v8_family_files(gpm_satellites_path):
+    """
+    Collect monthly GPM/GPROF V8 NetCDF files by sensor family.
+
+    Expected folder structure:
+        GPM-Constellation-Satellites_MI_and_Sounders/
+            V8/
+                ATMS/monthly/NOAA-20/*.nc
+                DMSP-SSMIS/monthly/F16/*.nc
+                ...
+
+    Returns
+    -------
+    dict
+        Dictionary where keys are sensor-family names and values are sorted file lists.
+    """
+    v8_root = os.path.join(gpm_satellites_path, "V8")
+
+    if not os.path.isdir(v8_root):
+        raise FileNotFoundError(f"V8 folder not found: {v8_root}")
+
+    family_files = {}
+
+    for family in sorted(os.listdir(v8_root)):
+        family_path = os.path.join(v8_root, family)
+
+        if not os.path.isdir(family_path):
+            continue
+
+        monthly_path = os.path.join(family_path, "monthly")
+
+        if not os.path.isdir(monthly_path):
+            continue
+
+        files = sorted(
+            glob.glob(os.path.join(monthly_path, "**", "*.nc"), recursive=True)
+        )
+
+        if len(files) == 0:
+            continue
+
+        display_key = "AMSR2" if family == "GCOM-W1_AMSR2" else family
+        family_files[display_key] = files
+
+    return family_files
+
+
+def parse_gpm_v8_month_from_filename(file_path):
+    """
+    Extract month-start timestamp from GPM/GPROF V8 monthly filename.
+
+    Example filename:
+        3A-CLIM-MO.NOAA20.ATMS.GRID2025R1.20171101-S000000-E235959.11.V08A.nc
+
+    Returns
+    -------
+    pandas.Timestamp
+        Month-start timestamp, e.g., 2017-11-01.
+    """
+    fname = os.path.basename(file_path)
+
+    match = re.search(r"\.(\d{8})-S\d{6}-E\d{6}", fname)
+
+    if match is None:
+        raise ValueError(f"Could not parse date from V8 filename: {fname}")
+
+    date_str = match.group(1)
+    return pd.to_datetime(date_str, format="%Y%m%d").to_period("M").to_timestamp()
+
+
+def clean_gpm_v8_da(da):
+    """
+    Clean common missing/fill values in GPM/GPROF V8 fields.
+    """
+    da = da.where(np.isfinite(da))
+
+    for fill_value in [-9999, -9999.0, -9999.9, -999.9, -999]:
+        da = da.where(da != fill_value)
+
+    return da
+
+
+def open_one_gpm_v8_monthly_file(
+    file_path,
+    var_name="surfacePrecipitation",
+    group="Grid",
+):
+    """
+    Open one monthly GPM/GPROF V8 NetCDF file and return a 2D DataArray
+    with an added monthly time dimension.
+
+    The V8 files appear to store fields as (lon, lat), so this function
+    transposes them to (lat, lon) for consistency with the rest of the workflow.
+    """
+    ds = xr.open_dataset(file_path, group=group)
+
+    if var_name not in ds:
+        raise KeyError(
+            f"{var_name} not found in {file_path}. "
+            f"Available variables: {list(ds.data_vars)}"
+        )
+
+    da = ds[var_name]
+
+    # Keep only the core 2D precipitation field.
+    # Some V8 variables have layer dimensions, but surfacePrecipitation is expected to be 2D.
+    if "layer" in da.dims:
+        raise ValueError(
+            f"{var_name} in {file_path} unexpectedly has a layer dimension. "
+            "Check whether another variable or layer selection is needed."
+        )
+
+    # Standardize dimension order.
+    if set(["lon", "lat"]).issubset(set(da.dims)):
+        da = da.transpose("lat", "lon")
+    else:
+        raise ValueError(f"Expected lon/lat dimensions in {file_path}, got {da.dims}")
+
+    # Add time dimension from filename.
+    file_time = parse_gpm_v8_month_from_filename(file_path)
+    da = da.expand_dims(time=[file_time])
+
+    da = clean_gpm_v8_da(da)
+
+    # Standardize coordinate names and order.
+    da = da.sortby("lon")
+
+    # Keep latitude descending if that matches your current target/basin workflow.
+    da = da.sortby("lat", ascending=False)
+
+    return da
+
+
+def convert_gpm_v8_rate_to_mm_month(da, time_name="time"):
+    """
+    Convert monthly mean precipitation rate to monthly accumulation.
+
+    This assumes surfacePrecipitation is in mm/hr, consistent with the
+    previous GPM/GPROF monthly workflow. Before final use, check:
+
+        xr.open_dataset(file, group='Grid')['surfacePrecipitation'].attrs
+
+    If V8 units are already mm/month, do not use this conversion.
+    """
+    days_in_month = xr.DataArray(
+        pd.to_datetime(da[time_name].values).days_in_month,
+        dims=[time_name],
+        coords={time_name: da[time_name]},
+    )
+
+    return da * 24.0 * days_in_month
+
+
+def prepare_one_gpm_v8_family_monthly(
+    files,
+    family_name,
+    target_template_01deg,
+    basin_mask_01deg,
+    start_time="2013-01-01",
+    end_time="2020-12-31",
+    var_name="surfacePrecipitation",
+    group="Grid",
+    convert_rate_to_month=True,
+):
+    """
+    Prepare one GPM/GPROF V8 sensor family for PMB comparison.
+
+    Steps:
+    1. Open all monthly NetCDF files.
+    2. Add time coordinate from filename.
+    3. Concatenate along time.
+    4. Average duplicate months within a family.
+    5. Optionally convert mm/hr to mm/month.
+    6. Subset Antarctica.
+    7. Reproject to common 0.1° grid.
+    8. Apply basin mask.
+    """
+    print(f"\nPreparing GPM/GPROF V8 {family_name}: {len(files)} files")
+
+    monthly_arrays = []
+
+    for file_path in sorted(files):
+        try:
+            da_one = open_one_gpm_v8_monthly_file(
+                file_path=file_path,
+                var_name=var_name,
+                group=group,
+            )
+            monthly_arrays.append(da_one)
+
+        except Exception as exc:
+            print(f"Skipping file due to error: {file_path}")
+            print(f"Reason: {exc}")
+
+    if len(monthly_arrays) == 0:
+        raise ValueError(f"No valid V8 monthly files found for {family_name}")
+
+    da = xr.concat(monthly_arrays, dim="time")
+
+    # Clean, normalize, sort, and safely average duplicate monthly timestamps
+    da = average_duplicate_time_months_safe(da, time_name="time")
+
+    # Subset analysis period.
+    da = da.sel(time=slice(start_time, end_time))
+
+    if da.sizes.get("time", 0) == 0:
+        raise ValueError(
+            f"{family_name}: no data after time subsetting "
+            f"{start_time} to {end_time}"
+        )
+
+    da = clean_gpm_v8_da(da)
+
+    if convert_rate_to_month:
+        da = convert_gpm_v8_rate_to_mm_month(da, time_name="time")
+
+    da.name = f"{family_name}_V08_mm_month"
+
+    # Antarctic subset.
+    da = subset_antarctica_lat(
+        da,
+        lat_name="lat",
+        north_bound=-55,
+        south_bound=-90,
+    )
+
+    if da.sizes["lat"] == 0 or da.sizes["lon"] == 0:
+        raise ValueError(
+            f"{family_name}: empty spatial domain after Antarctic subset."
+        )
+
+    # Force clean 1D coords and attach CRS.
+    da = ensure_1d_latlon_coords(da, lat_name="lat", lon_name="lon")
+
+    da = da.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=False)
+    da = da.rio.write_crs("EPSG:4326", inplace=False)
+
+    print(
+        f"{family_name} V8 before reprojection: "
+        f"dims={da.dims}, time={da.sizes['time']}, "
+        f"lat={da.sizes['lat']}, lon={da.sizes['lon']}"
+    )
+
+    # Reproject to the common 0.1° grid.
+    da_01 = da.rio.reproject_match(
+        target_template_01deg,
+        resampling=Resampling.nearest,
+    )
+
+    rename_map = {}
+    if "x" in da_01.dims:
+        rename_map["x"] = "lon"
+    if "y" in da_01.dims:
+        rename_map["y"] = "lat"
+    if rename_map:
+        da_01 = da_01.rename(rename_map)
+
+    da_01 = da_01.sortby("lon")
+    da_01 = da_01.sortby("lat", ascending=False)
+
+    da_01 = clean_gpm_v8_da(da_01)
+
+    # Apply basin-analysis mask.
+    da_01 = da_01.where(basin_mask_01deg.notnull())
+    da_01 = da_01.where(da_01["lat"] < -60)
+
+    da_01.name = f"{family_name}_V08_mm_month"
+
+    print(
+        f"{family_name} V8 after reprojection: "
+        f"dims={da_01.dims}, time={da_01.sizes['time']}, "
+        f"lat={da_01.sizes['lat']}, lon={da_01.sizes['lon']}"
+    )
+
+    return da_01
+
+
+def build_gpm_v8_family_monthly_dict(
+    gpm_satellites_path,
+    target_template_01deg,
+    basin_mask_01deg,
+    start_time="2013-01-01",
+    end_time="2020-12-31",
+    convert_rate_to_month=True,
+):
+    """
+    Build monthly 0.1° gridded V8 fields for all available GPM/GPROF families.
+    """
+    family_files = collect_gpm_v8_family_files(gpm_satellites_path)
+
+    print("\nAvailable GPM/GPROF V8 families:")
+    for family_name, files in family_files.items():
+        print(f"  {family_name}: {len(files)} files")
+
+    gpm_v8_family_dict = {}
+
+    for family_name, files in family_files.items():
+        if len(files) == 0:
+            continue
+
+        print("\n" + "=" * 80)
+        print(f"STARTING V8 FAMILY: {family_name}")
+        print(f"Number of files: {len(files)}")
+        print("First file:", files[0])
+        print("Last file: ", files[-1])
+        print("=" * 80)
+
+        try:
+            da_01 = prepare_one_gpm_v8_family_monthly(
+                files=files,
+                family_name=family_name,
+                target_template_01deg=target_template_01deg,
+                basin_mask_01deg=basin_mask_01deg,
+                start_time=start_time,
+                end_time=end_time,
+                convert_rate_to_month=convert_rate_to_month,
+            )
+
+            display_name = family_name
+            if family_name == "DMSP-SSMIS":
+                display_name = "DMSP SSMIS V08"
+            else:
+                display_name = f"{family_name} V08"
+
+            gpm_v8_family_dict[display_name] = da_01
+
+            print(f"SUCCESSFULLY FINISHED V8 FAMILY: {family_name}")
+
+        except Exception as exc:
+            print("\nFAILED V8 FAMILY:")
+            print(family_name)
+            print("First file:", files[0])
+            print("Last file: ", files[-1])
+            print("Error:")
+            print(exc)
+
+            raise
+
+    return gpm_v8_family_dict
+
+
+def build_gpm_pmw_v8_mean(gpm_v8_family_dict, mean_name="GPM PMW V08"):
+    """
+    Build the overall GPM/GPROF V8 passive-microwave mean from prepared
+    family-level monthly fields.
+
+    This function is defensive:
+    - normalizes time to month-start
+    - removes/averages duplicate monthly timestamps within each family
+    - aligns all families on their common/outer monthly time axis
+    - averages across available families using skipna=True
+    """
+
+    cleaned_arrays = []
+    family_names = []
+
+    for name, da in gpm_v8_family_dict.items():
+        print(f"Including in V8 PMW mean: {name}, shape={da.shape}")
+
+        if "time" not in da.dims:
+            raise ValueError(f"{name} has no 'time' dimension. dims={da.dims}")
+
+        # ---------------------------------------------------------------------
+        # 1. Normalize time to month-start
+        # ---------------------------------------------------------------------
+        da = da.copy()
+
+        month_times = pd.to_datetime(da["time"].values).to_period("M").to_timestamp()
+        da = da.assign_coords(time=month_times)
+        da = da.sortby("time")
+
+        # ---------------------------------------------------------------------
+        # 2. Safely average duplicate months inside this family
+        # ---------------------------------------------------------------------
+        time_index = pd.Index(pd.to_datetime(da["time"].values))
+
+        if time_index.has_duplicates:
+            print(f"  WARNING: duplicate months found in {name}; averaging duplicates.")
+
+            unique_times = pd.Index(sorted(time_index.unique()))
+            out = []
+
+            for t in unique_times:
+                idx = np.where(time_index == t)[0]
+                tmp = da.isel(time=idx)
+
+                if tmp.sizes["time"] > 1:
+                    tmp = tmp.mean(dim="time", skipna=True)
+                else:
+                    tmp = tmp.isel(time=0, drop=True)
+
+                tmp = tmp.expand_dims(time=[pd.Timestamp(t)])
+                out.append(tmp)
+
+            da = xr.concat(out, dim="time")
+            da = da.sortby("time")
+
+        # ---------------------------------------------------------------------
+        # 3. Confirm time is now unique
+        # ---------------------------------------------------------------------
+        time_index_after = pd.Index(pd.to_datetime(da["time"].values))
+
+        if time_index_after.has_duplicates:
+            raise ValueError(
+                f"{name} still has duplicate time values after cleaning."
+            )
+
+        print(
+            f"  cleaned: time={da.sizes['time']}, "
+            f"start={time_index_after.min()}, end={time_index_after.max()}"
+        )
+
+        cleaned_arrays.append(da)
+        family_names.append(name)
+
+    if len(cleaned_arrays) == 0:
+        raise ValueError("No GPM/GPROF V8 arrays available to average.")
+
+    # -------------------------------------------------------------------------
+    # 4. Concatenate across V8 families
+    # -------------------------------------------------------------------------
+    stacked = xr.concat(
+        cleaned_arrays,
+        dim=pd.Index(family_names, name="pmw_family"),
+        join="outer",
+        compat="override",
+        coords="minimal",
+    )
+
+    # -------------------------------------------------------------------------
+    # 5. Mean across available families
+    # -------------------------------------------------------------------------
+    pmw_mean = stacked.mean(dim="pmw_family", skipna=True)
+    pmw_mean.name = mean_name
+
+    return pmw_mean
 #%% The plots
 # =============================================================================
 # HELPER FUNCTIONS FOR NICE SYMMETRIC AXES
@@ -3770,34 +4270,87 @@ def compare_mean_precip_basin_dual_cbar(
 def plot_regional_mean_annual_bars(
     df_mean_regional,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
+    product_order=None,
     product_colors=None,
-    figsize=(8.5, 6.0),
+    figsize=None,
     ylabel="[mm/year]",
     title="2013–2020 mean annual precipitation",
     annotate=True,
-    bar_width=0.22,
+    max_total_group_width=0.82,
+    min_bar_width=0.10,
+    max_bar_width=0.22,
+    legend_ncol=None,
+    legend_loc="upper right",
+    ylim_pad_frac=0.14,
 ):
     """
-    Grouped bar chart of regional mean annual precipitation.
+    Adaptive grouped bar chart of regional mean annual precipitation.
+
+    Works better when more products are added because bar width, offsets,
+    figure size, annotation height, y-limit, and legend columns adapt to the
+    number of products.
     """
+
+    # -------------------------------------------------------------------------
+    # 1. Product order and color defaults
+    # -------------------------------------------------------------------------
+    if product_order is None:
+        product_order = list(df_mean_regional["product"].dropna().unique())
+
+    n_regions = len(region_order)
+    n_products = len(product_order)
+
     if product_colors is None:
         product_colors = {
             r"$P_{\mathrm{MB}}$": "black",
             "ERA5": "blue",
             "GPCP v3.3": "orange",
+            "GPCP V3.3": "orange",
+            "GPM PMW V07": "cyan",
+            "GPM PMW V08": "green",
         }
+
+    # -------------------------------------------------------------------------
+    # 2. Adaptive figure size
+    # -------------------------------------------------------------------------
+    if figsize is None:
+        fig_width = max(8.5, 2.4 * n_regions + 0.45 * n_products)
+        fig_height = 6.0
+        figsize = (fig_width, fig_height)
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    x = np.arange(len(region_order))
+    # -------------------------------------------------------------------------
+    # 3. Adaptive bar width and offsets
+    # -------------------------------------------------------------------------
+    bar_width = max_total_group_width / max(n_products, 1)
+    bar_width = np.clip(bar_width, min_bar_width, max_bar_width)
+
+    total_width = bar_width * n_products
     offsets = np.linspace(
-        -bar_width * (len(product_order) - 1) / 2,
-         bar_width * (len(product_order) - 1) / 2,
-         len(product_order)
+        -total_width / 2 + bar_width / 2,
+         total_width / 2 - bar_width / 2,
+         n_products,
     )
 
+    x = np.arange(n_regions)
+
+    # -------------------------------------------------------------------------
+    # 4. Get y-axis range for annotation placement
+    # -------------------------------------------------------------------------
+    y_all = df_mean_regional.loc[
+        df_mean_regional["product"].isin(product_order),
+        "precipitation"
+    ].astype(float).values
+
+    y_max = np.nanmax(y_all)
+    label_offset = 0.018 * y_max
+
+    # -------------------------------------------------------------------------
+    # 5. Plot bars
+    # -------------------------------------------------------------------------
     for off, prod in zip(offsets, product_order):
+
         sub = (
             df_mean_regional[df_mean_regional["product"] == prod]
             .set_index("region")
@@ -3806,13 +4359,33 @@ def plot_regional_mean_annual_bars(
 
         y = sub["precipitation"].values.astype(float)
 
+        # product_colors can be either:
+        #   {"ERA5": "blue"}
+        # or:
+        #   {"ERA5": {"color": "blue", "edgecolor": "black"}}
+        style = product_colors.get(prod, None)
+
+        if isinstance(style, dict):
+            color = style.get("color", None)
+            edgecolor = style.get("edgecolor", "none")
+            hatch = style.get("hatch", None)
+            alpha = style.get("alpha", 1.0)
+        else:
+            color = style
+            edgecolor = "none"
+            hatch = None
+            alpha = 1.0
+
         bars = ax.bar(
             x + off,
             y,
             width=bar_width,
-            color=product_colors.get(prod, None)['color'],
+            color=color,
+            edgecolor=edgecolor,
+            hatch=hatch,
+            alpha=alpha,
             label=prod,
-            zorder=3
+            zorder=3,
         )
 
         if annotate:
@@ -3820,20 +4393,44 @@ def plot_regional_mean_annual_bars(
                 if np.isfinite(val):
                     ax.text(
                         b.get_x() + b.get_width() / 2,
-                        b.get_height() + 0.01 * np.nanmax(df_mean_regional["precipitation"]),
+                        b.get_height() + label_offset,
                         f"{int(round(val))}",
                         ha="center",
                         va="bottom",
-                        fontsize=10,
-                        fontweight="bold"
+                        fontsize=9 if n_products >= 5 else 10,
+                        fontweight="bold",
+                        rotation=0,
+                        clip_on=False,
                     )
 
+    # -------------------------------------------------------------------------
+    # 6. Axes formatting
+    # -------------------------------------------------------------------------
     ax.set_xticks(x)
-    ax.set_xticklabels(region_order, fontsize=15)
+    ax.set_xticklabels(region_order, fontsize=14, fontweight="bold")
+
     ax.set_ylabel(ylabel, fontsize=14, fontweight="bold")
-    # ax.set_title(title, fontsize=15, fontweight="bold")
+
+    if title is not None:
+        ax.set_title(title, fontsize=15, fontweight="bold")
+
     ax.grid(axis="y", linestyle="--", alpha=0.35, zorder=0)
-    ax.legend(frameon=False, fontsize=15)
+
+    ax.set_ylim(0, y_max * (1 + ylim_pad_frac))
+
+    # -------------------------------------------------------------------------
+    # 7. Adaptive legend
+    # -------------------------------------------------------------------------
+    if legend_ncol is None:
+        legend_ncol = 1 if n_products <= 5 else 2
+
+    ax.legend(
+        frameon=False,
+        fontsize=13 if n_products >= 5 else 15,
+        ncol=legend_ncol,
+        loc=legend_loc,
+    )
 
     plt.tight_layout()
+
     return fig, ax

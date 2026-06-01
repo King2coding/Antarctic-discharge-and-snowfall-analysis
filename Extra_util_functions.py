@@ -28,6 +28,33 @@ REGION_BASINS = {
 # If the sheet uses year/month columns instead, the helper below will try to infer them.
 RIGNOT_ERR_DATE_CANDIDATES = ["date", "Date", "time", "Time"]
 
+
+product_styles_corr = {
+    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.5},
+
+    "ERA5": {"color": "blue", "marker": "s", "lw": 2.5},
+    "GPCP V3.3": {"color": "orange", "marker": "D", "lw": 2.5},
+
+    "ATMS": {"color": "tab:blue", "lw": 1.5},
+    "ATMS (corr.)": {"color": "tab:blue", "ls": "--", "lw": 2},
+
+    "MHS": {"color": "lime", "lw": 1.5},
+    "MHS (corr.)": {"color": "lime", "ls": "--", "lw": 2},
+
+    "DMSP SSMIS": {"color": "green", "lw": 1.5},
+    "DMSP SSMIS (corr.)": {"color": "green", "ls": "--", "lw": 2},
+
+    "AMSR2": {"color": "red", "lw": 1.5},
+    "AMSR2 (corr.)": {"color": "red", "ls": "--", "lw": 2},
+
+    "GPM PMW V07": {"color": "cyan", "lw": 3.5},
+    "GPM PMW V07 (corr.)": {"color": "cyan", "ls": "--", "lw": 3.5},
+
+    "GPM PMW V08": {"color": "green", "lw": 3.5},
+    "GPM PMW V08 (corr.)": {"color": "green", "ls": "--", "lw": 3.5},
+
+    "UA-HIPA": {"color": "magenta", "lw": 2.5},
+}
 #%%
 
 
@@ -3513,7 +3540,7 @@ def plot_seasonal_timeseries_regions(
         handles,
         labels,
         loc="lower center",
-        bbox_to_anchor=(0.55, -0.03),
+        bbox_to_anchor=(0.55, -0.04),
         ncol=legend_ncol,
         fontsize=20,
         frameon=False
