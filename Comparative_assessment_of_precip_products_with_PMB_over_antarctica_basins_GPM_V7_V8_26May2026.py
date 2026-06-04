@@ -1391,6 +1391,19 @@ fig_spread.savefig(svnme, dpi=300)
 plt.show()
 gc.collect()
 
+svnme = os.path.join(path_to_plots, f'basin_spread_points_precip_over_imbie_basins_eais_wais_{cde_run_dte}.png')
+fig, axes, spread_outputs = plot_basin_spread_points_by_region(
+    df=df_basin_mean_annual,
+    ref_col=r"$P_{\mathrm{MB}}$",
+    prod_cols=["ERA5", "GPCP V3.3", "GPM PMW V07", "GPM PMW V08"],
+    product_styles=product_styles_corr,
+    figsize=(13, 7.2),
+)
+
+fig.savefig(svnme, dpi=300)
+plt.show()
+gc.collect()
+
 #%% ANnual Mean 
 BASIN_IDS = sorted(AIS_BASINS)
 basin_mask_01deg_clean = basin_mask_01deg.where(basin_mask_01deg < 1e10)
@@ -1621,6 +1634,40 @@ fig, axes, cb1, cb2 = compare_mean_precip_basin_v7_v8_three_row_cbar(
     vmax_v7=80,
     cbar_tcks_v7=[0, 5, 10, 20, 40, 60, 80],
     cbar_label_v7="Row 3: GPM PMW V7",
+
+    panel_letters=True,
+    show_panel_mean=True,
+)
+
+plt.show()
+
+fig.savefig(svnme, dpi=300, bbox_inches="tight")
+gc.collect()
+
+#------------------------------------------------------------------------------
+svnme = os.path.join(
+    path_to_plots,
+    f"basin_mean_annual_precip_over_imbie_basins_GPM_V7_V8_common_cbar_{cde_run_dte}.png"
+)
+
+fig, axes, cb = compare_mean_precip_basin_v7_v8_common_cbar(
+    arr_lst_mean=arr_lst_mean,
+    basin_mask_latlon=basin_mask_01deg_clean,
+
+    # Row 1: PMB, ERA5, GPCP v3.3
+    row1_idx=[0, 1, 2],
+
+    # Row 2: GPM PMW V8 members + V8 mean
+    row2_idx=[3, 4, 5, 6, 7],
+
+    # Row 3: GPM PMW V7 members + V7 mean
+    row3_idx=[8, 9, 10, 11, 12],
+
+    gamma=0.6,
+    vmin=0,
+    vmax=400,
+    cbar_ticks=[0, 25, 50, 100, 200, 300, 400],
+    cbar_label=r"Mean annual precipitation (mm yr$^{-1}$)",
 
     panel_letters=True,
     show_panel_mean=True,
@@ -2220,3 +2267,77 @@ fig, ax = plot_monthly_pmb_by_basin(
 )
 
 plt.show()
+
+
+#%%
+from pathlib import Path
+import pandas as pd
+
+base_dir = Path("/ra1/pubdat/GPM-Constellation-Satellites_MI_and_Sounders/V8")
+
+sensor_dirs = {
+    "ATMS_NOAA20": base_dir / "ATMS/monthly/NOAA-20",
+    "ATMS_SNPP": base_dir / "ATMS/monthly/SNPP",
+
+    "DMSP_SSMIS_F16": base_dir / "DMSP-SSMIS/monthly/F16",
+    "DMSP_SSMIS_F17": base_dir / "DMSP-SSMIS/monthly/F17",
+    "DMSP_SSMIS_F18": base_dir / "DMSP-SSMIS/monthly/F18",
+    "DMSP_SSMIS_F19": base_dir / "DMSP-SSMIS/monthly/F19",
+
+    "AMSR2_GCOMW1": base_dir / "GCOM-W1_AMSR2/monthly",
+
+    "MHS_METOP_A": base_dir / "MHS/monthly/METOP/A",
+    "MHS_METOP_B": base_dir / "MHS/monthly/METOP/B",
+    "MHS_METOP_C": base_dir / "MHS/monthly/METOP/C",
+    "MHS_NOAA18": base_dir / "MHS/monthly/NOAA/NOAA-18",
+    "MHS_NOAA19": base_dir / "MHS/monthly/NOAA/NOAA-19",
+}
+
+rows = []
+
+for name, path in sensor_dirs.items():
+    files = sorted(path.glob("*.nc"))
+
+    rows.append({
+        "sensor_platform": name,
+        "directory": str(path),
+        "n_files": len(files),
+        "first_file": files[0].name if files else None,
+        "last_file": files[-1].name if files else None,
+    })
+
+df_counts = pd.DataFrame(rows).sort_values("sensor_platform")
+df_counts
+
+
+family_map = {
+    "ATMS_NOAA20": "ATMS",
+    "ATMS_SNPP": "ATMS",
+
+    "DMSP_SSMIS_F16": "DMSP-SSMIS",
+    "DMSP_SSMIS_F17": "DMSP-SSMIS",
+    "DMSP_SSMIS_F18": "DMSP-SSMIS",
+    "DMSP_SSMIS_F19": "DMSP-SSMIS",
+
+    "AMSR2_GCOMW1": "AMSR2",
+
+    "MHS_METOP_A": "MHS",
+    "MHS_METOP_B": "MHS",
+    "MHS_METOP_C": "MHS",
+    "MHS_NOAA18": "MHS",
+    "MHS_NOAA19": "MHS",
+}
+
+df_counts["sensor_family"] = df_counts["sensor_platform"].map(family_map)
+
+df_family_counts = (
+    df_counts
+    .groupby("sensor_family", as_index=False)
+    .agg(
+        n_platforms=("sensor_platform", "count"),
+        total_files=("n_files", "sum"),
+    )
+    .sort_values("sensor_family")
+)
+
+df_family_counts

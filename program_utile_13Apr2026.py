@@ -3671,7 +3671,7 @@ def plot_basin_spread_points_dual(
 
     # spread groups
     if non_gpm_group is None:
-        non_gpm_group = [ref_col, "ERA5", "GPCP V3.3"]
+        non_gpm_group = [ref_col, "ERA5", "GPCP V3.3", "GPM PMW V08"]
 
     if gpm_group is None:
         # keep placeholder structure now; when GPM arrives it will drop in naturally
@@ -3721,7 +3721,7 @@ def plot_basin_spread_points_dual(
     # -------------------------------------------------------------------------
     # points for products
     # -------------------------------------------------------------------------
-    fallback_markers = ["o", "s", "D", "^", "v", "P", "X", "*", "h", ">", "<"]
+    fallback_markers = ["o", "s", "D", "^", "o", "P", "X", "*", "h", ">", "<"]
     fallback_sizes   = [8, 8, 8, 8, 8, 8, 8, 9, 8, 8, 8]
 
     for i, col in enumerate(prod_cols):
@@ -3737,7 +3737,7 @@ def plot_basin_spread_points_dual(
         ms     = st.get("markersize", fallback_sizes[i % len(fallback_sizes)])
 
         # optional hollow ERA5 styling
-        is_hollow = (col == "ERA5")
+        is_hollow = col in ["ERA5", "GPM PMW V08"]#(col == "ERA5")
         mfc = "white" if is_hollow else (color if color is not None else None)
 
         ax.plot(
@@ -3910,7 +3910,276 @@ def plot_basin_spread_points_dual(
 
     return fig, ax, spread_non_gpm, spread_gpm
 
+#-----------------------------------------------------------------------------
+def plot_basin_spread_points_by_region(
+    df,
+    basin_col="basin",
+    ref_col=r"$P_{\mathrm{MB}}$",
+    prod_cols=("ERA5", "GPCP V3.3", "GPM PMW V07", "GPM PMW V08"),
+    product_styles=None,
+    non_gpm_group=None,
+    gpm_group=None,
+    wais_basins=(10, 11, 12, 13, 14, 15, 16, 17),
+    eais_basins=(2, 3, 4, 5, 6, 7, 8, 9, 18, 19),
+    figsize=(13, 7.2),
+    pmb_bar_color="lightgray",
+    pmb_edge_color="black",
+    annotate_fontsize=10,
+    annotate_non_gpm_color="black",
+    annotate_gpm_color="dimgray",
+    legend_ncol=5,
+    place_key=True,
+):
+    """
+    Basin-scale precipitation comparison split into WAIS and EAIS panels.
+    Includes spread annotations:
+      - black: spread(PMB, ERA5, GPCP V3.3, GPM PMW V08)
+      - gray: spread(PMB, GPM PMW V07)
+    """
 
+    if product_styles is None:
+        product_styles = {}
+
+    if non_gpm_group is None:
+        non_gpm_group = [ref_col, "ERA5", "GPCP V3.3", "GPM PMW V08"]
+
+    if gpm_group is None:
+        gpm_group = [ref_col, "GPM PMW V07"]
+
+    if ref_col not in non_gpm_group:
+        non_gpm_group = [ref_col] + list(non_gpm_group)
+
+    if ref_col not in gpm_group:
+        gpm_group = [ref_col] + list(gpm_group)
+
+    def spread_pct_for_group(df_local, cols):
+        arrs = []
+
+        for c in cols:
+            if c in df_local.columns:
+                arrs.append(df_local[c].values.astype(float))
+
+        if len(arrs) < 2:
+            return np.full(len(df_local), np.nan)
+
+        vals = np.vstack(arrs)
+        vmin = np.nanmin(vals, axis=0)
+        vmax = np.nanmax(vals, axis=0)
+        vmean = np.nanmean(vals, axis=0)
+
+        out = np.full_like(vmean, np.nan, dtype=float)
+        ok = np.isfinite(vmin) & np.isfinite(vmax) & np.isfinite(vmean) & (vmean != 0)
+        out[ok] = (vmax[ok] - vmin[ok]) / vmean[ok] * 100.0
+
+        return out
+
+    df_plot = df.copy()
+    df_plot[basin_col] = pd.to_numeric(df_plot[basin_col], errors="coerce")
+    df_plot = df_plot[np.isfinite(df_plot[basin_col])].copy()
+    df_plot[basin_col] = df_plot[basin_col].astype(int)
+    df_plot = df_plot.dropna(subset=[ref_col])
+
+    region_info = [
+        ("West Antarctica", list(wais_basins)),
+        ("East Antarctica", list(eais_basins)),
+    ]
+
+    fig, axes = plt.subplots(
+        nrows=2,
+        ncols=1,
+        figsize=figsize,
+        sharex=False
+    )
+
+    fallback_markers = ["s", "D", "^", "o", "P", "X"]
+    fallback_sizes = [8, 8, 8, 8, 8, 8]
+
+    all_handles, all_labels = [], []
+    spread_outputs = {}
+
+    for ax, (region_name, basin_list) in zip(axes, region_info):
+
+        sub = df_plot[df_plot[basin_col].isin(basin_list)].copy()
+        sub = sub.sort_values(basin_col)
+
+        basins = sub[basin_col].values
+        x = np.arange(len(basins))
+        sub = sub.set_index(basin_col).loc[basins]
+
+        # ---------------------------------------------------------------------
+        # PMB bars
+        # ---------------------------------------------------------------------
+        ax.bar(
+            x,
+            sub[ref_col].values.astype(float),
+            color=pmb_bar_color,
+            edgecolor=pmb_edge_color,
+            linewidth=1.0,
+            label=r"$P_{\mathrm{MB}}$",
+            zorder=1,
+        )
+
+        # ---------------------------------------------------------------------
+        # Product points
+        # ---------------------------------------------------------------------
+        for i, col in enumerate(prod_cols):
+            if col not in sub.columns:
+                continue
+
+            y = sub[col].values.astype(float)
+            mask = np.isfinite(y)
+
+            st = product_styles.get(col, {})
+            color = st.get("color", None)
+            marker = st.get("marker", fallback_markers[i % len(fallback_markers)])
+            ms = st.get("markersize", fallback_sizes[i % len(fallback_sizes)])
+
+            is_hollow = col in ["ERA5", "GPM PMW V08"]
+            mfc = "white" if is_hollow else color
+
+            ax.plot(
+                x[mask],
+                y[mask],
+                linestyle="None",
+                marker=marker,
+                markersize=ms,
+                color=color,
+                markerfacecolor=mfc,
+                markeredgecolor=color,
+                markeredgewidth=1.6,
+                label=col,
+                zorder=4,
+            )
+
+        # ---------------------------------------------------------------------
+        # Spread annotations
+        # ---------------------------------------------------------------------
+        spread_non_gpm = spread_pct_for_group(sub, non_gpm_group)
+        spread_gpm = spread_pct_for_group(sub, gpm_group)
+
+        spread_outputs[region_name] = {
+            "basins": basins,
+            "spread_non_gpm": spread_non_gpm,
+            "spread_gpm": spread_gpm,
+        }
+
+        cols_for_top = sorted(set([ref_col] + list(prod_cols) + list(non_gpm_group) + list(gpm_group)))
+        top_stack = np.vstack([
+            sub[c].values.astype(float)
+            for c in cols_for_top
+            if c in sub.columns
+        ])
+        top_val_all = np.nanmax(top_stack, axis=0)
+
+        # set ylim before annotations
+        ymax = np.nanmax(top_val_all)
+        ax.set_ylim(0, ymax * 1.28)
+
+        y_top_axis = ax.get_ylim()[1]
+
+        for xi, top_val, s_ref, s_gpm in zip(x, top_val_all, spread_non_gpm, spread_gpm):
+            if not np.isfinite(top_val):
+                continue
+
+            y1 = min(top_val + 0.13 * y_top_axis, y_top_axis * 0.96)
+            y2 = min(top_val + 0.055 * y_top_axis, y_top_axis * 0.88)
+
+            if np.isfinite(s_ref):
+                ax.text(
+                    xi - 0.10,
+                    y1,
+                    f"{int(round(s_ref))}%",
+                    ha="center",
+                    va="bottom",
+                    fontsize=annotate_fontsize,
+                    fontweight="bold",
+                    color=annotate_non_gpm_color,
+                    zorder=9,
+                    path_effects=[pe.withStroke(linewidth=3.5, foreground="white")]
+                )
+
+            if np.isfinite(s_gpm):
+                ax.text(
+                    xi + 0.10,
+                    y2,
+                    f"{int(round(s_gpm))}%",
+                    ha="center",
+                    va="bottom",
+                    fontsize=annotate_fontsize,
+                    fontweight="bold",
+                    color=annotate_gpm_color,
+                    zorder=9,
+                    path_effects=[pe.withStroke(linewidth=3.5, foreground="white")]
+                )
+
+        # ---------------------------------------------------------------------
+        # Cosmetics
+        # ---------------------------------------------------------------------
+        ax.set_title(region_name, fontsize=15, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(basins, fontsize=13)
+        ax.set_ylabel("[mm/year]", fontsize=14)
+        ax.grid(axis="y", linestyle="--", alpha=0.4, zorder=0)
+
+        handles, labels = ax.get_legend_handles_labels()
+        all_handles.extend(handles)
+        all_labels.extend(labels)
+
+    axes[-1].set_xlabel("Basin", fontsize=15)
+
+    # -------------------------------------------------------------------------
+    # Spread key
+    # -------------------------------------------------------------------------
+    if place_key:
+        axes[0].text(
+            0.01, 0.96,
+            "% = spread($P_{\mathrm{MB}}$, ERA5, GPCP V3.3, GPM PMW V08)",
+            transform=axes[0].transAxes,
+            ha="left",
+            va="top",
+            fontsize=10,
+            color=annotate_non_gpm_color,
+            fontweight="bold",
+        )
+
+        axes[0].text(
+            0.01, 0.88,
+            "% = spread($P_{\mathrm{MB}}$, GPM PMW V07)",
+            transform=axes[0].transAxes,
+            ha="left",
+            va="top",
+            fontsize=10,
+            color=annotate_gpm_color,
+            fontweight="bold",
+        )
+
+    # -------------------------------------------------------------------------
+    # Shared legend
+    # -------------------------------------------------------------------------
+    seen = set()
+    new_handles, new_labels = [], []
+
+    for h, lab in zip(all_handles, all_labels):
+        if lab in seen:
+            continue
+
+        seen.add(lab)
+        new_handles.append(h)
+        new_labels.append(lab)
+
+    fig.legend(
+        new_handles,
+        new_labels,
+        fontsize=13,
+        ncol=legend_ncol,
+        frameon=False,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+    )
+
+    fig.tight_layout(rect=[0, 0.08, 1, 1])
+
+    return fig, axes, spread_outputs
 # =============================================================================
 # ANNUAL SPATIAL COMPARISON ON COMMON LAT-LON GRID
 # WITH COSINE-WEIGHTED PANEL MEAN
@@ -4445,6 +4714,156 @@ def compare_mean_precip_basin_v7_v8_three_row_cbar(
     cb2.set_label(cbar_label_v7, fontsize=10)
 
     return fig, axes_out, cb1, cb2
+
+def compare_mean_precip_basin_v7_v8_common_cbar(
+    arr_lst_mean,
+    basin_mask_latlon,
+    row1_idx=(0, 1, 2),
+    row2_idx=(3, 4, 5, 6, 7),
+    row3_idx=(8, 9, 10, 11, 12),
+    ncols=5,
+    figsize=None,
+    cmap=None,
+    gamma=0.6,
+    vmin=0,
+    vmax=400,
+    cbar_ticks=None,
+    cbar_label=r"Mean annual precipitation (mm yr$^{-1}$)",
+    panel_letters=True,
+    show_panel_mean=True,
+    mean_fmt="Mean: {:.0f}",
+    mean_xy=(0.07, 0.93),
+    mean_fontsize=15,
+):
+    """
+    Three-row Antarctic basin precipitation figure with a common color scale.
+
+    Row 1:
+        PMB, ERA5, GPCP v3.3
+
+    Row 2:
+        GPM PMW V08 constellation members and mean
+
+    Row 3:
+        GPM PMW V07 constellation members and mean
+
+    All panels share a common 0-400 mm yr-1 color scale to allow direct
+    visual comparison of V07 and V08 magnitudes.
+    """
+
+    if len(arr_lst_mean) == 0:
+        raise ValueError("arr_lst_mean is empty.")
+
+    row1_idx = list(row1_idx)
+    row2_idx = list(row2_idx)
+    row3_idx = list(row3_idx)
+
+    idx_all = set(range(len(arr_lst_mean)))
+    idx_rows = set(row1_idx).union(row2_idx).union(row3_idx)
+
+    if idx_rows != idx_all:
+        raise ValueError(
+            "row1_idx, row2_idx, and row3_idx must cover all panels exactly. "
+            f"len(arr_lst_mean)={len(arr_lst_mean)}, expected indices={sorted(idx_all)}, "
+            f"provided indices={sorted(idx_rows)}"
+        )
+
+    if (
+        set(row1_idx).intersection(row2_idx)
+        or set(row1_idx).intersection(row3_idx)
+        or set(row2_idx).intersection(row3_idx)
+    ):
+        raise ValueError("row1_idx, row2_idx, and row3_idx must not overlap.")
+
+    proj = ccrs.SouthPolarStereo()
+    cmap = plt.cm.jet if cmap is None else cmap
+
+    norm = PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax)
+
+    if cbar_ticks is None:
+        cbar_ticks = [0, 25, 50, 100, 200, 300, 400]
+
+    nrows = 3
+    ncols = 5
+
+    if figsize is None:
+        figsize = (4.25 * ncols + 1.3, 4.25 * nrows)
+
+    fig, axes2d = plt.subplots(
+        nrows,
+        ncols,
+        subplot_kw={"projection": proj},
+        figsize=figsize,
+    )
+
+    fig.subplots_adjust(
+        left=0.035,
+        right=0.875,
+        top=0.96,
+        bottom=0.06,
+        wspace=0.12,
+        hspace=0.20,
+    )
+
+    axes2d = np.asarray(axes2d)
+
+    for ax in axes2d.ravel():
+        ax.set_visible(False)
+
+    layout_positions = {}
+
+    # Row 1 has 3 panels centered in columns 1, 2, 3.
+    row1_cols = [1, 2, 3]
+    for idx, col in zip(row1_idx, row1_cols):
+        layout_positions[idx] = (0, col)
+
+    # Rows 2 and 3 use all five columns.
+    for idx, col in zip(row2_idx, range(5)):
+        layout_positions[idx] = (1, col)
+
+    for idx, col in zip(row3_idx, range(5)):
+        layout_positions[idx] = (2, col)
+
+    letters = list("abcdefghijklmnopqrstuvwxyz")
+    axes_out = []
+
+    for i, (product_name, plot_grid, panel_mean) in enumerate(arr_lst_mean):
+        r, c = layout_positions[i]
+        ax = axes2d[r, c]
+        ax.set_visible(True)
+
+        panel_label = letters[i] if panel_letters and i < len(letters) else None
+
+        _plot_single_polar_basin_panel(
+            ax=ax,
+            product_name=product_name,
+            basin_plot_grid=plot_grid,
+            basin_mask_latlon=basin_mask_latlon,
+            panel_mean=panel_mean if show_panel_mean else np.nan,
+            proj=proj,
+            cmap=cmap,
+            norm=norm,
+            panel_label=panel_label,
+            mean_fmt=mean_fmt,
+            mean_xy=mean_xy,
+            mean_fontsize=mean_fontsize,
+        )
+
+        axes_out.append(ax)
+
+    # One shared colorbar for all panels.
+    cax = fig.add_axes([0.90, 0.16, 0.016, 0.68])
+    sm = ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+
+    cb = fig.colorbar(sm, cax=cax, orientation="vertical", extend="max")
+    cb.set_ticks(cbar_ticks)
+    cb.ax.tick_params(labelsize=11)
+    cb.ax.minorticks_off()
+    cb.ax.set_title(r"mm yr$^{-1}$", fontsize=12, pad=12)
+    cb.set_label(cbar_label, fontsize=11)
+
+    return fig, axes_out, cb
 
 #===============================================================================
 # plot_regional_mean_annual_bars
