@@ -155,33 +155,33 @@ basin_name = basin_imbie_with_name_map['basin_name']
 
 # - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
 
-rignot_deltaS_err = pd.read_excel(
-    os.path.join(basin_path, 
-    'DataCombo_RignotBasins.xlsx'), 
-    sheet_name='1-sigma_Error(Gt)')
+# rignot_deltaS_err = pd.read_excel(
+#     os.path.join(basin_path, 
+#     'DataCombo_RignotBasins.xlsx'), 
+#     sheet_name='1-sigma_Error(Gt)')
 
-print("\n[Rignot uncertainty] Loaded 1-sigma error table:")
-print(rignot_deltaS_err.head())
-print("Columns:")
-print(list(rignot_deltaS_err.columns))
+# print("\n[Rignot uncertainty] Loaded 1-sigma error table:")
+# print(rignot_deltaS_err.head())
+# print("Columns:")
+# print(list(rignot_deltaS_err.columns))
 
-tmp = rignot_deltaS_err.copy()
-tmp.columns = [str(c).strip() for c in tmp.columns]
+# tmp = rignot_deltaS_err.copy()
+# tmp.columns = [str(c).strip() for c in tmp.columns]
 
-tmp["date"] = tmp["Time"].apply(
-    lambda x: decimal_year_to_month_start(x, mode="nearest")
-)
+# tmp["date"] = tmp["Time"].apply(
+#     lambda x: decimal_year_to_month_start(x, mode="nearest")
+# )
 
-dup_dates = tmp["date"][tmp["date"].duplicated()].unique()
+# dup_dates = tmp["date"][tmp["date"].duplicated()].unique()
 
-print("Number of duplicate converted dates:", len(dup_dates))
-print("First few duplicate converted dates:")
-print(dup_dates[:10])
+# print("Number of duplicate converted dates:", len(dup_dates))
+# print("First few duplicate converted dates:")
+# print(dup_dates[:10])
 
 rignot_sigmaS_filled_pkl = os.path.join(
     basin_path,
-    "DataCombo_RignotBasins_1sigma_Error_LI_tier1_20260519.pkl"
-)
+    "DataCombo_RignotBasins_1sigma_Error_LI_tier1_GRACE_updated_20260609.pkl"    
+) # "DataCombo_RignotBasins_1sigma_Error_LI_tier1_20260519.pkl"
 
 # - - - - - - - - - - - - - - - - - - - - - - - -- - - -- - - - - - - -- - - - - 
 
@@ -364,8 +364,10 @@ gc.collect()
 # ΔS month-label convention.
 
 rignot_storage = pd.read_pickle(
-    os.path.join(basin_path, "DataCombo_RignotBasins_LI_tier1_20260325.pkl")
-)
+    os.path.join(basin_path, 
+                 "DataCombo_RignotBasins_LI_tier1_GRACE_updated_20260609.pkl")
+                 ) 
+# "DataCombo_RignotBasins_LI_tier1_20260325.pkl"
 
 # Ensure monthly datetime index
 rignot_storage = rignot_storage.copy()
@@ -607,7 +609,7 @@ out_flnme = os.path.join(
     basin_path,
     (
         f"rignot_deltaS_monthly_{YEAR_START}_{YEAR_END}_"
-        f"LI_gap_filled_GRACE_tier1_{correction_tag}_{cde_run_dte}.nc"
+        f"LI_gap_filled_GRACE_tier1_{correction_tag}_GRACE_updated_{cde_run_dte}.nc"
     )
 )
 
@@ -658,7 +660,7 @@ if COMPUTE_PMB_UNCERTAINTY:
         basin_path,
         (
             f"rignot_deltaS_uncertainty_monthly_{YEAR_START}_{YEAR_END}_"
-            f"LI_gap_filled_GRACE_tier1_{correction_tag}_{cde_run_dte}.nc"
+            f"LI_gap_filled_GRACE_tier1_{correction_tag}_GRACE_updated_{cde_run_dte}.nc"
         )
     )
 
@@ -1257,10 +1259,12 @@ encoding = {
 # -----------------------------------------------------------------------------
 # 11. Save positive sublimation-loss field
 # -----------------------------------------------------------------------------
+# fnme = f"sublimation_loss_positive_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022_{cde_run_dte}.nc"
+fnme = "sublimation_loss_positive_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022_20260507.nc"
 
 out_nc = os.path.join(
     racmo_path,
-    f"sublimation_loss_positive_monthlyS_ANT11_RACMO2.4p1_ERA5_2013_2022_{cde_run_dte}.nc"
+    fnme
 )
 
 da.to_netcdf(out_nc, encoding=encoding)
@@ -1687,12 +1691,12 @@ subl_tag = "positive_sublimation_loss"
 
 out_gt = os.path.join(
     basin_path,
-    f"Monthly_mass_budget_precip_RignotBasin_in_GT_{deltaS_output_tag}_{subl_tag}_{cde_run_dte}.nc"
+    f"Monthly_mass_budget_precip_RignotBasin_in_GT_{deltaS_output_tag}_{subl_tag}_GRACE_updated_{cde_run_dte}.nc"
 )
 
 out_mm = os.path.join(
     basin_path,
-    f"Monthly_mass_budget_precip_RignotBasin_in_mm_{deltaS_output_tag}_{subl_tag}_{cde_run_dte}.nc"
+    f"Monthly_mass_budget_precip_RignotBasin_in_mm_{deltaS_output_tag}_{subl_tag}_GRACE_updated_{cde_run_dte}.nc"
 )
 
 Precip_map_Gt.to_netcdf(out_gt)
@@ -1705,12 +1709,12 @@ if COMPUTE_PMB_UNCERTAINTY:
 
     out_unc_gt = os.path.join(
         basin_path,
-        f"Monthly_mass_budget_precip_RignotBasin_uncertainty_in_GT_{deltaS_output_tag}_{subl_tag}_{cde_run_dte}.nc"
+        f"Monthly_mass_budget_precip_RignotBasin_uncertainty_in_GT_{deltaS_output_tag}_{subl_tag}_GRACE_updated_{cde_run_dte}.nc"
     )
 
     out_unc_mm = os.path.join(
         basin_path,
-        f"Monthly_mass_budget_precip_RignotBasin_uncertainty_in_mm_{deltaS_output_tag}_{subl_tag}_{cde_run_dte}.nc"
+        f"Monthly_mass_budget_precip_RignotBasin_uncertainty_in_mm_{deltaS_output_tag}_{subl_tag}_GRACE_updated_{cde_run_dte}.nc"
     )
 
     Pmb_unc_map_Gt.to_netcdf(out_unc_gt)
@@ -1787,7 +1791,7 @@ print("\nMain monthly PMB file expected from earlier save step:")
 print(
     os.path.join(
         basin_path,
-        f"Monthly_mass_budget_precip_RignotBasin_in_mm_{deltaS_output_tag}_{cde_run_dte}.nc"
+        f"Monthly_mass_budget_precip_RignotBasin_in_mm_{deltaS_output_tag}_GRACE_updated_{cde_run_dte}.nc"
     )
 )
 
@@ -1931,7 +1935,7 @@ if len(complete_requested_years) > 0:
 
     annual_outfile = os.path.join(
         basin_path,
-        f"Pmb_annual_complete_years_{annual_year_tag}_mm_{deltaS_output_tag}_{cde_run_dte}.nc"
+        f"Pmb_annual_complete_years_{annual_year_tag}_mm_{deltaS_output_tag}_GRACE_updated_{cde_run_dte}.nc"
     )
 
     Pmm_ann_maps.to_netcdf(annual_outfile)
@@ -1966,7 +1970,7 @@ Pmm_ann_maps_all.attrs.update({
 
 annual_diag_outfile = os.path.join(
     basin_path,
-    f"Pmb_annual_DIAGNOSTIC_including_incomplete_years_{YEARS[0]}_{YEARS[-1]}_mm_{deltaS_output_tag}_{cde_run_dte}.nc"
+    f"Pmb_annual_DIAGNOSTIC_including_incomplete_years_{YEARS[0]}_{YEARS[-1]}_mm_{deltaS_output_tag}_GRACE_updated_{cde_run_dte}.nc"
 )
 
 Pmm_ann_maps_all.to_netcdf(annual_diag_outfile)
@@ -2030,7 +2034,7 @@ Pmm_season.attrs.update({
 
 season_outfile = os.path.join(
     basin_path,
-    f"Pmb_seasonal_mean_monthly_mm_{YEARS[0]}_{YEARS[-1]}_{deltaS_output_tag}_{cde_run_dte}.nc"
+    f"Pmb_seasonal_mean_monthly_mm_{YEARS[0]}_{YEARS[-1]}_{deltaS_output_tag}_GRACE_updated_{cde_run_dte}.nc"
 )
 
 Pmm_season.to_netcdf(season_outfile)
@@ -2080,7 +2084,7 @@ Pmm_clim.attrs.update({
 
 clim_outfile = os.path.join(
     basin_path,
-    f"Pmb_monthly_climatology_mm_{YEARS[0]}_{YEARS[-1]}_{deltaS_output_tag}_{cde_run_dte}.nc"
+    f"Pmb_monthly_climatology_mm_{YEARS[0]}_{YEARS[-1]}_{deltaS_output_tag}_GRACE_updated_{cde_run_dte}.nc"
 )
 
 Pmm_clim.to_netcdf(clim_outfile)
@@ -2145,7 +2149,7 @@ if COMPUTE_PMB_UNCERTAINTY and Punc_mm is not None:
 
     unc_clim_outfile = os.path.join(
         basin_path,
-        f"Pmb_monthly_climatology_uncertainty_mm_{YEARS[0]}_{YEARS[-1]}_{deltaS_output_tag}_{cde_run_dte}.nc"
+        f"Pmb_monthly_climatology_uncertainty_mm_{YEARS[0]}_{YEARS[-1]}_{deltaS_output_tag}_GRACE_updated_{cde_run_dte}.nc"
     )
 
     Punc_clim.to_netcdf(unc_clim_outfile)

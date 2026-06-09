@@ -2654,7 +2654,7 @@ def plot_seasonal_climatology(
     fig.legend(
         handles, labels,
         loc="lower center",
-        bbox_to_anchor=(0.5, -0.03),
+        bbox_to_anchor=(0.56, -0.03),
         ncol=legend_ncol,
         fontsize=15,
         frameon=False
@@ -2853,7 +2853,7 @@ def plot_interannual_variability(
     fig.legend(
         handles, labels,
         loc="lower center",
-        bbox_to_anchor=(0.5, -0.03),
+        bbox_to_anchor=(0.58, -0.03),
         ncol=legend_ncol,
         fontsize=15,
         frameon=False
@@ -4733,7 +4733,7 @@ def compare_mean_precip_basin_v7_v8_common_cbar(
     show_panel_mean=True,
     mean_fmt="Mean: {:.0f}",
     mean_xy=(0.07, 0.93),
-    mean_fontsize=15,
+    mean_fontsize=18,
 ):
     """
     Three-row Antarctic basin precipitation figure with a common color scale.
@@ -4858,10 +4858,10 @@ def compare_mean_precip_basin_v7_v8_common_cbar(
 
     cb = fig.colorbar(sm, cax=cax, orientation="vertical", extend="max")
     cb.set_ticks(cbar_ticks)
-    cb.ax.tick_params(labelsize=11)
+    cb.ax.tick_params(labelsize=15)
     cb.ax.minorticks_off()
-    cb.ax.set_title(r"mm yr$^{-1}$", fontsize=12, pad=12)
-    cb.set_label(cbar_label, fontsize=11)
+    # cb.ax.set_title(r"mm yr$^{-1}$", fontsize=14, pad=12, fontweight="bold")
+    cb.set_label(cbar_label, fontsize=15, fontweight="bold")
 
     return fig, axes_out, cb
 

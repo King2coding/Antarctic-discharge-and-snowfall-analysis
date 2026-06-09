@@ -13,7 +13,7 @@ start_date = "2013-01-01"
 end_date   = "2020-12-01"
 
 #%% Step A — Prepare Full Monthly State Series
-rignot_deltaS = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins.xlsx'), sheet_name='Basin_Timeseries (Gt)')
+rignot_deltaS = pd.read_excel(os.path.join(basin_path, 'DataCombo_RignotBasins_update.xlsx'), sheet_name='Basin_Timeseries (Gt) Update')
 
 # rignot_deltaS["Date"] = rignot_deltaS["Time"].apply(decimal_year_to_date).dt.strftime('%Y-%m-%d')
 # rignot_deltaS['Date'] = pd.to_datetime(rignot_deltaS['Date'])
@@ -81,7 +81,9 @@ for basin in basin_cols:
     S_tier1[basin] = deseason_interp + deseason_interp.index.month.map(climatology)
 
 # save df to disk
-S_tier1.to_pickle(os.path.join(basin_path, f"DataCombo_RignotBasins_LI_tier1_{cde_run_dte}.pkl"))
+s_tier1_pkl = os.path.join(basin_path, f"DataCombo_RignotBasins_LI_tier1_GRACE_updated_{cde_run_dte}.pkl")
+S_tier1.to_pickle(s_tier1_pkl)
+print("\nSaved gap-filled GRACE storage anomaly (Tier 1):", s_tier1_pkl)
 
 #%% Step B2 — Prepare and gap-fill GRACE/altimetry 1-sigma uncertainty
 
@@ -97,8 +99,8 @@ S_tier1.to_pickle(os.path.join(basin_path, f"DataCombo_RignotBasins_LI_tier1_{cd
 # =============================================================================
 
 rignot_deltaS_err = pd.read_excel(
-    os.path.join(basin_path, "DataCombo_RignotBasins.xlsx"),
-    sheet_name="1-sigma_Error(Gt)",
+    os.path.join(basin_path, "DataCombo_RignotBasins_update.xlsx"),
+    sheet_name="1-sigma_Error(Gt) Update",
 )
 
 # Use the same basin columns as the storage anomaly table.
@@ -120,7 +122,7 @@ E_tier1 = fill_monthly_uncertainty_linear(
 # Save outputs
 err_pkl = os.path.join(
     basin_path,
-    f"DataCombo_RignotBasins_1sigma_Error_LI_tier1_{cde_run_dte}.pkl"
+    f"DataCombo_RignotBasins_1sigma_Error_LI_tier1_GRACE_updated_{cde_run_dte}.pkl"
 )
 
 # err_csv = os.path.join(
@@ -175,7 +177,7 @@ for basin in basin_cols:
 S_tier2.index = full_index
 
 # save df to disk
-S_tier2.to_pickle(os.path.join(basin_path, f"DataCombo_RignotBasins_Harmonic_tier2_{cde_run_dte}.pkl"))
+S_tier2.to_pickle(os.path.join(basin_path, f"DataCombo_RignotBasins_Harmonic_tier2_GRACE_updated_{cde_run_dte}.pkl"))
 
 #%%
 # ---------------------------------------------------------

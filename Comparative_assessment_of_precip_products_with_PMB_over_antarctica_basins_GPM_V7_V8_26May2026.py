@@ -33,15 +33,19 @@ ua_file = (
 )
 
 # --- Basin / PMB data ---
+# fnme = "Monthly_mass_budget_precip_RignotBasin_in_mm_forward_deltaS_uncorrected_positive_sublimation_loss_20260507.nc"
+fnme = "Monthly_mass_budget_precip_RignotBasin_in_mm_forward_deltaS_uncorrected_positive_sublimation_loss_GRACE_updated_20260609.nc"
 basins_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins'
 Pmb_mm_fle  = os.path.join(
     basins_path, 
-    "Monthly_mass_budget_precip_RignotBasin_in_mm_forward_deltaS_uncorrected_positive_sublimation_loss_20260507.nc")
+    fnme
+)
 #    'Monthly_mass_budget_precip_RignotBasin_in_mm_20260226.nc')
+# fnme = "Monthly_mass_budget_precip_RignotBasin_uncertainty_in_mm_forward_deltaS_uncorrected_positive_sublimation_loss_20260519.nc"
+fnme = "Monthly_mass_budget_precip_RignotBasin_uncertainty_in_mm_forward_deltaS_uncorrected_positive_sublimation_loss_GRACE_updated_20260609.nc"
 Pmb_unc_mm_fle = os.path.join(
     basins_path,
-    "Monthly_mass_budget_precip_RignotBasin_uncertainty_in_mm_forward_deltaS_uncorrected_positive_sublimation_loss_20260519.nc"
-
+    fnme
 )
 # --- File lists: 2013–2020 only ---
 all_gpcp_v3pt3_mnthly_files = sorted(
@@ -653,7 +657,7 @@ regional_monthly_cos_df = build_all_region_monthly_series_cosine(
 
 # save df
 regional_monthly_cos_df.to_csv(os.path.join(out_dfs, 
-                                            f"monthly_precip_over_imbie_basins_{cde_run_dte}.csv"), index=False)
+                                            f"monthly_precip_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"), index=False)
 
 # print(regional_monthly_cos_df.head())
 # print(regional_monthly_cos_df.tail())
@@ -673,7 +677,7 @@ regional_pmb_unc_monthly_df = build_region_monthly_uncertainty_from_basin_painte
 
 regional_pmb_unc_monthly_df.to_csv(
     os.path.join(out_dfs, 
-                 f"monthly_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"),
+                 f"monthly_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"),
     index=False,
 )
 
@@ -692,7 +696,7 @@ region_monthly_wide_dict = regional_monthly_tidy_to_region_dict(
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
 )
 
-svnme = os.path.join(path_to_plots, f'monthly_climatology_precip_over_imbie_basins_{cde_run_dte}.png')
+svnme = os.path.join(path_to_plots, f'monthly_climatology_precip_over_imbie_basins_GRACE_updated_{cde_run_dte}.png')
 fig, axes = plot_monthly_climatology(
     region_monthly_clim_cos,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
@@ -715,7 +719,7 @@ region_monthly_clim_pmb_unc = compute_monthly_climatology_uncertainty_from_month
 
 region_monthly_clim_pmb_unc.to_csv(
     os.path.join(out_dfs, 
-                 f"monthly_climatology_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"),
+                 f"monthly_climatology_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"),
     index=False,
 )
 
@@ -778,10 +782,9 @@ fig, axes = plot_seasonal_climatology(
     y_nbins=4,
     legend_ncol=3,
 )
-
 svnme = os.path.join(
     path_to_plots,
-    f"seasonal_climatology_precip_over_imbie_basins_{cde_run_dte}.png"
+    f"Fig04_regional_seasonal_climatology_AIS_WAIS_EAIS_2013_2020_GRACE_updated_{cde_run_dte}.png"
 )
 plt.savefig(svnme, dpi=500, bbox_inches="tight")
 # plt.show()
@@ -810,7 +813,7 @@ fig, axes = plot_seasonal_climatology_1x3(
 
 svnme = os.path.join(
     path_to_plots,
-    f"seasonal_climatology_precip_over_imbie_basins_1x3_{cde_run_dte}.png"
+    f"seasonal_climatology_precip_over_imbie_basins_1x3_GRACE_updated_{cde_run_dte}.png"
 )
 
 fig.savefig(svnme, dpi=500, bbox_inches="tight")
@@ -858,13 +861,13 @@ region_seasonal_clim_pmb_unc = compute_seasonal_climatology_uncertainty_from_sea
 
 seasonal_pmb_unc_df.to_csv(
     os.path.join(out_dfs, 
-                 f"seasonal_timeseries_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"),
+                 f"seasonal_timeseries_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"),
     index=False,
     )
 
 region_seasonal_clim_pmb_unc.to_csv(
     os.path.join(out_dfs, 
-                 f"seasonal_climatology_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"),
+                 f"seasonal_climatology_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"),
     index=False,
 )
 
@@ -897,7 +900,7 @@ fig, axes = plot_seasonal_climatology_with_pmb_uncertainty(
 
 svnme = os.path.join(
     path_to_plots,
-    f"seasonal_climatology_precip_with_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.png"
+    f"seasonal_climatology_precip_with_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.png"
 )
 
 fig.savefig(svnme, dpi=500, bbox_inches="tight")
@@ -932,7 +935,12 @@ fig, axes = plot_seasonal_timeseries_regions(
     product_styles=product_styles_corr,
     title_suffix="",
 )
-
+svnme = os.path.join(
+    path_to_plots,
+    f"FigS01_regional_seasonal_interannual_precip_AIS_WAIS_EAIS_2013_2020_GRACE_updated_{cde_run_dte}.png"
+)
+fig.savefig(svnme, dpi=300)
+gc.collect()
 
 #%% Interannual Variability
 # -----------------------------------------------------------------------------
@@ -957,7 +965,10 @@ region_annual_corr_V8 = add_scalar_corrected_pmw_to_annual_df(
     corrected_col="GPM PMW V08 (corr.)",
 )
 
-svnme = os.path.join(path_to_plots, f'interannual_variability_precip_over_imbie_basins_{cde_run_dte}.png')
+svnme = os.path.join(
+    path_to_plots,
+    f"Fig05_regional_interannual_precip_AIS_WAIS_EAIS_2013_2020_GRACE_updated_{cde_run_dte}.png"
+)
 fig, axes = plot_interannual_variability(
     region_annual_corr,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
@@ -980,9 +991,7 @@ plt.show()
 gc.collect()
 
 # -----------------------------------------------------------------------------
-
 # 2. Annual PMB uncertainty
-
 # -----------------------------------------------------------------------------
 
 region_annual_pmb_unc = compute_annual_uncertainty_from_monthly_unc_df(
@@ -993,7 +1002,7 @@ region_annual_pmb_unc = compute_annual_uncertainty_from_monthly_unc_df(
 region_annual_pmb_unc.to_csv(
     os.path.join(
         out_dfs,
-        f"annual_PMB_uncertainty_over_imbie_basins_{cde_run_dte}.csv"
+        f"annual_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"
     ),
     index=False,
 )
@@ -1004,7 +1013,7 @@ print(region_annual_pmb_unc.tail())
 
 svnme = os.path.join(
     path_to_plots,
-    f'interannual_variability_precip_over_imbie_basins_with_PMB_uncertainty_{cde_run_dte}.png'
+    f'Fig05_interannual_variability_precip_over_imbie_basins_with_PMB_uncertainty_GRACE_updated_{cde_run_dte}.png'
 )
 
 fig, axes = plot_interannual_variability(
@@ -1108,7 +1117,7 @@ fig.legend(
     loc="lower center",
     ncol=3,
     frameon=False,
-    bbox_to_anchor=(0.5, -0.015),
+    bbox_to_anchor=(0.56, -0.008),
     fontsize=13,
 )
 
@@ -1191,7 +1200,7 @@ yticks_by_region = {
     "West Antarctica": [-20, 0, 20],
     "East Antarctica": [-4, 0, 4],
 }
-svnme = os.path.join(path_to_plots, f'seasonal_anomalies_precip_over_imbie_basins_{cde_run_dte}.png')
+svnme = os.path.join(path_to_plots, f'seasonal_anomalies_precip_over_imbie_basins_GRACE_updated_{cde_run_dte}.png')
 
 fig, axes = plot_seasonal_anomaly_timeseries_regions_3x1(
     ts_seasonal_anom_dict=ts_seasonal_anom_dict,
@@ -1215,7 +1224,7 @@ lims_by_region = {
     "West Antarctica": (-10, 10),
     "East Antarctica": (-3, 3),
 }
-svnme = os.path.join(path_to_plots, f'seasonal_anomaly_scatter_precip_over_imbie_basins_{cde_run_dte}.png')
+svnme = os.path.join(path_to_plots, f'seasonal_anomaly_scatter_precip_over_imbie_basins_GRACE_updated_{cde_run_dte}.png')
 
 fig_sc, axes_sc, stats_sc = plot_seasonal_anomaly_scatter_regions_3x3(
     region_anom_dict=ts_seasonal_anom_dict,
@@ -1346,7 +1355,10 @@ df_basin_mean_annual = (
 )
 
 # print(df_basin_mean_annual)
-svnme = os.path.join(path_to_plots, f'annual_precip_basin_mean_scatter_{cde_run_dte}.png')
+svnme = os.path.join(
+    path_to_plots,
+    f"Fig06_basin_mean_scatter_against_PMB_2013_2020_GRACE_updated_{cde_run_dte}.png"
+)
 fig_sc_basin, axes_sc_basin, stats_sc_basin = plot_pmb_scatter_oldstyle(
     df_mean_yr_acc=df_basin_mean_annual,
     ref=r"$P_{\mathrm{MB}}$",
@@ -1355,21 +1367,31 @@ fig_sc_basin, axes_sc_basin, stats_sc_basin = plot_pmb_scatter_oldstyle(
     scale="log",
     log_min=2,
     log_ticks=(5, 10, 20, 50, 100, 200, 500, 1000, 2000),
-    ncols=4,
+    ncols=2,
     figsize_per_col=4.8,
     figsize_per_row=4.5,
     share_axes=False,
     show_ylabel_only_left=False,
 )
+# Improve spacing and use shared axis labels.
+
+fig_sc_basin.subplots_adjust(
+    left=0.10,
+    right=0.98,
+    bottom=0.10,
+    top=0.93,
+    wspace=0.22,
+    hspace=0.32,
+)
 
 fig_sc_basin.savefig(svnme, dpi=300)
 plt.show()
 
-print(stats_sc_basin)
+# print(stats_sc_basin)
 gc.collect()
 
 #----------------------------------------------------------------------------------
-svnme = os.path.join(path_to_plots, f'basin_spread_points_precip_over_imbie_basins_{cde_run_dte}.png')
+svnme = os.path.join(path_to_plots, f'basin_spread_points_precip_over_imbie_basins_GRACE_updated_{cde_run_dte}.png')
 fig_spread, ax_spread, spread_non_gpm, spread_gpm = plot_basin_spread_points_dual(
     df=df_basin_mean_annual,
     basin_col="basin",
@@ -1391,7 +1413,10 @@ fig_spread.savefig(svnme, dpi=300)
 plt.show()
 gc.collect()
 
-svnme = os.path.join(path_to_plots, f'basin_spread_points_precip_over_imbie_basins_eais_wais_{cde_run_dte}.png')
+svnme = os.path.join(
+    path_to_plots,
+    f"Fig07_basin_ranked_product_spread_WAIS_EAIS_2013_2020_GRACE_updated_{cde_run_dte}.png"
+)
 fig, axes, spread_outputs = plot_basin_spread_points_by_region(
     df=df_basin_mean_annual,
     ref_col=r"$P_{\mathrm{MB}}$",
@@ -1401,7 +1426,7 @@ fig, axes, spread_outputs = plot_basin_spread_points_by_region(
 )
 
 fig.savefig(svnme, dpi=300)
-plt.show()
+# plt.show()
 gc.collect()
 
 #%% ANnual Mean 
@@ -1577,7 +1602,7 @@ arr_lst_mean = [
 ]
 
 
-svnme = os.path.join(path_to_plots, f'basin_mean_annual_precip_over_imbie_basins_{cde_run_dte}.png')
+svnme = os.path.join(path_to_plots, f'basin_mean_annual_precip_over_imbie_basins_GRACE_updated_{cde_run_dte}.png')
 fig, axes, cb1, cb2 = compare_mean_precip_basin_dual_cbar(
     arr_lst_mean=arr_lst_mean,
     basin_mask_latlon=basin_mask_01deg_clean,
@@ -1607,7 +1632,7 @@ gc.collect()
 #------------------------------------------------------------------------------
 svnme = os.path.join(
     path_to_plots,
-    f"basin_mean_annual_precip_over_imbie_basins_GPM_V7_V8_{cde_run_dte}.png"
+    f"basin_mean_annual_precip_over_imbie_basins_GPM_V7_V8_GRACE_updated_{cde_run_dte}.png"
 )
 
 fig, axes, cb1, cb2 = compare_mean_precip_basin_v7_v8_three_row_cbar(
@@ -1647,7 +1672,7 @@ gc.collect()
 #------------------------------------------------------------------------------
 svnme = os.path.join(
     path_to_plots,
-    f"basin_mean_annual_precip_over_imbie_basins_GPM_V7_V8_common_cbar_{cde_run_dte}.png"
+    f"Fig02_basin_mean_annual_precip_2013_2020_common_cbar_GRACE_updated_{cde_run_dte}.png"
 )
 
 fig, axes, cb = compare_mean_precip_basin_v7_v8_common_cbar(
@@ -1667,7 +1692,7 @@ fig, axes, cb = compare_mean_precip_basin_v7_v8_common_cbar(
     vmin=0,
     vmax=400,
     cbar_ticks=[0, 25, 50, 100, 200, 300, 400],
-    cbar_label=r"Mean annual precipitation (mm yr$^{-1}$)",
+    cbar_label=r"[mm yr$^{-1}$]",
 
     panel_letters=True,
     show_panel_mean=True,
@@ -1688,7 +1713,10 @@ df_regional_mean_annual = compute_regional_mean_annual_precip(
                    "GPM PMW V07", 
                    "GPM PMW V08"),
 ) # "UA-HIPA", 
-svnme = os.path.join(path_to_plots, f'regional_mean_annual_precip_over_imbie_basins_{cde_run_dte}.png')
+svnme = os.path.join(
+    path_to_plots,
+    f"Fig03_regional_mean_annual_precip_AIS_WAIS_EAIS_2013_2020_GRACE_updated_{cde_run_dte}.png"
+)
 fig, ax = plot_regional_mean_annual_bars(
     df_regional_mean_annual,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
@@ -1701,9 +1729,10 @@ fig, ax = plot_regional_mean_annual_bars(
     product_colors=product_styles_corr,
     figsize=(9, 6),
     ylabel="[mm/year]",
-    title=f"{ANNUAL_YEAR_START}–{ANNUAL_YEAR_END} mean annual precipitation",
+    title="",
     annotate=True,
 )
+# f"{ANNUAL_YEAR_START}–{ANNUAL_YEAR_END} mean annual precipitation"
 
 fig.savefig(svnme, dpi=300)
 

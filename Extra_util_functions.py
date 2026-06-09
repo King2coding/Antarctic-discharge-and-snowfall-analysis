@@ -3471,7 +3471,7 @@ def plot_seasonal_timeseries_regions(
     product_order=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP v3.3"),
     product_styles=None,
     figsize=(12, 8),
-    ylabel="Precipitation [mm/month]",
+    ylabel="[mm/month]",
     y_nbins=4,
     legend_ncol=4,
     title_suffix="conventional seasonal input",
