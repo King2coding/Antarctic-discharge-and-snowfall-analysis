@@ -68,7 +68,7 @@ basins = basins.where((basins > 0) & (basins.notnull()))
 if not basins.rio.crs:
     basins = basins.rio.write_crs(CRS.from_proj4(crs_stereo))
 basin_transform = basins.rio.transform()
-height, width = basins.data.shape[1:]
+height, width = basins['imbie'].shape[1:]
 xmin, ymax = basin_transform.c, basin_transform.f
 xres, yres = basin_transform.a, -basin_transform.e
 xmax = xmin + width * xres
@@ -102,7 +102,7 @@ for basin_id in range(1, 20):
     basin_mask = basins == basin_id
 
     # Get the centroid of the basin
-    y, x = np.where(basin_mask)
+    y, x = np.where(basin_mask['imbie'])
     if len(x) > 0 and len(y) > 0:
         centroid_x = basins['x'].values[x].mean()
         centroid_y = basins['y'].values[y].mean()

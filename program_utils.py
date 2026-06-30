@@ -87,24 +87,10 @@ mpl.rcParams['ytick.labelsize'] = 18
 
 # floating variables
 id2name = {
-    2: "A-Ap",
-    3: "Ap-B",
-    4: "B-C",
-    5: "C-Cp",
-    6: "Cp-D",
-    7: "D-Dp",
-    8: "Dp-E",
-    9: "E-Ep",
-    10: "Ep-F",
-    11: "F-G",
-    12: "G-H",
-    13: "H-Hp",
-    14: "Hp-I",
-    15: "I-Ipp",
-    16: "Ipp-J",
-    17: "J-Jpp",
-    18: "Jpp-K",
-    19: "K-A"
+    2: "A-Ap", 3: "Ap-B", 4: "B-C", 5: "C-Cp", 6: "Cp-D",
+    7: "D-Dp", 8: "Dp-E", 9: "E-Ep", 10: "Ep-F", 11: "F-G",
+    12: "G-H", 13: "H-Hp", 14: "Hp-I", 15: "I-Ipp", 16: "Ipp-J",
+    17: "J-Jpp", 18: "Jpp-K", 19: "K-A"
 }
 
 name2id = {v: k for k, v in id2name.items()}

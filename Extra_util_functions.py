@@ -56,7 +56,72 @@ product_styles_corr = {
     "UA-HIPA": {"color": "magenta", "lw": 2.5},
 }
 #%%
+def basin_region(basin):
+    if basin in REGION_BASINS['West Antarctica']:
+        return "WAIS"
+    if basin in REGION_BASINS['East Antarctica']:
+        return "EAIS"
+    return "Other"
+def clean_df(df, value_col):
 
+    keep_cols = [c for c in ["basin_id", "basin", value_col] if c in df.columns]
+
+    df = df[keep_cols].copy()
+
+    if "basin" in df.columns and "basin_id" not in df.columns:
+
+        df = df.rename(columns={"basin": "basin_id"})
+
+    return df
+
+def mean_annual_mm(da_mm_month, name):
+
+    out = da_mm_month.groupby("date.year").sum("date").mean("year", skipna=True)
+
+    df = out.to_dataframe(name=name).reset_index()
+
+    return clean_df(df, name)
+
+def mean_over_years_df(da_yearly, name):
+
+    df = (
+
+        da_yearly
+
+        .mean("year", skipna=True)
+
+        .to_dataframe(name=name)
+
+        .reset_index()
+
+    )
+
+    return clean_df(df, name)
+
+def mean_annual_uncertainty_mm(da_unc_mm_month, name):
+    """
+    Convert basin-month 1-sigma uncertainty in mm/month to
+    mean annual 1-sigma uncertainty in mm/year.
+    Annual uncertainty is computed by root-sum-square propagation
+    of monthly uncertainties, then averaged over years.
+    """
+
+    unc_annual = np.sqrt(
+        (da_unc_mm_month ** 2).groupby("date.year").sum("date")
+    )
+    df = (
+        unc_annual
+        .mean("year", skipna=True)
+        .to_dataframe(name=name)
+        .reset_index()
+    )
+
+    keep_cols = [c for c in ["basin_id", "basin", name] if c in df.columns]
+    df = df[keep_cols].copy()
+    if "basin" in df.columns and "basin_id" not in df.columns:
+        df = df.rename(columns={"basin": "basin_id"})
+
+    return df
 
 def make_basin_annual_from_monthly_df(df: pd.DataFrame) -> pd.DataFrame:
     """

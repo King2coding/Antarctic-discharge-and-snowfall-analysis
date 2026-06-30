@@ -333,7 +333,7 @@ ax.axis('off')
 # Final cleanup
 # ax.set_title("IMBIE Basins with IDs ", fontsize=18)
 plt.tight_layout()
-plt.close()
+# plt.close()
 
 # Save the imbie basin plot
 # output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
@@ -1456,6 +1456,77 @@ print("min :", float(Precip_basin_mm.min(skipna=True).values))
 print("max :", float(Precip_basin_mm.max(skipna=True).values))
 
 # -----------------------------------------------------------------------------
+# 8b. Sublimation contribution to PMB in mm/year
+# -----------------------------------------------------------------------------
+# Goal:
+#   Report regional mean annual sublimation and PMB in mm/yr, plus the
+#   sublimation fraction relative to PMB.
+#
+# Important:
+#   We compute area-weighted regional means, not simple basin averages.
+#   This keeps the mm/yr ratios consistent with the Gt-based mass ratios.
+
+REGION_BASINS = {
+    "Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+    "West Antarctica": [10, 11, 12, 13, 14, 15, 16, 17],
+    "East Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 18, 19],
+}
+
+# Convert sublimation from Gt/month to mm/month
+SUB_basin_mm = SUB_basin * 1e12 / basin_area_m2
+SUB_basin_mm.name = "sublimation_mm_per_month"
+
+sublimation_fraction_rows = []
+
+for region_name, basin_ids in REGION_BASINS.items():
+
+    # Select region
+    sub_mm_reg = SUB_basin_mm.sel(basin_id=basin_ids)
+    pmb_mm_reg = Precip_basin_mm.sel(basin_id=basin_ids)
+    area_reg = basin_area_m2.sel(basin_id=basin_ids)
+
+    # Monthly area-weighted regional mean in mm/month
+    sub_reg_mm_month = sub_mm_reg.weighted(area_reg).mean("basin_id", skipna=True)
+    pmb_reg_mm_month = pmb_mm_reg.weighted(area_reg).mean("basin_id", skipna=True)
+
+    # Annual regional totals in mm/year
+    sub_reg_mm_year = sub_reg_mm_month.groupby("date.year").sum("date", skipna=True)
+    pmb_reg_mm_year = pmb_reg_mm_month.groupby("date.year").sum("date", skipna=True)
+
+    # Mean annual mm/year over 2013–2020
+    mean_sub_mm_yr = sub_reg_mm_year.mean("year", skipna=True)
+    mean_pmb_mm_yr = pmb_reg_mm_year.mean("year", skipna=True)
+
+    # Fraction based on mean annual mm/year
+    ratio_mean_mm = 100.0 * mean_sub_mm_yr / mean_pmb_mm_yr
+
+    # Annual fraction range
+    ratio_ann = 100.0 * sub_reg_mm_year / pmb_reg_mm_year
+
+    sublimation_fraction_rows.append({
+        "region": region_name,
+        "mean_annual_sublimation_mm_yr": float(mean_sub_mm_yr.values),
+        "mean_annual_PMB_mm_yr": float(mean_pmb_mm_yr.values),
+        "sublimation_fraction_mean_percent": float(ratio_mean_mm.values),
+        "sublimation_fraction_annual_min_percent": float(ratio_ann.min("year", skipna=True).values),
+        "sublimation_fraction_annual_max_percent": float(ratio_ann.max("year", skipna=True).values),
+    })
+
+df_sublimation_fraction_mm = pd.DataFrame(sublimation_fraction_rows)
+
+print("\nSublimation contribution to PMB using area-weighted mm/year:")
+print(df_sublimation_fraction_mm)
+
+out_csv = os.path.join(
+    path_to_plots,
+    f"sublimation_fraction_of_PMB_by_region_mm_yr_{YEAR_START}_{YEAR_END}_{cde_run_dte}.csv"
+)
+df_sublimation_fraction_mm.to_csv(out_csv, index=False)
+
+print("\nSaved sublimation fraction diagnostic in mm/year:")
+print(out_csv)
+
+# -----------------------------------------------------------------------------
 # 8b. Compute PMB uncertainty
 # -----------------------------------------------------------------------------
 # PMB uncertainty is propagated at basin-month level:
@@ -1546,6 +1617,173 @@ else:
     Pmb_unc_basin_mm = None
 
 # -----------------------------------------------------------------------------
+# 8b. Compute PMB uncertainty per basin
+# -----------------------------------------------------------------------------
+# Convert PMB components from Gt/month to mm/month
+
+D_basin_mm   = D_basin   * 1e12 / basin_area_m2
+
+BM_basin_mm  = BM_basin  * 1e12 / basin_area_m2
+
+dS_basin_mm  = dS_basin  * 1e12 / basin_area_m2
+
+SUB_basin_mm = SUB_basin * 1e12 / basin_area_m2
+
+# Mean annual components in mm/yr
+
+df_D   = mean_annual_mm(D_basin_mm, "Ice discharge")
+
+df_BM  = mean_annual_mm(BM_basin_mm, "Basal melt")
+
+df_dS  = mean_annual_mm(dS_basin_mm, "GRACE dS")
+
+df_SUB = mean_annual_mm(SUB_basin_mm, "RACMO sublimation term")
+
+df_PMB = mean_annual_mm(Precip_basin_mm, "P_MB")
+
+# -----------------------------------------------------------------------------
+
+# Annual uncertainty terms
+
+# -----------------------------------------------------------------------------
+
+# GRACE dS uncertainty:
+
+# monthly dS uncertainty is propagated to annual totals by root-sum-square.
+
+dS_unc_basin_mm = dS_unc_basin * 1e12 / basin_area_m2
+
+dS_unc_annual_mm = np.sqrt(
+
+    (dS_unc_basin_mm ** 2).groupby("date.year").sum("date")
+
+)
+
+df_dS_unc = mean_over_years_df(
+
+    dS_unc_annual_mm,
+
+    "GRACE dS uncertainty 1sigma"
+
+)
+
+# Discharge uncertainty:
+
+# D_unc_basin is currently monthly because annual uncertainty was divided by 12.
+
+# For annual uncertainty, restore the annual value by multiplying monthly mean by 12.
+
+D_unc_annual_Gt = D_unc_basin.groupby("date.year").mean("date") * 12.0
+
+D_unc_annual_mm = D_unc_annual_Gt * 1e12 / basin_area_m2
+
+df_D_unc = mean_over_years_df(
+
+    D_unc_annual_mm,
+
+    "Ice discharge uncertainty 1sigma"
+
+)
+
+# Correct annual PMB uncertainty:
+
+# combine annual GRACE dS uncertainty and annual discharge uncertainty.
+
+# Basal-melt and RACMO sublimation uncertainties are not included.
+
+D_unc_annual_mm, dS_unc_annual_mm = xr.align(
+
+    D_unc_annual_mm,
+
+    dS_unc_annual_mm,
+
+    join="inner",
+
+)
+
+P_MB_unc_annual_mm_corrected = np.sqrt(
+
+    D_unc_annual_mm ** 2 + dS_unc_annual_mm ** 2
+
+)
+
+df_PMB_unc = mean_over_years_df(
+
+    P_MB_unc_annual_mm_corrected,
+
+    "P_MB uncertainty 1sigma"
+
+)
+
+# -----------------------------------------------------------------------------
+
+# Merge Table S3
+
+# -----------------------------------------------------------------------------
+
+df_table_s3 = (
+
+    df_D.merge(df_D_unc, on="basin_id", how="outer")
+
+        .merge(df_BM, on="basin_id", how="outer")
+
+        .merge(df_dS, on="basin_id", how="outer")
+
+        .merge(df_dS_unc, on="basin_id", how="outer")
+
+        .merge(df_SUB, on="basin_id", how="outer")
+
+        .merge(df_PMB, on="basin_id", how="outer")
+
+        .merge(df_PMB_unc, on="basin_id", how="outer")
+
+)
+
+df_table_s3 = df_table_s3.rename(columns={"basin_id": "basin"})
+
+df_table_s3["basin_label"] = df_table_s3["basin"].map(id2name)
+
+df_table_s3["region"] = df_table_s3["basin"].apply(basin_region)
+
+df_table_s3 = df_table_s3[
+
+    [
+
+        "basin",
+
+        "basin_label",
+
+        "region",
+
+        "Ice discharge",
+
+        "Ice discharge uncertainty 1sigma",
+
+        "Basal melt",
+
+        "GRACE dS",
+
+        "GRACE dS uncertainty 1sigma",
+
+        "RACMO sublimation term",
+
+        "P_MB",
+
+        "P_MB uncertainty 1sigma",
+
+    ]
+
+].round(1)
+
+out_s3 = os.path.join(
+    path_to_plots,
+    f"Table_S3_basin_mean_annual_PMB_components_2013_2020_{cde_run_dte}.csv"
+)
+
+df_table_s3.to_csv(out_s3, index=False)
+print("Saved Table S3:", out_s3)
+
+# -----------------------------------------------------------------------------
 # 9. Paint basin series back to maps
 # -----------------------------------------------------------------------------
 
@@ -1594,6 +1832,73 @@ else:
     Pmb_unc_map_Gt = None
     Pmb_unc_map_mm = None
 
+# -----------------------------------------------------------------------------
+# 9b. Basin level PMB uncertainty for Table S2
+# -----------------------------------------------------------------------------
+D_basin_mm   = D_basin   * 1e12 / basin_area_m2
+BM_basin_mm  = BM_basin  * 1e12 / basin_area_m2
+dS_basin_mm  = dS_basin  * 1e12 / basin_area_m2
+SUB_basin_mm = SUB_basin * 1e12 / basin_area_m2
+
+df_D   = mean_annual_mm(D_basin_mm, "Ice discharge")
+df_BM  = mean_annual_mm(BM_basin_mm, "Basal melt")
+df_dS  = mean_annual_mm(dS_basin_mm, "GRACE dS")
+df_SUB = mean_annual_mm(SUB_basin_mm, "Sublimation")
+df_PMB = mean_annual_mm(Precip_basin_mm, "P_MB")
+
+# Basin annual uncertainty: monthly uncertainty propagated to annual totals,
+# then averaged across years.
+
+pmb_unc_annual = np.sqrt((Pmb_unc_basin_mm ** 2).groupby("date.year").sum("date"))
+
+df_unc = pmb_unc_annual.mean("year", skipna=True).to_dataframe(
+    name="P_MB uncertainty 1sigma"
+).reset_index()
+
+df_table_s3 = (
+    df_D.merge(df_BM, on="basin_id")
+        .merge(df_dS, on="basin_id")
+        .merge(df_SUB, on="basin_id")
+        .merge(df_PMB, on="basin_id")
+        .merge(df_unc, on="basin_id")
+)
+
+df_table_s3 = df_table_s3.rename(columns={"basin_id": "basin"})
+
+df_table_s3["basin_label"] = df_table_s3["basin"].map(id2name)
+
+df_table_s3["region"] = df_table_s3["basin"].apply(basin_region)
+
+df_table_s3["Sublimation/P_MB (%)"] = (
+
+    100.0 * df_table_s3["Sublimation"] / df_table_s3["P_MB"]
+
+)
+
+df_table_s3 = df_table_s3[
+    [
+        "basin",
+        "basin_label",
+        "region",
+        "Ice discharge",
+        "Basal melt",
+        "GRACE dS",
+        "Sublimation",
+        "P_MB",
+        "P_MB uncertainty 1sigma",
+        "Sublimation/P_MB (%)",
+    ]
+
+].round(1)
+
+out_s3 = os.path.join(
+    path_to_plots,
+    f"Table_S3_basin_mean_annual_PMB_components_2013_2020_{cde_run_dte}.csv"
+)
+
+df_table_s3.to_csv(out_s3, index=False)
+
+print("Saved Table S3:", out_s3)
 
 # -----------------------------------------------------------------------------
 # 10. Metadata

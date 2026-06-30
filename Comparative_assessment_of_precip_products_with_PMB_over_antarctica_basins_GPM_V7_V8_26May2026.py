@@ -144,67 +144,81 @@ small_id_offsets = {
     # add 12 or others if you want them outside too
 }
 
-# Annotate each basin
-for basin_id in range(1, 20):
+# Optional: if basin 1 is island/non-grounded sector and not used
+
+used_basin_ids = sorted(id2name.keys())
+
+for basin_id in used_basin_ids:
+
     mask = (da == basin_id)
     y, x = np.where(mask.values)
     if len(x) == 0:
-        continue
 
+        continue
     cx = da["x"].values[x].mean()
     cy = da["y"].values[y].mean()
-    label = str(basin_id)
+    # Two-line label: number + basin name
+    label = f"{basin_id}\n{id2name[basin_id]}"
 
     if basin_id in small_id_offsets:
-        # place label outside with a leader line
+
         dx, dy = small_id_offsets[basin_id]
         lx, ly = cx + dx, cy + dy
-
         ax.annotate(
             label,
-            xy=(cx, cy),      # centroid (tail of line)
-            xytext=(lx, ly),  # label position
-            textcoords='data',
-            xycoords='data',
-            ha='center',
-            va='center',
-            fontsize=15,
+            xy=(cx, cy),
+            xytext=(lx, ly),
+            textcoords="data",
+            xycoords="data",
+            ha="center",
+            va="center",
+            fontsize=11,
             transform=proj,
             arrowprops=dict(
-                arrowstyle="-",   # simple line
+                arrowstyle="-",
                 lw=0.8,
                 color="k"
             ),
+
             bbox=dict(
-                boxstyle="round,pad=0.2",
+                boxstyle="round,pad=0.18",
                 fc="white",
                 ec="none",
-                alpha=0.7
+                alpha=0.75
             ),
+            zorder=10,
         )
+
     else:
-        # “normal” in-basin label
         ax.text(
-            cx, cy, label,
+            cx, cy,
+            label,
             color="black",
-            fontsize=15,
+            fontsize=11,
             ha="center",
             va="center",
             transform=proj,
-            zorder=5,
+            zorder=10,
             bbox=dict(
-                boxstyle="round,pad=0.2",
+                boxstyle="round,pad=0.18",
                 fc="white",
                 ec="none",
-                alpha=0.6
-            ),
-        )
+                alpha=0.65
 
+            ),
+
+        )
 ax.axis("off")
 plt.tight_layout()
+
 # plt.show()
 # Save the imbie basin plot
+svnme = os.path.join(
+    path_to_plots,
+    f"Fig01_imbie_drainage_basins_with_ids_{cde_run_dte}.png"
+)
 output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
+plt.savefig(svnme, dpi=150, bbox_inches='tight')
 # plt.savefig(output_path, dpi=300, bbox_inches='tight')
 gc.collect()
 plt.close()
@@ -1353,6 +1367,33 @@ df_basin_mean_annual = (
     .sort_values("basin")
     .reset_index(drop=True)
 )
+
+df_table_s2 = df_basin_mean_annual.copy()
+df_table_s2["basin_label"] = df_table_s2["basin"].map(id2name)
+df_table_s2["region"] = df_table_s2["basin"].apply(basin_region)
+
+df_table_s2 = df_table_s2[
+    [
+        "basin",
+        "basin_label",
+        "region",
+        r"$P_{\mathrm{MB}}$",
+        "ERA5",
+        "GPCP V3.3",
+        "GPM PMW V08",
+        "GPM PMW V07",
+    ]
+]
+
+df_table_s2 = df_table_s2.round(1)
+out_s2 = os.path.join(
+    out_dfs,
+    f"Table_S2_basin_mean_annual_precip_products_2013_2020_{cde_run_dte}.csv"
+)
+
+df_table_s2.to_csv(out_s2, index=False)
+
+print("Saved Table S2:", out_s2)
 
 # print(df_basin_mean_annual)
 svnme = os.path.join(
