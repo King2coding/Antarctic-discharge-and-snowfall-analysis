@@ -35,6 +35,12 @@ BASIN_NAME_TO_ID = {
     "J-Jpp": 17,
 }
 
+region_name2short = {
+    "Antarctica": "AIS",
+    "West Antarctica": "WAIS",
+    "East Antarctica": "EAIS",
+}
+
 SATELLITE_CATEGORIES = {
     "ATMS": ["SNPP", "NOAA-20"],
     "DMSP-SSMIS": ["F16", "F17", "F18", "F19"],
@@ -2617,6 +2623,9 @@ def plot_seasonal_climatology(
     ylabel="mm/season",
     y_nbins=4,
     legend_ncol=3,
+    panel_labels=("a", "b", "c"),
+    panel_label_xy=(0.02, 0.88),
+    panel_label_fontsize=16,
 ):
     season_labels = ["DJF", "MAM", "JJA", "SON"]
 
@@ -2625,7 +2634,7 @@ def plot_seasonal_climatology(
     if len(region_order) == 1:
         axes = [axes]
 
-    for ax, region in zip(axes, region_order):
+    for i, (ax, region) in enumerate(zip(axes, region_order)):
         sub = clim_df[clim_df["region"] == region]
 
         for prod in product_order:
@@ -2633,10 +2642,15 @@ def plot_seasonal_climatology(
             if ss.empty:
                 continue
 
-            ss["season"] = pd.Categorical(ss["season"], categories=season_labels, ordered=True)
+            ss["season"] = pd.Categorical(
+                ss["season"],
+                categories=season_labels,
+                ordered=True
+            )
             ss = ss.sort_values("season")
 
             style = {} if product_styles is None else product_styles.get(prod, {}).copy()
+
             ax.plot(
                 ss["season"],
                 ss["precipitation"],
@@ -2644,15 +2658,39 @@ def plot_seasonal_climatology(
                 **style
             )
 
-        ax.set_title(region, fontweight="bold", fontsize=18)
+        # Region title
+        ax.set_title(region_name2short[region], fontweight="bold", fontsize=18)
+
+        # Panel label: (a), (b), (c), etc.
+        if panel_labels is not None and i < len(panel_labels):
+            ax.text(
+                panel_label_xy[0],
+                panel_label_xy[1],
+                f"({panel_labels[i]})",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=panel_label_fontsize,
+                fontweight="bold",
+                bbox=dict(
+                    facecolor="white",
+                    edgecolor="none",
+                    alpha=0.7,
+                    pad=1.5
+                ),
+                zorder=10,
+            )
+
         ax.grid(True, alpha=0.3)
         ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
 
     fig.supylabel(ylabel, x=0.06, fontweight="bold", fontsize=18)
 
     handles, labels = axes[0].get_legend_handles_labels()
+
     fig.legend(
-        handles, labels,
+        handles,
+        labels,
         loc="lower center",
         bbox_to_anchor=(0.56, -0.03),
         ncol=legend_ncol,
@@ -2660,10 +2698,9 @@ def plot_seasonal_climatology(
         frameon=False
     )
 
-    # axes[-1].set_xlabel("Season", fontweight="bold")
     plt.tight_layout(rect=[0.05, 0.06, 1, 1])
-    return fig, axes
 
+    return fig, axes
 #-----------------------------------------------------------------------------
 def plot_seasonal_climatology_with_pmb_uncertainty(
     clim_df,
@@ -2821,13 +2858,16 @@ def plot_interannual_variability(
     ylabel="mm/year",
     y_nbins=4,
     legend_ncol=3,
+    panel_labels=("a", "b", "c"),
+    panel_label_xy=(0.02, 0.88),
+    panel_label_fontsize=16,
 ):
     fig, axes = plt.subplots(len(region_order), 1, figsize=figsize, sharex=True)
 
     if len(region_order) == 1:
         axes = [axes]
 
-    for ax, region in zip(axes, region_order):
+    for i, (ax, region) in enumerate(zip(axes, region_order)):
         sub = annual_df[annual_df["region"] == region]
 
         for prod in product_order:
@@ -2836,6 +2876,7 @@ def plot_interannual_variability(
                 continue
 
             style = {} if product_styles is None else product_styles.get(prod, {}).copy()
+
             ax.plot(
                 ss["year"],
                 ss["precipitation"],
@@ -2843,15 +2884,38 @@ def plot_interannual_variability(
                 **style
             )
 
-        ax.set_title(region, fontweight="bold", fontsize=18)
+        ax.set_title(region_name2short[region], fontweight="bold", fontsize=18)
+
+        # Panel label: (a), (b), (c), etc.
+        if panel_labels is not None and i < len(panel_labels):
+            ax.text(
+                panel_label_xy[0],
+                panel_label_xy[1],
+                f"({panel_labels[i]})",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=panel_label_fontsize,
+                fontweight="bold",
+                bbox=dict(
+                    facecolor="white",
+                    edgecolor="none",
+                    alpha=0.7,
+                    pad=1.5
+                ),
+                zorder=10,
+            )
+
         ax.grid(True, alpha=0.3)
         ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
 
     fig.supylabel(ylabel, x=0.06, fontweight="bold", fontsize=18)
 
     handles, labels = axes[0].get_legend_handles_labels()
+
     fig.legend(
-        handles, labels,
+        handles,
+        labels,
         loc="lower center",
         bbox_to_anchor=(0.58, -0.03),
         ncol=legend_ncol,
@@ -2859,8 +2923,8 @@ def plot_interannual_variability(
         frameon=False
     )
 
-    # axes[-1].set_xlabel("Year", fontweight="bold")
     plt.tight_layout(rect=[0.05, 0.06, 1, 1])
+
     return fig, axes
 
 
@@ -3924,7 +3988,7 @@ def plot_basin_spread_points_by_region(
     figsize=(13, 7.2),
     pmb_bar_color="lightgray",
     pmb_edge_color="black",
-    annotate_fontsize=10,
+    annotate_fontsize=15,
     annotate_non_gpm_color="black",
     annotate_gpm_color="dimgray",
     legend_ncol=5,
@@ -4077,11 +4141,12 @@ def plot_basin_spread_points_by_region(
 
         y_top_axis = ax.get_ylim()[1]
 
-        for xi, top_val, s_ref, s_gpm in zip(x, top_val_all, spread_non_gpm, spread_gpm):
-            if not np.isfinite(top_val):
+        for xi, top_val, s_ref in zip(x, top_val_all, spread_non_gpm):
+            if not np.isfinite(top_val): # , s_gpm, spread_gpm
                 continue
 
-            y1 = min(top_val + 0.13 * y_top_axis, y_top_axis * 0.96)
+            # y1 = min(top_val + 0.13 * y_top_axis, y_top_axis * 0.96)
+            y1 = min(top_val + 0.1 * y_top_axis, y_top_axis * 0.96)
             y2 = min(top_val + 0.055 * y_top_axis, y_top_axis * 0.88)
 
             if np.isfinite(s_ref):
@@ -4098,26 +4163,26 @@ def plot_basin_spread_points_by_region(
                     path_effects=[pe.withStroke(linewidth=3.5, foreground="white")]
                 )
 
-            if np.isfinite(s_gpm):
-                ax.text(
-                    xi + 0.10,
-                    y2,
-                    f"{int(round(s_gpm))}%",
-                    ha="center",
-                    va="bottom",
-                    fontsize=annotate_fontsize,
-                    fontweight="bold",
-                    color=annotate_gpm_color,
-                    zorder=9,
-                    path_effects=[pe.withStroke(linewidth=3.5, foreground="white")]
-                )
+            # if np.isfinite(s_gpm):
+            #     ax.text(
+            #         xi + 0.10,
+            #         y2,
+            #         f"{int(round(s_gpm))}%",
+            #         ha="center",
+            #         va="bottom",
+            #         fontsize=annotate_fontsize,
+            #         fontweight="bold",
+            #         color=annotate_gpm_color,
+            #         zorder=9,
+            #         path_effects=[pe.withStroke(linewidth=3.5, foreground="white")]
+            #     )
 
         # ---------------------------------------------------------------------
         # Cosmetics
         # ---------------------------------------------------------------------
-        ax.set_title(region_name, fontsize=15, fontweight="bold")
+        ax.set_title(region_name2short[region_name], fontsize=15, fontweight="bold")
         ax.set_xticks(x)
-        ax.set_xticklabels(basins, fontsize=13)
+        ax.set_xticklabels(basins, fontsize=14)
         ax.set_ylabel("[mm/year]", fontsize=14)
         ax.grid(axis="y", linestyle="--", alpha=0.4, zorder=0)
 
@@ -4137,21 +4202,21 @@ def plot_basin_spread_points_by_region(
             transform=axes[0].transAxes,
             ha="left",
             va="top",
-            fontsize=10,
+            fontsize=14,
             color=annotate_non_gpm_color,
             fontweight="bold",
         )
 
-        axes[0].text(
-            0.01, 0.88,
-            "% = spread($P_{\mathrm{MB}}$, GPM PMW V07)",
-            transform=axes[0].transAxes,
-            ha="left",
-            va="top",
-            fontsize=10,
-            color=annotate_gpm_color,
-            fontweight="bold",
-        )
+        # axes[0].text(
+        #     0.01, 0.88,
+        #     "% = spread($P_{\mathrm{MB}}$, GPM PMW V07)",
+        #     transform=axes[0].transAxes,
+        #     ha="left",
+        #     va="top",
+        #     fontsize=10,
+        #     color=annotate_gpm_color,
+        #     fontweight="bold",
+        # )
 
     # -------------------------------------------------------------------------
     # Shared legend
@@ -4170,7 +4235,7 @@ def plot_basin_spread_points_by_region(
     fig.legend(
         new_handles,
         new_labels,
-        fontsize=13,
+        fontsize=14,
         ncol=legend_ncol,
         frameon=False,
         loc="lower center",
@@ -5008,7 +5073,7 @@ def plot_regional_mean_annual_bars(
     # 6. Axes formatting
     # -------------------------------------------------------------------------
     ax.set_xticks(x)
-    ax.set_xticklabels(region_order, fontsize=14, fontweight="bold")
+    ax.set_xticklabels(["AIS", "WAIS", "EAIS"], fontsize=14, fontweight="bold")
 
     ax.set_ylabel(ylabel, fontsize=14, fontweight="bold")
 

@@ -123,6 +123,127 @@ def mean_annual_uncertainty_mm(da_unc_mm_month, name):
 
     return df
 
+
+def load_sigmaS_storage_dataframe(rignot_sigmaS_filled_pkl, basin_cols):
+    """
+    Load David/Rignot storage-anomaly 1-sigma uncertainty S [Gt],
+    not delta-S uncertainty.
+
+    Returns
+    -------
+    sigmaS_df : pandas.DataFrame
+        Monthly storage-anomaly uncertainty with datetime index and basin columns.
+    """
+
+    sigmaS_df = pd.read_pickle(rignot_sigmaS_filled_pkl).copy()
+
+    sigmaS_df.index = (
+        pd.to_datetime(sigmaS_df.index)
+        .to_period("M")
+        .to_timestamp()
+    )
+
+    # Keep only basin columns
+    sigmaS_df = sigmaS_df[basin_cols].copy()
+
+    return sigmaS_df
+
+
+def storage_sigma_to_xarray(sigmaS_df, basin_id_da, basin_name_da):
+    """
+    Convert monthly storage-anomaly uncertainty dataframe to xarray
+    with dimensions date, basin_id.
+    """
+
+    sigmaS_long = (
+        sigmaS_df
+        .reset_index(names="date")
+        .melt(id_vars="date", var_name="basin", value_name="sigmaS_Gt")
+        .dropna(subset=["sigmaS_Gt"])
+        .reset_index(drop=True)
+    )
+
+    sigmaS_long_df = generate_basin_id_mapping(
+        basin_id_da,
+        basin_name_da,
+        sigmaS_long,
+    )
+
+    sigmaS_xr = (
+        sigmaS_long_df
+        .set_index(["date", "basin_id"])["sigmaS_Gt"]
+        .to_xarray()
+    )
+
+    sigmaS_xr.name = "storage_uncertainty_Gt"
+
+    return sigmaS_xr
+
+
+def annual_deltaS_uncertainty_from_storage_endpoints(
+    sigmaS_xr,
+    pmb_dates,
+):
+    """
+    Compute annual storage-change uncertainty from endpoint storage
+    uncertainties.
+
+    For a set of monthly forward-difference PMB dates, annual storage change is
+
+        sum(deltaS_m) = S_end - S_start
+
+    Therefore,
+
+        sigma_deltaS_y = sqrt(sigma_S_start^2 + sigma_S_end^2)
+
+    rather than RSS of all monthly deltaS uncertainties.
+    """
+
+    pmb_dates = pd.to_datetime(pmb_dates)
+    years = sorted(np.unique(pmb_dates.year))
+
+    annual_list = []
+
+    for yr in years:
+
+        dates_y = pmb_dates[pmb_dates.year == yr]
+
+        if len(dates_y) == 0:
+            continue
+
+        start_date = pd.Timestamp(dates_y.min()).to_period("M").to_timestamp()
+        last_dS_date = pd.Timestamp(dates_y.max()).to_period("M").to_timestamp()
+
+        # Forward-difference convention:
+        # deltaS_m = S_{m+1} - S_m.
+        # If the last deltaS month is Nov, endpoint is Dec.
+        # If the last deltaS month is Dec, endpoint is Jan of next year.
+        end_date = (last_dS_date + pd.DateOffset(months=1)).to_period("M").to_timestamp()
+
+        if start_date not in pd.to_datetime(sigmaS_xr["date"].values):
+            print(f"WARNING: start date missing in sigmaS_xr: {start_date}")
+            continue
+
+        if end_date not in pd.to_datetime(sigmaS_xr["date"].values):
+            print(f"WARNING: end date missing in sigmaS_xr: {end_date}")
+            continue
+
+        sig_start = sigmaS_xr.sel(date=start_date)
+        sig_end = sigmaS_xr.sel(date=end_date)
+
+        sig_deltaS_y = np.sqrt(sig_start**2 + sig_end**2)
+        sig_deltaS_y = sig_deltaS_y.expand_dims(year=[int(yr)])
+
+        annual_list.append(sig_deltaS_y)
+
+    if len(annual_list) == 0:
+        raise RuntimeError("No annual deltaS uncertainty values were computed.")
+
+    out = xr.concat(annual_list, dim="year")
+    out.name = "annual_deltaS_uncertainty_Gt"
+
+    return out
+
 def make_basin_annual_from_monthly_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     Input df columns expected:
@@ -3541,13 +3662,17 @@ def plot_seasonal_timeseries_regions(
     legend_ncol=4,
     title_suffix="conventional seasonal input",
     x_major_year_interval=1,
+    panel_labels=("a", "b", "c"),
+    panel_label_xy=(0.02, 0.88),
+    panel_label_fontsize=16,
 ):
-
     """
     Plot conventional seasonal-mean precipitation time series
     for multiple regions in stacked panels.
+
     Expected seasonal_df columns:
         time | season_year | season | region | product | precipitation
+
     Notes
     -----
     This function assumes that the input dataframe has already been converted
@@ -3556,6 +3681,7 @@ def plot_seasonal_timeseries_regions(
 
     df = seasonal_df.copy()
     df["time"] = pd.to_datetime(df["time"])
+
     fig, axes = plt.subplots(
         len(region_order),
         1,
@@ -3566,7 +3692,7 @@ def plot_seasonal_timeseries_regions(
     if len(region_order) == 1:
         axes = [axes]
 
-    for ax, region in zip(axes, region_order):
+    for i, (ax, region) in enumerate(zip(axes, region_order)):
         sub = df[df["region"] == region].copy()
 
         for prod in product_order:
@@ -3586,21 +3712,43 @@ def plot_seasonal_timeseries_regions(
             )
 
         ax.set_title(
-            f"{region}", # — {title_suffix}
+            region_name2short[region],
             fontweight="bold",
             fontsize=18
         )
+
+        # Panel label: (a), (b), (c), etc.
+        if panel_labels is not None and i < len(panel_labels):
+            ax.text(
+                panel_label_xy[0],
+                panel_label_xy[1],
+                f"({panel_labels[i]})",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=panel_label_fontsize,
+                fontweight="bold",
+                bbox=dict(
+                    facecolor="white",
+                    edgecolor="none",
+                    alpha=0.7,
+                    pad=1.5
+                ),
+                zorder=10,
+            )
+
         ax.grid(True, alpha=0.3)
         ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
 
     fig.supylabel(ylabel, x=0.06, fontweight="bold", fontsize=18)
-    # Clean yearly x-axis
+
     axes[-1].xaxis.set_major_locator(
         mdates.YearLocator(base=x_major_year_interval)
     )
     axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
 
     handles, labels = axes[0].get_legend_handles_labels()
+
     fig.legend(
         handles,
         labels,
@@ -3612,8 +3760,8 @@ def plot_seasonal_timeseries_regions(
     )
 
     plt.tight_layout(rect=[0.05, 0.06, 1, 1])
-    return fig, axes
 
+    return fig, axes
 #--------------------------------------------------------------------------------
 # =============================================================================
 # PLOT REGIONAL ANNUAL MEAN WITH BASIN-TO-BASIN SPREAD
