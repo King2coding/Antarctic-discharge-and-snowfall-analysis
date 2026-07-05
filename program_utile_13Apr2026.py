@@ -784,6 +784,669 @@ def build_gpm_pmw_mean(gpm_family_dict, mean_name="GPM PMW V07"):
     return pmw_mean
 #===============================================================================
 
+# =============================================================================
+# GPM / GPROF V7 PLATFORM-AWARE MONTHLY PROCESSING
+# =============================================================================
+
+def parse_gpm_v7_month_from_filename(file_path):
+    """
+    Extract month-start timestamp from a GPM/GPROF V7 monthly filename.
+
+    The existing preprocess() function in program_utils uses:
+        os.path.basename(file).split('.')[4].split('-')[0]
+
+    This function follows the same logic first, with regex fallback.
+    """
+    fname = os.path.basename(file_path)
+
+    try:
+        date_string = fname.split(".")[4].split("-")[0]
+        return pd.to_datetime(date_string, format="%Y%m%d").to_period("M").to_timestamp()
+    except Exception:
+        pass
+
+    match = re.search(r"\.(\d{8})-S\d{6}-E\d{6}", fname)
+    if match is not None:
+        return pd.to_datetime(match.group(1), format="%Y%m%d").to_period("M").to_timestamp()
+
+    match = re.search(r"(\d{8})", fname)
+    if match is not None:
+        return pd.to_datetime(match.group(1), format="%Y%m%d").to_period("M").to_timestamp()
+
+    raise ValueError(f"Could not parse V7 month from filename: {fname}")
+
+
+def infer_gpm_v7_platform_from_path(file_path, family_name):
+    """
+    Infer platform from the V7 file path.
+
+    This is intentionally path-based rather than filename-only because V7 files
+    are organized under family/Monthly/platform-like folders on your server.
+
+    Examples it should handle:
+        V7/ATMS/Monthly/SNPP/*.nc4
+        V7/ATMS/Monthly/NOAA-20/*.nc4
+        V7/MHS/Monthly/NOAA/NOAA-19/*.nc4
+        V7/MHS/Monthly/METOP/B/*.nc4
+        V7/DMSP-SSMIS/Monthly/F17/*.nc4
+        V7/GCOM-W1_AMSR2/Monthly/*.nc4
+    """
+    parts = list(os.path.normpath(file_path).split(os.sep))
+
+    if "Monthly" not in parts:
+        return "UNKNOWN"
+
+    monthly_index = parts.index("Monthly")
+    after_monthly = parts[monthly_index + 1:-1]
+
+    if len(after_monthly) == 0:
+        if family_name == "AMSR2":
+            return "GCOM-W1"
+        return "UNKNOWN"
+
+    # MHS often has nested folders: NOAA/NOAA-19 or METOP/A
+    if family_name == "MHS":
+        if len(after_monthly) >= 2:
+            return "_".join(after_monthly[:2])
+        return after_monthly[0]
+
+    # ATMS, SSMIS usually use the first folder after Monthly
+    return after_monthly[0]
+
+
+def normalize_gpm_v7_family_name(raw_family):
+    """
+    Standardize V7 family names.
+    """
+    if raw_family == "GCOM-W1_AMSR2":
+        return "AMSR2"
+    return raw_family
+
+
+def clean_gpm_v7_da(da):
+    """
+    Replace common GPM/GPROF V7 missing values with NaN.
+    """
+    da = da.where(np.isfinite(da))
+
+    for fill_value in [-9999.9, -9999.0, -9999, -999.9, -999]:
+        da = da.where(da != fill_value)
+
+    return da
+
+
+def average_duplicate_time_months_safe(da, time_name="time"):
+    """
+    Normalize time to month-start and average duplicate monthly timestamps.
+    """
+    if time_name not in da.dims:
+        raise ValueError(f"DataArray has no {time_name!r} dimension. dims={da.dims}")
+
+    da = da.copy()
+
+    month_times = pd.to_datetime(da[time_name].values).to_period("M").to_timestamp()
+    da = da.assign_coords({time_name: month_times})
+    da = da.sortby(time_name)
+
+    time_index = pd.Index(pd.to_datetime(da[time_name].values))
+
+    if not time_index.has_duplicates:
+        return da
+
+    print("  WARNING: duplicate months found; averaging duplicate months.")
+
+    out = []
+    for t in sorted(time_index.unique()):
+        idx = np.where(time_index == t)[0]
+        tmp = da.isel({time_name: idx})
+
+        if tmp.sizes[time_name] > 1:
+            tmp = tmp.mean(dim=time_name, skipna=True)
+        else:
+            tmp = tmp.isel({time_name: 0}, drop=True)
+
+        tmp = tmp.expand_dims({time_name: [pd.Timestamp(t)]})
+        out.append(tmp)
+
+    da_out = xr.concat(out, dim=time_name)
+    da_out = da_out.sortby(time_name)
+
+    final_index = pd.Index(pd.to_datetime(da_out[time_name].values))
+    if final_index.has_duplicates:
+        raise ValueError("Duplicate months remain after averaging.")
+
+    return da_out
+
+
+def convert_gpm_v7_rate_to_mm_month(da, time_name="time"):
+    """
+    Convert monthly mean precipitation rate to monthly accumulation.
+
+    Use this if surfacePrecipitation is mm/hr.
+    """
+    days_in_month = xr.DataArray(
+        pd.to_datetime(da[time_name].values).days_in_month,
+        dims=[time_name],
+        coords={time_name: da[time_name]},
+    )
+
+    return da * 24.0 * days_in_month
+
+
+def open_one_gpm_v7_monthly_file(
+    file_path,
+    preprocess_func=None,
+    var_name="surfacePrecipitation",
+):
+    """
+    Open one V7 monthly GPROF file and return a 2D DataArray with one time step.
+
+    This does not rely on open_mfdataset. It opens each file separately so that
+    platform-level inventory and time parsing remain explicit and diagnosable.
+    """
+    ds = xr.open_dataset(file_path)
+
+    if preprocess_func is not None:
+        try:
+            ds = preprocess_func(ds)
+        except Exception:
+            # If preprocess fails, fall back to filename parsing below.
+            pass
+
+    if var_name not in ds:
+        raise KeyError(
+            f"{var_name} not found in {file_path}. "
+            f"Available variables: {list(ds.data_vars)}"
+        )
+
+    da = ds[var_name]
+
+    # Drop/handle extra singleton dimensions if present
+    for dim in list(da.dims):
+        if dim not in ["time", "lat", "lon"]:
+            if da.sizes[dim] == 1:
+                da = da.isel({dim: 0}, drop=True)
+
+    if "time" in da.dims:
+        # Some files may already have a time dimension from preprocess.
+        if da.sizes["time"] > 1:
+            raise ValueError(
+                f"Expected one monthly time step in {file_path}, got {da.sizes['time']}"
+            )
+        da = da.isel(time=0, drop=True)
+
+    if {"lon", "lat"}.issubset(set(da.dims)):
+        da = da.transpose("lat", "lon")
+    else:
+        raise ValueError(f"Expected lon/lat dimensions in {file_path}, got {da.dims}")
+
+    file_time = parse_gpm_v7_month_from_filename(file_path)
+    da = da.expand_dims(time=[file_time])
+
+    da = clean_gpm_v7_da(da)
+    da = da.sortby("lon")
+    da = da.sortby("lat", ascending=False)
+
+    return da
+
+
+def collect_gpm_v7_platform_files(gpm_v7_path):
+    """
+    Collect GPM/GPROF V7 monthly files by sensor family and platform.
+
+    Returns
+    -------
+    dict
+        {
+            "ATMS": {
+                "SNPP": [files],
+                "NOAA-20": [files],
+            },
+            "MHS": {
+                "NOAA_NOAA-18": [files],
+                ...
+            },
+            ...
+        }
+    """
+    if not os.path.isdir(gpm_v7_path):
+        raise FileNotFoundError(f"V7 folder not found: {gpm_v7_path}")
+
+    family_platform_files = {}
+
+    for raw_family in sorted(os.listdir(gpm_v7_path)):
+        family_path = os.path.join(gpm_v7_path, raw_family)
+
+        if not os.path.isdir(family_path):
+            continue
+
+        monthly_path = os.path.join(family_path, "Monthly")
+
+        if not os.path.isdir(monthly_path):
+            continue
+
+        family = normalize_gpm_v7_family_name(raw_family)
+
+        files = sorted(
+            glob.glob(os.path.join(monthly_path, "**", "*.nc4"), recursive=True)
+        )
+
+        if len(files) == 0:
+            continue
+
+        family_platform_files.setdefault(family, {})
+
+        for f in files:
+            platform = infer_gpm_v7_platform_from_path(f, family)
+            family_platform_files[family].setdefault(platform, []).append(f)
+
+    for family in family_platform_files:
+        for platform in family_platform_files[family]:
+            family_platform_files[family][platform] = sorted(
+                family_platform_files[family][platform]
+            )
+
+    return family_platform_files
+
+
+def report_gpm_v7_inventory(
+    family_platform_files,
+    start_time="2013-01-01",
+    end_time="2020-12-31",
+):
+    """
+    Print platform-level V7 monthly inventory and missing months.
+    """
+    full_months = pd.date_range(
+        pd.to_datetime(start_time).to_period("M").to_timestamp(),
+        pd.to_datetime(end_time).to_period("M").to_timestamp(),
+        freq="MS",
+    )
+
+    rows = []
+
+    print("\n" + "=" * 90)
+    print("GPM/GPROF V7 PLATFORM-LEVEL INVENTORY")
+    print("=" * 90)
+
+    for family, platform_dict in family_platform_files.items():
+        print(f"\n{family}")
+
+        for platform, files in platform_dict.items():
+            months = []
+            bad_files = []
+
+            for f in files:
+                try:
+                    months.append(parse_gpm_v7_month_from_filename(f))
+                except Exception:
+                    bad_files.append(f)
+
+            month_index = pd.DatetimeIndex(months).sort_values()
+            unique_months = pd.DatetimeIndex(sorted(month_index.unique()))
+
+            in_period = unique_months[
+                (unique_months >= full_months.min()) &
+                (unique_months <= full_months.max())
+            ]
+
+            missing = full_months.difference(in_period)
+            duplicate_count = len(month_index) - len(unique_months)
+
+            first_month = unique_months.min() if len(unique_months) else pd.NaT
+            last_month = unique_months.max() if len(unique_months) else pd.NaT
+
+            print(
+                f"  {platform:16s} "
+                f"files={len(files):4d}, "
+                f"unique_months={len(unique_months):4d}, "
+                f"in_period={len(in_period):3d}/96, "
+                f"first={first_month}, last={last_month}, "
+                f"duplicates={duplicate_count}"
+            )
+
+            if len(missing) > 0:
+                print(f"    Missing within 2013-2020: {list(missing)}")
+
+            if len(bad_files) > 0:
+                print(f"    WARNING: could not parse dates for {len(bad_files)} files")
+
+            rows.append(
+                {
+                    "family": family,
+                    "platform": platform,
+                    "n_files": len(files),
+                    "unique_months_all": len(unique_months),
+                    "months_in_2013_2020": len(in_period),
+                    "first_month": first_month,
+                    "last_month": last_month,
+                    "duplicate_months": duplicate_count,
+                    "missing_months_2013_2020": ";".join(
+                        [m.strftime("%Y-%m") for m in missing]
+                    ),
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def prepare_one_gpm_v7_platform_monthly(
+    files,
+    family_name,
+    platform_name,
+    preprocess_func,
+    target_template_01deg,
+    basin_mask_01deg,
+    start_time="2013-01-01",
+    end_time="2020-12-31",
+    convert_rate_to_month=True,
+):
+    """
+    Prepare one V7 platform from one sensor family.
+
+    Example:
+        family_name = ATMS
+        platform_name = SNPP or NOAA-20
+    """
+    print("\n" + "-" * 80)
+    print(f"Preparing V7 platform: {family_name} / {platform_name}")
+    print(f"Number of files: {len(files)}")
+    print("First file:", files[0])
+    print("Last file: ", files[-1])
+    print("-" * 80)
+
+    monthly_arrays = []
+
+    for file_path in sorted(files):
+        try:
+            da_one = open_one_gpm_v7_monthly_file(
+                file_path=file_path,
+                preprocess_func=preprocess_func,
+                var_name="surfacePrecipitation",
+            )
+            monthly_arrays.append(da_one)
+
+        except Exception as exc:
+            print(f"Skipping V7 file due to error: {file_path}")
+            print(f"Reason: {exc}")
+
+    if len(monthly_arrays) == 0:
+        raise ValueError(f"No valid V7 monthly files for {family_name}/{platform_name}")
+
+    da = xr.concat(monthly_arrays, dim="time")
+    da = average_duplicate_time_months_safe(da, time_name="time")
+
+    start_month = pd.to_datetime(start_time).to_period("M").to_timestamp()
+    end_month = pd.to_datetime(end_time).to_period("M").to_timestamp()
+    da = da.sel(time=slice(start_month, end_month))
+
+    if da.sizes.get("time", 0) == 0:
+        raise ValueError(
+            f"{family_name}/{platform_name}: no data after subsetting "
+            f"{start_time} to {end_time}"
+        )
+
+    da = clean_gpm_v7_da(da)
+
+    if convert_rate_to_month:
+        da = convert_gpm_v7_rate_to_mm_month(da, time_name="time")
+
+    da.name = f"{family_name}_{platform_name}_V07_mm_month"
+
+    # Antarctic subset
+    da = subset_antarctica_lat(
+        da,
+        lat_name="lat",
+        north_bound=-55,
+        south_bound=-90,
+    )
+
+    if da.sizes["lat"] == 0 or da.sizes["lon"] == 0:
+        raise ValueError(
+            f"{family_name}/{platform_name}: empty spatial domain after Antarctic subset."
+        )
+
+    da = ensure_1d_latlon_coords(da, lat_name="lat", lon_name="lon")
+
+    da = da.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=False)
+    da = da.rio.write_crs("EPSG:4326", inplace=False)
+
+    print(
+        f"{family_name}/{platform_name} before reprojection: "
+        f"time={da.sizes['time']}, lat={da.sizes['lat']}, lon={da.sizes['lon']}"
+    )
+
+    da_01 = da.rio.reproject_match(
+        target_template_01deg,
+        resampling=Resampling.nearest,
+    )
+
+    rename_map = {}
+    if "x" in da_01.dims:
+        rename_map["x"] = "lon"
+    if "y" in da_01.dims:
+        rename_map["y"] = "lat"
+    if rename_map:
+        da_01 = da_01.rename(rename_map)
+
+    da_01 = da_01.sortby("lon")
+    da_01 = da_01.sortby("lat", ascending=False)
+    da_01 = clean_gpm_v7_da(da_01)
+
+    da_01 = da_01.where(basin_mask_01deg.notnull())
+    da_01 = da_01.where(da_01["lat"] < -60)
+
+    da_01.name = f"{family_name}_{platform_name}_V07_mm_month"
+
+    print(
+        f"{family_name}/{platform_name} after reprojection: "
+        f"time={da_01.sizes['time']}, lat={da_01.sizes['lat']}, lon={da_01.sizes['lon']}"
+    )
+
+    return da_01
+
+
+def make_v7_family_mean_from_platforms(
+    platform_dict,
+    family_name,
+    common_months,
+    min_valid_platforms=1,
+):
+    """
+    Average available V7 platforms within one sensor family.
+
+    Important:
+    - Uses reindex, not nearest.
+    - Missing months remain NaN.
+    - A family month is valid only when at least min_valid_platforms platforms
+      have valid data.
+    """
+    aligned = []
+    platform_names = []
+
+    for platform, da in platform_dict.items():
+        da = average_duplicate_time_months_safe(da, time_name="time")
+        da = da.reindex(time=common_months)
+        aligned.append(da)
+        platform_names.append(platform)
+
+    if len(aligned) == 0:
+        raise ValueError(f"No platforms available for {family_name}")
+
+    stacked = xr.concat(
+        aligned,
+        dim=pd.Index(platform_names, name="platform"),
+        join="exact",
+        compat="override",
+        coords="minimal",
+    )
+
+    valid_platform_count = stacked.notnull().any(dim=("lat", "lon")).sum(dim="platform")
+
+    family_mean = stacked.mean(dim="platform", skipna=True)
+    family_mean = family_mean.where(valid_platform_count >= min_valid_platforms)
+
+    family_mean.name = f"{family_name}_V07_mm_month"
+
+    print(
+        f"\n{family_name} V7 family mean built from platforms: {platform_names}"
+    )
+    print(
+        f"{family_name} V7: valid months in common period = "
+        f"{int(family_mean.notnull().any(dim=('lat', 'lon')).sum().values)} "
+        f"/ {family_mean.sizes['time']}"
+    )
+
+    return family_mean
+
+
+def build_gpm_v7_family_monthly_dict_platform_aware(
+    gpm_v7_path,
+    preprocess_func,
+    target_template_01deg,
+    basin_mask_01deg,
+    start_time="2013-01-01",
+    end_time="2020-12-31",
+    convert_rate_to_month=True,
+    min_valid_platforms_by_family=None,
+    return_platform_dict=False,
+):
+    """
+    Build V7 monthly 0.1° fields by platform first, then average platforms
+    into family-level products.
+
+    This makes V7 behavior consistent with the V8 platform-aware workflow.
+    """
+    if min_valid_platforms_by_family is None:
+        min_valid_platforms_by_family = {}
+
+    common_months = pd.date_range(
+        pd.to_datetime(start_time).to_period("M").to_timestamp(),
+        pd.to_datetime(end_time).to_period("M").to_timestamp(),
+        freq="MS",
+    )
+
+    family_platform_files = collect_gpm_v7_platform_files(gpm_v7_path)
+
+    inventory_df = report_gpm_v7_inventory(
+        family_platform_files,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    platform_monthly_dict = {}
+    family_monthly_dict = {}
+
+    for family_name, platform_files in family_platform_files.items():
+        print("\n" + "=" * 90)
+        print(f"STARTING V7 FAMILY: {family_name}")
+        print("=" * 90)
+
+        platform_monthly_dict[family_name] = {}
+
+        for platform_name, files in platform_files.items():
+            try:
+                da_platform = prepare_one_gpm_v7_platform_monthly(
+                    files=files,
+                    family_name=family_name,
+                    platform_name=platform_name,
+                    preprocess_func=preprocess_func,
+                    target_template_01deg=target_template_01deg,
+                    basin_mask_01deg=basin_mask_01deg,
+                    start_time=start_time,
+                    end_time=end_time,
+                    convert_rate_to_month=convert_rate_to_month,
+                )
+
+                platform_monthly_dict[family_name][platform_name] = da_platform
+
+            except Exception as exc:
+                print(f"\nFAILED V7 PLATFORM: {family_name}/{platform_name}")
+                print(f"Error: {exc}")
+                print("Continuing to next platform.")
+
+        if len(platform_monthly_dict[family_name]) == 0:
+            print(f"WARNING: no valid platforms for {family_name}; skipping family.")
+            continue
+
+        min_valid = min_valid_platforms_by_family.get(family_name, 1)
+
+        family_da = make_v7_family_mean_from_platforms(
+            platform_dict=platform_monthly_dict[family_name],
+            family_name=family_name,
+            common_months=common_months,
+            min_valid_platforms=min_valid,
+        )
+
+        if family_name == "DMSP-SSMIS":
+            display_name = "DMSP SSMIS"
+        else:
+            display_name = family_name
+
+        family_monthly_dict[display_name] = family_da
+
+        print(f"SUCCESSFULLY FINISHED V7 FAMILY: {family_name}")
+
+    if return_platform_dict:
+        return family_monthly_dict, platform_monthly_dict, inventory_df
+
+    return family_monthly_dict
+
+
+def build_gpm_pmw_v7_mean_platform_aware(
+    gpm_v7_family_dict,
+    mean_name="GPM PMW V07",
+    common_months=None,
+    min_valid_families=1,
+):
+    """
+    Build the overall GPM/GPROF V7 PMW mean from family-level fields.
+
+    Uses strict monthly alignment and reports valid family count by month.
+    """
+    cleaned_arrays = []
+    family_names = []
+
+    if common_months is None:
+        all_times = []
+        for da in gpm_v7_family_dict.values():
+            all_times.extend(pd.to_datetime(da.time.values).to_list())
+
+        common_months = pd.DatetimeIndex(sorted(pd.Index(all_times).unique()))
+
+    for name, da in gpm_v7_family_dict.items():
+        print(f"Including in V7 PMW mean: {name}, shape={da.shape}")
+
+        if "time" not in da.dims:
+            raise ValueError(f"{name} has no 'time' dimension. dims={da.dims}")
+
+        da = average_duplicate_time_months_safe(da, time_name="time")
+        da = da.reindex(time=common_months)
+
+        cleaned_arrays.append(da)
+        family_names.append(name)
+
+    if len(cleaned_arrays) == 0:
+        raise ValueError("No GPM/GPROF V7 arrays available to average.")
+
+    stacked = xr.concat(
+        cleaned_arrays,
+        dim=pd.Index(family_names, name="pmw_family"),
+        join="exact",
+        compat="override",
+        coords="minimal",
+    )
+
+    valid_family_count = stacked.notnull().any(dim=("lat", "lon")).sum(dim="pmw_family")
+
+    pmw_mean = stacked.mean(dim="pmw_family", skipna=True)
+    pmw_mean = pmw_mean.where(valid_family_count >= min_valid_families)
+    pmw_mean.name = mean_name
+
+    print("\nV7 PMW valid family count by month:")
+    print(valid_family_count.to_series())
+
+    return pmw_mean
 
 def cosine_weighted_mean_masked(da_2d, region_mask, lat_name="lat", lon_name="lon"):
     """
@@ -1718,16 +2381,27 @@ def region_seasonal_dict_to_tidy_df(
 def monthly_to_annual_totals_field(da_monthly, time_name="time"):
     """
     Convert monthly field [mm/month] to annual totals [mm/year].
-    Returns DataArray with dims: year, lat, lon
+
+    Strict behavior:
+    - Missing monthly values remain missing.
+    - Annual totals are only valid where all required monthly values exist.
+    - This avoids accidentally treating missing months as zero.
     """
     da = da_monthly.copy()
-    years = pd.to_datetime(da[time_name].values).year
 
-    annual = (
-        da.assign_coords(year=(time_name, years))
-          .groupby("year")
-          .sum(dim=time_name, skipna=True)
+    # Ensure clean monthly timestamps
+    da = da.assign_coords(
+        {time_name: pd.to_datetime(da[time_name].values).to_period("M").to_timestamp()}
     )
+    da = da.sortby(time_name)
+
+    annual = da.resample({time_name: "YS"}).sum(dim=time_name, skipna=False)
+
+    # Rename time dimension to year for downstream compatibility
+    years = pd.to_datetime(annual[time_name].values).year
+    annual = annual.assign_coords(year=(time_name, years)).swap_dims({time_name: "year"})
+    annual = annual.drop_vars(time_name, errors="ignore")
+
     return annual
 
 
@@ -1916,9 +2590,13 @@ def build_basin_mean_plot_product(
     year_end=2020,
 ):
     """
-    Full pipeline for one product:
-      monthly field -> annual totals -> mean annual field ->
-      basin cosine means -> basin-filled plot grid -> cosine-weighted panel mean
+    Pipeline for one product:
+
+    1. Monthly field -> annual totals
+    2. Annual totals -> 2013-2020 mean annual 2D field
+    3. Compute basin means for the displayed basin-painted map
+    4. Compute panel mean directly from the original mean annual 2D field,
+       not from the basin-painted grid.
     """
     da_annual = monthly_to_annual_totals_field(da_monthly)
     da_annual_mean = annual_to_multiyear_mean_field(da_annual, year_start, year_end)
@@ -1937,11 +2615,14 @@ def build_basin_mean_plot_product(
         value_col="precipitation",
     )
 
-    # THIS is the corrected panel mean
-    panel_mean = basin_panel_mean_cosine_from_plot_grid(
-        basin_plot_grid=plot_grid,
-        basin_mask_2d=basin_mask_2d,
+    # Important:
+    # This is the direct cosine-weighted mean of the product's actual
+    # 2013-2020 mean annual 2D field.
+    panel_mean = cosine_weighted_mean_masked(
+        da_2d=da_annual_mean,
+        region_mask=basin_mask_2d.notnull(),
         lat_name="lat",
+        lon_name="lon",
     )
 
     return {
@@ -1949,82 +2630,53 @@ def build_basin_mean_plot_product(
         "annual_mean_field": da_annual_mean,
         "basin_mean_df": basin_df,
         "plot_grid": plot_grid,
-        "panel_mean": panel_mean,
+        "panel_mean": float(panel_mean.values),
     }
 
 # =============================================================================
 # GPM / GPROF V8 MONTHLY NETCDF PREPROCESSING
 # =============================================================================
 
-
-def collect_gpm_v8_family_files(gpm_satellites_path):
-    """
-    Collect monthly GPM/GPROF V8 NetCDF files by sensor family.
-
-    Expected folder structure:
-        GPM-Constellation-Satellites_MI_and_Sounders/
-            V8/
-                ATMS/monthly/NOAA-20/*.nc
-                DMSP-SSMIS/monthly/F16/*.nc
-                ...
-
-    Returns
-    -------
-    dict
-        Dictionary where keys are sensor-family names and values are sorted file lists.
-    """
-    v8_root = os.path.join(gpm_satellites_path, "V8")
-
-    if not os.path.isdir(v8_root):
-        raise FileNotFoundError(f"V8 folder not found: {v8_root}")
-
-    family_files = {}
-
-    for family in sorted(os.listdir(v8_root)):
-        family_path = os.path.join(v8_root, family)
-
-        if not os.path.isdir(family_path):
-            continue
-
-        monthly_path = os.path.join(family_path, "monthly")
-
-        if not os.path.isdir(monthly_path):
-            continue
-
-        files = sorted(
-            glob.glob(os.path.join(monthly_path, "**", "*.nc"), recursive=True)
-        )
-
-        if len(files) == 0:
-            continue
-
-        display_key = "AMSR2" if family == "GCOM-W1_AMSR2" else family
-        family_files[display_key] = files
-
-    return family_files
-
-
 def parse_gpm_v8_month_from_filename(file_path):
     """
     Extract month-start timestamp from GPM/GPROF V8 monthly filename.
 
-    Example filename:
+    Example:
         3A-CLIM-MO.NOAA20.ATMS.GRID2025R1.20171101-S000000-E235959.11.V08A.nc
-
-    Returns
-    -------
-    pandas.Timestamp
-        Month-start timestamp, e.g., 2017-11-01.
     """
     fname = os.path.basename(file_path)
-
     match = re.search(r"\.(\d{8})-S\d{6}-E\d{6}", fname)
 
     if match is None:
         raise ValueError(f"Could not parse date from V8 filename: {fname}")
 
-    date_str = match.group(1)
-    return pd.to_datetime(date_str, format="%Y%m%d").to_period("M").to_timestamp()
+    return pd.to_datetime(match.group(1), format="%Y%m%d").to_period("M").to_timestamp()
+
+
+def parse_gpm_v8_platform_from_filename(file_path):
+    """
+    Extract platform name from GPM/GPROF V8 filename.
+
+    Example:
+        3A-CLIM-MO.NOAA20.ATMS.GRID2025R1.20171101...
+        returns NOAA20
+    """
+    fname = os.path.basename(file_path)
+    parts = fname.split(".")
+
+    if len(parts) < 4:
+        raise ValueError(f"Could not parse platform from filename: {fname}")
+
+    return parts[1]
+
+
+def normalize_gpm_v8_family_name(family):
+    """
+    Standardize folder/family names.
+    """
+    if family == "GCOM-W1_AMSR2":
+        return "AMSR2"
+    return family
 
 
 def clean_gpm_v8_da(da):
@@ -2045,11 +2697,10 @@ def open_one_gpm_v8_monthly_file(
     group="Grid",
 ):
     """
-    Open one monthly GPM/GPROF V8 NetCDF file and return a 2D DataArray
-    with an added monthly time dimension.
+    Open one monthly GPM/GPROF V8 file and return a 2D DataArray
+    with one time step.
 
-    The V8 files appear to store fields as (lon, lat), so this function
-    transposes them to (lat, lon) for consistency with the rest of the workflow.
+    Assumes the monthly product stores surfacePrecipitation on lon/lat.
     """
     ds = xr.open_dataset(file_path, group=group)
 
@@ -2061,45 +2712,76 @@ def open_one_gpm_v8_monthly_file(
 
     da = ds[var_name]
 
-    # Keep only the core 2D precipitation field.
-    # Some V8 variables have layer dimensions, but surfacePrecipitation is expected to be 2D.
     if "layer" in da.dims:
         raise ValueError(
             f"{var_name} in {file_path} unexpectedly has a layer dimension. "
             "Check whether another variable or layer selection is needed."
         )
 
-    # Standardize dimension order.
-    if set(["lon", "lat"]).issubset(set(da.dims)):
+    if {"lon", "lat"}.issubset(set(da.dims)):
         da = da.transpose("lat", "lon")
     else:
         raise ValueError(f"Expected lon/lat dimensions in {file_path}, got {da.dims}")
 
-    # Add time dimension from filename.
     file_time = parse_gpm_v8_month_from_filename(file_path)
     da = da.expand_dims(time=[file_time])
 
     da = clean_gpm_v8_da(da)
-
-    # Standardize coordinate names and order.
     da = da.sortby("lon")
-
-    # Keep latitude descending if that matches your current target/basin workflow.
     da = da.sortby("lat", ascending=False)
 
     return da
+
+
+def average_duplicate_time_months_safe(da, time_name="time"):
+    """
+    Normalize time to month-start and average duplicate monthly timestamps.
+    """
+    if time_name not in da.dims:
+        raise ValueError(f"DataArray has no {time_name!r} dimension. dims={da.dims}")
+
+    da = da.copy()
+
+    month_times = pd.to_datetime(da[time_name].values).to_period("M").to_timestamp()
+    da = da.assign_coords({time_name: month_times})
+    da = da.sortby(time_name)
+
+    time_index = pd.Index(pd.to_datetime(da[time_name].values))
+
+    if not time_index.has_duplicates:
+        return da
+
+    print("  WARNING: duplicate months found; averaging duplicate months.")
+
+    out = []
+    for t in sorted(time_index.unique()):
+        idx = np.where(time_index == t)[0]
+        tmp = da.isel({time_name: idx})
+
+        if tmp.sizes[time_name] > 1:
+            tmp = tmp.mean(dim=time_name, skipna=True)
+        else:
+            tmp = tmp.isel({time_name: 0}, drop=True)
+
+        tmp = tmp.expand_dims({time_name: [pd.Timestamp(t)]})
+        out.append(tmp)
+
+    da_out = xr.concat(out, dim=time_name)
+    da_out = da_out.sortby(time_name)
+
+    final_index = pd.Index(pd.to_datetime(da_out[time_name].values))
+    if final_index.has_duplicates:
+        raise ValueError("Duplicate months remain after averaging.")
+
+    return da_out
 
 
 def convert_gpm_v8_rate_to_mm_month(da, time_name="time"):
     """
     Convert monthly mean precipitation rate to monthly accumulation.
 
-    This assumes surfacePrecipitation is in mm/hr, consistent with the
-    previous GPM/GPROF monthly workflow. Before final use, check:
-
-        xr.open_dataset(file, group='Grid')['surfacePrecipitation'].attrs
-
-    If V8 units are already mm/month, do not use this conversion.
+    Use this only if surfacePrecipitation is mm/hr.
+    If the file units are already mm/month, set convert_rate_to_month=False.
     """
     days_in_month = xr.DataArray(
         pd.to_datetime(da[time_name].values).days_in_month,
@@ -2110,9 +2792,158 @@ def convert_gpm_v8_rate_to_mm_month(da, time_name="time"):
     return da * 24.0 * days_in_month
 
 
-def prepare_one_gpm_v8_family_monthly(
+def collect_gpm_v8_platform_files(gpm_satellites_path):
+    """
+    Collect GPM/GPROF V8 monthly files by sensor family and platform.
+
+    Returns
+    -------
+    dict
+        Nested dictionary:
+        {
+            "ATMS": {
+                "NOAA20": [files],
+                "NPP": [files],
+            },
+            "MHS": {
+                "NOAA19": [files],
+                ...
+            },
+            ...
+        }
+    """
+    v8_root = os.path.join(gpm_satellites_path, "V8")
+
+    if not os.path.isdir(v8_root):
+        raise FileNotFoundError(f"V8 folder not found: {v8_root}")
+
+    family_platform_files = {}
+
+    for raw_family in sorted(os.listdir(v8_root)):
+        family_path = os.path.join(v8_root, raw_family)
+
+        if not os.path.isdir(family_path):
+            continue
+
+        monthly_path = os.path.join(family_path, "monthly")
+
+        if not os.path.isdir(monthly_path):
+            continue
+
+        family = normalize_gpm_v8_family_name(raw_family)
+
+        files = sorted(
+            glob.glob(os.path.join(monthly_path, "**", "*.nc"), recursive=True)
+        )
+
+        if len(files) == 0:
+            continue
+
+        family_platform_files.setdefault(family, {})
+
+        for f in files:
+            try:
+                platform = parse_gpm_v8_platform_from_filename(f)
+            except Exception:
+                # Fallback to immediate parent folder if filename parsing fails
+                platform = os.path.basename(os.path.dirname(f))
+
+            family_platform_files[family].setdefault(platform, []).append(f)
+
+    for family in family_platform_files:
+        for platform in family_platform_files[family]:
+            family_platform_files[family][platform] = sorted(
+                family_platform_files[family][platform]
+            )
+
+    return family_platform_files
+
+
+def report_gpm_v8_inventory(
+    family_platform_files,
+    start_time="2013-01-01",
+    end_time="2020-12-31",
+):
+    """
+    Print platform-level monthly inventory and missing months.
+    """
+    full_months = pd.date_range(
+        pd.to_datetime(start_time).to_period("M").to_timestamp(),
+        pd.to_datetime(end_time).to_period("M").to_timestamp(),
+        freq="MS",
+    )
+
+    rows = []
+
+    print("\n" + "=" * 90)
+    print("GPM/GPROF V8 PLATFORM-LEVEL INVENTORY")
+    print("=" * 90)
+
+    for family, platform_dict in family_platform_files.items():
+        print(f"\n{family}")
+
+        for platform, files in platform_dict.items():
+            months = []
+            bad_files = []
+
+            for f in files:
+                try:
+                    months.append(parse_gpm_v8_month_from_filename(f))
+                except Exception:
+                    bad_files.append(f)
+
+            month_index = pd.DatetimeIndex(months).sort_values()
+            unique_months = pd.DatetimeIndex(sorted(month_index.unique()))
+
+            in_period = unique_months[
+                (unique_months >= full_months.min()) &
+                (unique_months <= full_months.max())
+            ]
+
+            missing = full_months.difference(in_period)
+            duplicate_count = len(month_index) - len(unique_months)
+
+            first_month = unique_months.min() if len(unique_months) else pd.NaT
+            last_month = unique_months.max() if len(unique_months) else pd.NaT
+
+            print(
+                f"  {platform:12s} "
+                f"files={len(files):4d}, "
+                f"unique_months={len(unique_months):4d}, "
+                f"in_period={len(in_period):3d}/96, "
+                f"first={first_month}, last={last_month}, "
+                f"duplicates={duplicate_count}"
+            )
+
+            if len(missing) > 0:
+                print(f"    Missing within 2013-2020: {list(missing)}")
+
+            if len(bad_files) > 0:
+                print(f"    WARNING: could not parse dates for {len(bad_files)} files")
+
+            rows.append(
+                {
+                    "family": family,
+                    "platform": platform,
+                    "n_files": len(files),
+                    "unique_months_all": len(unique_months),
+                    "months_in_2013_2020": len(in_period),
+                    "first_month": first_month,
+                    "last_month": last_month,
+                    "duplicate_months": duplicate_count,
+                    "missing_months_2013_2020": ";".join(
+                        [m.strftime("%Y-%m") for m in missing]
+                    ),
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def prepare_one_gpm_v8_platform_monthly(
     files,
     family_name,
+    platform_name,
     target_template_01deg,
     basin_mask_01deg,
     start_time="2013-01-01",
@@ -2122,19 +2953,18 @@ def prepare_one_gpm_v8_family_monthly(
     convert_rate_to_month=True,
 ):
     """
-    Prepare one GPM/GPROF V8 sensor family for PMB comparison.
+    Prepare one platform from one V8 sensor family.
 
-    Steps:
-    1. Open all monthly NetCDF files.
-    2. Add time coordinate from filename.
-    3. Concatenate along time.
-    4. Average duplicate months within a family.
-    5. Optionally convert mm/hr to mm/month.
-    6. Subset Antarctica.
-    7. Reproject to common 0.1° grid.
-    8. Apply basin mask.
+    Example:
+        family_name = ATMS
+        platform_name = NPP or NOAA20
     """
-    print(f"\nPreparing GPM/GPROF V8 {family_name}: {len(files)} files")
+    print("\n" + "-" * 80)
+    print(f"Preparing V8 platform: {family_name} / {platform_name}")
+    print(f"Number of files: {len(files)}")
+    print("First file:", files[0])
+    print("Last file: ", files[-1])
+    print("-" * 80)
 
     monthly_arrays = []
 
@@ -2152,19 +2982,19 @@ def prepare_one_gpm_v8_family_monthly(
             print(f"Reason: {exc}")
 
     if len(monthly_arrays) == 0:
-        raise ValueError(f"No valid V8 monthly files found for {family_name}")
+        raise ValueError(f"No valid V8 monthly files for {family_name}/{platform_name}")
 
     da = xr.concat(monthly_arrays, dim="time")
-
-    # Clean, normalize, sort, and safely average duplicate monthly timestamps
     da = average_duplicate_time_months_safe(da, time_name="time")
 
-    # Subset analysis period.
-    da = da.sel(time=slice(start_time, end_time))
+    # Strict time subset. No nearest matching.
+    start_month = pd.to_datetime(start_time).to_period("M").to_timestamp()
+    end_month = pd.to_datetime(end_time).to_period("M").to_timestamp()
+    da = da.sel(time=slice(start_month, end_month))
 
     if da.sizes.get("time", 0) == 0:
         raise ValueError(
-            f"{family_name}: no data after time subsetting "
+            f"{family_name}/{platform_name}: no data after subsetting "
             f"{start_time} to {end_time}"
         )
 
@@ -2173,9 +3003,9 @@ def prepare_one_gpm_v8_family_monthly(
     if convert_rate_to_month:
         da = convert_gpm_v8_rate_to_mm_month(da, time_name="time")
 
-    da.name = f"{family_name}_V08_mm_month"
+    da.name = f"{family_name}_{platform_name}_V08_mm_month"
 
-    # Antarctic subset.
+    # Antarctic subset
     da = subset_antarctica_lat(
         da,
         lat_name="lat",
@@ -2185,22 +3015,18 @@ def prepare_one_gpm_v8_family_monthly(
 
     if da.sizes["lat"] == 0 or da.sizes["lon"] == 0:
         raise ValueError(
-            f"{family_name}: empty spatial domain after Antarctic subset."
+            f"{family_name}/{platform_name}: empty spatial domain after Antarctic subset."
         )
 
-    # Force clean 1D coords and attach CRS.
     da = ensure_1d_latlon_coords(da, lat_name="lat", lon_name="lon")
-
     da = da.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=False)
     da = da.rio.write_crs("EPSG:4326", inplace=False)
 
     print(
-        f"{family_name} V8 before reprojection: "
-        f"dims={da.dims}, time={da.sizes['time']}, "
-        f"lat={da.sizes['lat']}, lon={da.sizes['lon']}"
+        f"{family_name}/{platform_name} before reprojection: "
+        f"time={da.sizes['time']}, lat={da.sizes['lat']}, lon={da.sizes['lon']}"
     )
 
-    # Reproject to the common 0.1° grid.
     da_01 = da.rio.reproject_match(
         target_template_01deg,
         resampling=Resampling.nearest,
@@ -2216,22 +3042,73 @@ def prepare_one_gpm_v8_family_monthly(
 
     da_01 = da_01.sortby("lon")
     da_01 = da_01.sortby("lat", ascending=False)
-
     da_01 = clean_gpm_v8_da(da_01)
 
-    # Apply basin-analysis mask.
     da_01 = da_01.where(basin_mask_01deg.notnull())
     da_01 = da_01.where(da_01["lat"] < -60)
 
-    da_01.name = f"{family_name}_V08_mm_month"
+    da_01.name = f"{family_name}_{platform_name}_V08_mm_month"
 
     print(
-        f"{family_name} V8 after reprojection: "
-        f"dims={da_01.dims}, time={da_01.sizes['time']}, "
-        f"lat={da_01.sizes['lat']}, lon={da_01.sizes['lon']}"
+        f"{family_name}/{platform_name} after reprojection: "
+        f"time={da_01.sizes['time']}, lat={da_01.sizes['lat']}, lon={da_01.sizes['lon']}"
     )
 
     return da_01
+
+
+def make_family_mean_from_platforms(
+    platform_dict,
+    family_name,
+    common_months,
+    min_valid_platforms=1,
+):
+    """
+    Average available platforms within one sensor family.
+
+    Important:
+    - Uses reindex, not nearest.
+    - Missing months remain NaN.
+    - A family month is valid only when at least min_valid_platforms platforms
+      have data for that month.
+    """
+    aligned = []
+    platform_names = []
+
+    for platform, da in platform_dict.items():
+        da = average_duplicate_time_months_safe(da, time_name="time")
+        da = da.reindex(time=common_months)
+        aligned.append(da)
+        platform_names.append(platform)
+
+    if len(aligned) == 0:
+        raise ValueError(f"No platforms available for {family_name}")
+
+    stacked = xr.concat(
+        aligned,
+        dim=pd.Index(platform_names, name="platform"),
+        join="exact",
+        compat="override",
+        coords="minimal",
+    )
+
+    valid_platform_count = stacked.notnull().any(dim=("lat", "lon")).sum(dim="platform")
+
+    family_mean = stacked.mean(dim="platform", skipna=True)
+    family_mean = family_mean.where(valid_platform_count >= min_valid_platforms)
+
+    family_mean.name = f"{family_name}_V08_mm_month"
+
+    print(
+        f"\n{family_name} family mean built from platforms: {platform_names}"
+    )
+    print(
+        f"{family_name}: valid months in common period = "
+        f"{int(family_mean.notnull().any(dim=('lat', 'lon')).sum().values)} "
+        f"/ {family_mean.sizes['time']}"
+    )
+
+    return family_mean
 
 
 def build_gpm_v8_family_monthly_dict(
@@ -2241,77 +3118,118 @@ def build_gpm_v8_family_monthly_dict(
     start_time="2013-01-01",
     end_time="2020-12-31",
     convert_rate_to_month=True,
+    min_valid_platforms_by_family=None,
+    return_platform_dict=False,
 ):
     """
-    Build monthly 0.1° gridded V8 fields for all available GPM/GPROF families.
+    Build monthly 0.1° V8 fields by platform first, then average platforms
+    into family-level products.
+
+    This is designed to handle ATMS correctly:
+    - SNPP/NPP ATMS can cover most/all of 2013-2020.
+    - NOAA-20 ATMS starts later.
+    - The ATMS family mean uses available platforms each month.
+    - Missing months are not filled by nearest-month values.
     """
-    family_files = collect_gpm_v8_family_files(gpm_satellites_path)
+    if min_valid_platforms_by_family is None:
+        min_valid_platforms_by_family = {}
 
-    print("\nAvailable GPM/GPROF V8 families:")
-    for family_name, files in family_files.items():
-        print(f"  {family_name}: {len(files)} files")
+    common_months = pd.date_range(
+        pd.to_datetime(start_time).to_period("M").to_timestamp(),
+        pd.to_datetime(end_time).to_period("M").to_timestamp(),
+        freq="MS",
+    )
 
-    gpm_v8_family_dict = {}
+    family_platform_files = collect_gpm_v8_platform_files(gpm_satellites_path)
 
-    for family_name, files in family_files.items():
-        if len(files) == 0:
+    inventory_df = report_gpm_v8_inventory(
+        family_platform_files,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    platform_monthly_dict = {}
+    family_monthly_dict = {}
+
+    for family_name, platform_files in family_platform_files.items():
+        print("\n" + "=" * 90)
+        print(f"STARTING V8 FAMILY: {family_name}")
+        print("=" * 90)
+
+        platform_monthly_dict[family_name] = {}
+
+        for platform_name, files in platform_files.items():
+            try:
+                da_platform = prepare_one_gpm_v8_platform_monthly(
+                    files=files,
+                    family_name=family_name,
+                    platform_name=platform_name,
+                    target_template_01deg=target_template_01deg,
+                    basin_mask_01deg=basin_mask_01deg,
+                    start_time=start_time,
+                    end_time=end_time,
+                    convert_rate_to_month=convert_rate_to_month,
+                )
+
+                platform_monthly_dict[family_name][platform_name] = da_platform
+
+            except Exception as exc:
+                print(f"\nFAILED V8 PLATFORM: {family_name}/{platform_name}")
+                print(f"Error: {exc}")
+                print("Continuing to next platform.")
+
+        if len(platform_monthly_dict[family_name]) == 0:
+            print(f"WARNING: no valid platforms for {family_name}; skipping family.")
             continue
 
-        print("\n" + "=" * 80)
-        print(f"STARTING V8 FAMILY: {family_name}")
-        print(f"Number of files: {len(files)}")
-        print("First file:", files[0])
-        print("Last file: ", files[-1])
-        print("=" * 80)
+        min_valid = min_valid_platforms_by_family.get(family_name, 1)
 
-        try:
-            da_01 = prepare_one_gpm_v8_family_monthly(
-                files=files,
-                family_name=family_name,
-                target_template_01deg=target_template_01deg,
-                basin_mask_01deg=basin_mask_01deg,
-                start_time=start_time,
-                end_time=end_time,
-                convert_rate_to_month=convert_rate_to_month,
-            )
+        family_da = make_family_mean_from_platforms(
+            platform_dict=platform_monthly_dict[family_name],
+            family_name=family_name,
+            common_months=common_months,
+            min_valid_platforms=min_valid,
+        )
 
-            display_name = family_name
-            if family_name == "DMSP-SSMIS":
-                display_name = "DMSP SSMIS V08"
-            else:
-                display_name = f"{family_name} V08"
+        if family_name == "DMSP-SSMIS":
+            display_name = "DMSP SSMIS V08"
+        else:
+            display_name = f"{family_name} V08"
 
-            gpm_v8_family_dict[display_name] = da_01
+        family_monthly_dict[display_name] = family_da
 
-            print(f"SUCCESSFULLY FINISHED V8 FAMILY: {family_name}")
+        print(f"SUCCESSFULLY FINISHED V8 FAMILY: {family_name}")
 
-        except Exception as exc:
-            print("\nFAILED V8 FAMILY:")
-            print(family_name)
-            print("First file:", files[0])
-            print("Last file: ", files[-1])
-            print("Error:")
-            print(exc)
+    if return_platform_dict:
+        return family_monthly_dict, platform_monthly_dict, inventory_df
 
-            raise
-
-    return gpm_v8_family_dict
+    return family_monthly_dict
 
 
-def build_gpm_pmw_v8_mean(gpm_v8_family_dict, mean_name="GPM PMW V08"):
+def build_gpm_pmw_v8_mean(
+    gpm_v8_family_dict,
+    mean_name="GPM PMW V08",
+    common_months=None,
+    min_valid_families=1,
+):
     """
-    Build the overall GPM/GPROF V8 passive-microwave mean from prepared
-    family-level monthly fields.
+    Build the overall GPM/GPROF V8 PMW mean from family-level fields.
 
-    This function is defensive:
-    - normalizes time to month-start
-    - removes/averages duplicate monthly timestamps within each family
-    - aligns all families on their common/outer monthly time axis
-    - averages across available families using skipna=True
+    Logic:
+    - Align all family fields to the same monthly time axis.
+    - Stack families.
+    - Compute the gridded family mean at each time/lat/lon pixel.
+    - Require at least min_valid_families valid families per pixel.
     """
-
     cleaned_arrays = []
     family_names = []
+
+    if common_months is None:
+        all_times = []
+        for da in gpm_v8_family_dict.values():
+            all_times.extend(pd.to_datetime(da.time.values).to_list())
+
+        common_months = pd.DatetimeIndex(sorted(pd.Index(all_times).unique()))
 
     for name, da in gpm_v8_family_dict.items():
         print(f"Including in V8 PMW mean: {name}, shape={da.shape}")
@@ -2319,55 +3237,8 @@ def build_gpm_pmw_v8_mean(gpm_v8_family_dict, mean_name="GPM PMW V08"):
         if "time" not in da.dims:
             raise ValueError(f"{name} has no 'time' dimension. dims={da.dims}")
 
-        # ---------------------------------------------------------------------
-        # 1. Normalize time to month-start
-        # ---------------------------------------------------------------------
-        da = da.copy()
-
-        month_times = pd.to_datetime(da["time"].values).to_period("M").to_timestamp()
-        da = da.assign_coords(time=month_times)
-        da = da.sortby("time")
-
-        # ---------------------------------------------------------------------
-        # 2. Safely average duplicate months inside this family
-        # ---------------------------------------------------------------------
-        time_index = pd.Index(pd.to_datetime(da["time"].values))
-
-        if time_index.has_duplicates:
-            print(f"  WARNING: duplicate months found in {name}; averaging duplicates.")
-
-            unique_times = pd.Index(sorted(time_index.unique()))
-            out = []
-
-            for t in unique_times:
-                idx = np.where(time_index == t)[0]
-                tmp = da.isel(time=idx)
-
-                if tmp.sizes["time"] > 1:
-                    tmp = tmp.mean(dim="time", skipna=True)
-                else:
-                    tmp = tmp.isel(time=0, drop=True)
-
-                tmp = tmp.expand_dims(time=[pd.Timestamp(t)])
-                out.append(tmp)
-
-            da = xr.concat(out, dim="time")
-            da = da.sortby("time")
-
-        # ---------------------------------------------------------------------
-        # 3. Confirm time is now unique
-        # ---------------------------------------------------------------------
-        time_index_after = pd.Index(pd.to_datetime(da["time"].values))
-
-        if time_index_after.has_duplicates:
-            raise ValueError(
-                f"{name} still has duplicate time values after cleaning."
-            )
-
-        print(
-            f"  cleaned: time={da.sizes['time']}, "
-            f"start={time_index_after.min()}, end={time_index_after.max()}"
-        )
+        da = average_duplicate_time_months_safe(da, time_name="time")
+        da = da.reindex(time=common_months)
 
         cleaned_arrays.append(da)
         family_names.append(name)
@@ -2375,24 +3246,118 @@ def build_gpm_pmw_v8_mean(gpm_v8_family_dict, mean_name="GPM PMW V08"):
     if len(cleaned_arrays) == 0:
         raise ValueError("No GPM/GPROF V8 arrays available to average.")
 
-    # -------------------------------------------------------------------------
-    # 4. Concatenate across V8 families
-    # -------------------------------------------------------------------------
     stacked = xr.concat(
         cleaned_arrays,
         dim=pd.Index(family_names, name="pmw_family"),
-        join="outer",
+        join="exact",
         compat="override",
         coords="minimal",
     )
 
-    # -------------------------------------------------------------------------
-    # 5. Mean across available families
-    # -------------------------------------------------------------------------
+    # Pixel-level valid family count
+    valid_family_count = stacked.notnull().sum(dim="pmw_family")
+
+    # Gridded family mean
     pmw_mean = stacked.mean(dim="pmw_family", skipna=True)
+
+    # Require the requested number of valid families at each pixel
+    pmw_mean = pmw_mean.where(valid_family_count >= min_valid_families)
     pmw_mean.name = mean_name
 
+    # Reporting only
+    valid_family_count_by_month = stacked.notnull().any(dim=("lat", "lon")).sum(dim="pmw_family")
+
+    print("\nV8 PMW valid family count by month:")
+    print(valid_family_count_by_month.to_series())
+
     return pmw_mean
+
+def mean_annual_ais_from_monthly(da_monthly, basin_mask_01deg, common_time_main):
+    """
+    Compute 2013-2020 mean annual AIS precipitation from monthly mm/month fields.
+
+    Important:
+    - Uses strict reindexing to the expected 96-month period.
+    - Uses skipna=False for annual sums so incomplete years are not treated
+      as artificially low annual totals.
+    """
+    da_monthly = da_monthly.reindex(time=common_time_main)
+
+    annual = da_monthly.resample(time="YS").sum(skipna=False)
+    mean_annual = annual.mean("time", skipna=True)
+
+    ais_mean = cosine_weighted_mean_masked(
+        mean_annual,
+        basin_mask_01deg.notnull(),
+        lat_name="lat",
+        lon_name="lon",
+    )
+
+    return float(ais_mean.values)
+
+# =============================================================================
+# GPM V8 FAMILY YEARLY AIS COSINE-WEIGHTED TIME SERIES
+# Antarctica only: ATMS, MHS, DMSP-SSMIS, AMSR2, and GPM PMW V08 mean
+# =============================================================================
+
+def annual_ais_cosine_series_from_monthly(
+    da_monthly,
+    basin_mask_01deg,
+    product_name,
+    common_time_main=None,
+    year_start=2013,
+    year_end=2020,
+    lat_name="lat",
+    lon_name="lon",
+):
+    """
+    Convert monthly gridded precipitation [mm/month] to yearly AIS cosine-weighted
+    precipitation totals [mm/year].
+
+    Workflow:
+      monthly 2D fields
+      -> strict monthly alignment
+      -> annual totals
+      -> cosine-weighted AIS mean for each year
+    """
+    da = da_monthly.copy()
+
+    # Normalize time to month start
+    da = da.assign_coords(
+        time=pd.to_datetime(da["time"].values).to_period("M").to_timestamp()
+    )
+    da = da.sortby("time")
+
+    if common_time_main is not None:
+        da = da.reindex(time=common_time_main)
+
+    # Keep only requested years
+    da = da.sel(time=slice(f"{year_start}-01-01", f"{year_end}-12-31"))
+
+    # Strict annual sum: incomplete months remain NaN
+    annual = da.resample(time="YS").sum(skipna=False)
+
+    rows = []
+
+    for t in annual["time"].values:
+        year = pd.to_datetime(t).year
+        field = annual.sel(time=t)
+
+        ais_mean = cosine_weighted_mean_masked(
+            field,
+            basin_mask_01deg.notnull(),
+            lat_name=lat_name,
+            lon_name=lon_name,
+        )
+
+        rows.append({
+            "year": year,
+            "product": product_name,
+            "precipitation": float(ais_mean.values),
+        })
+
+    return pd.DataFrame(rows)
+
 #%% The plots
 # =============================================================================
 # HELPER FUNCTIONS FOR NICE SYMMETRIC AXES

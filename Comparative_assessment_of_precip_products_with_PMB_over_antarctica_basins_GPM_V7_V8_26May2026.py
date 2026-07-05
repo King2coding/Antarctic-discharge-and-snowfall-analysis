@@ -518,50 +518,281 @@ print("PMB time range :", str(pmb_mon_01.time.min().values),  "->", str(pmb_mon_
 print("PMB uncertainty time range :", str(pmb_unc_mon_01.time.min().values), "->", str(pmb_unc_mon_01.time.max().values))
 print("UA-HIPA time range:", str(uahipa_mon_01.time.min().values), "->", str(uahipa_mon_01.time.max().values))
 
-#%% Build GMP Data Series
+#%% Build GPM Data Series
 # =============================================================================
-# SECTION 1D. GPM MICROWAVE V7 MONTHLY INPUT PREPARATION
+# SECTION 1D. GPM / GPROF V7 MONTHLY INPUT PREPARATION
+# Platform-aware processing, especially important for ATMS
 # =============================================================================
 
-gpm_family_monthly_dict = build_gpm_family_monthly_dict(
-    gpm_satellites_path=gpm_satellites_path + "/V7",
-    preprocess_func=preprocess,
-    target_template_01deg=target_template_01deg,
-    basin_mask_01deg=basin_mask_01deg,
+common_time_main = pd.date_range("2013-01-01", "2020-12-01", freq="MS")
+
+gpm_family_monthly_dict, gpm_v7_platform_monthly_dict, gpm_v7_inventory_df = (
+    build_gpm_v7_family_monthly_dict_platform_aware(
+        gpm_v7_path=gpm_satellites_path + "/V7",
+        preprocess_func=preprocess,
+        target_template_01deg=target_template_01deg,
+        basin_mask_01deg=basin_mask_01deg,
+        start_time="2013-01-01",
+        end_time="2020-12-31",
+        convert_rate_to_month=True,
+        min_valid_platforms_by_family={
+            "ATMS": 1,
+            "MHS": 1,
+            "DMSP-SSMIS": 1,
+            "AMSR2": 1,
+        },
+        return_platform_dict=True,
+    )
 )
 
-gpm_pmw_v07_mon_01 = build_gpm_pmw_mean(
-    gpm_family_dict=gpm_family_monthly_dict,
+# Save V7 inventory for QC
+gpm_v7_inventory_df.to_csv(
+    os.path.join(out_dfs, f"gpm_v7_platform_inventory_{cde_run_dte}.csv"),
+    index=False,
+)
+
+gpm_pmw_v07_mon_01 = build_gpm_pmw_v7_mean_platform_aware(
+    gpm_v7_family_dict=gpm_family_monthly_dict,
     mean_name="GPM PMW V07",
+    common_months=common_time_main,
+    min_valid_families=1,
 )
 
-print(gpm_family_monthly_dict.keys())
-print(gpm_pmw_v07_mon_01.shape)
+print("\nGPM/GPROF V7 family products available:")
+for name, da in gpm_family_monthly_dict.items():
+    da_check = da.reindex(time=common_time_main)
+    valid_months = da_check.notnull().any(dim=("lat", "lon"))
+
+    print(
+        f"{name:18s}: "
+        f"{int(valid_months.sum().values):3d}/{da_check.sizes['time']} valid months, "
+        f"{str(da_check.time.min().values)[:10]} -> {str(da_check.time.max().values)[:10]}"
+    )
+
+print("\nGPM/GPROF V7 platform products available:")
+for family, platform_dict in gpm_v7_platform_monthly_dict.items():
+    print(f"\n{family}")
+    for platform, da in platform_dict.items():
+        da_check = da.reindex(time=common_time_main)
+        valid_months = da_check.notnull().any(dim=("lat", "lon"))
+
+        print(
+            f"  {platform:16s}: "
+            f"{int(valid_months.sum().values):3d}/{da_check.sizes['time']} valid months, "
+            f"{str(da_check.time.min().values)[:10]} -> {str(da_check.time.max().values)[:10]}"
+        )
+
+print("\nGPM PMW V07 time coverage")
+print("Start:", pd.to_datetime(gpm_pmw_v07_mon_01.time.values[0]))
+print("End:  ", pd.to_datetime(gpm_pmw_v07_mon_01.time.values[-1]))
+print("Months:", gpm_pmw_v07_mon_01.sizes["time"])
+
+# Check how many valid Antarctic pixels exist per month
+v7_valid_pixel_count = gpm_pmw_v07_mon_01.notnull().sum(dim=("lat", "lon"))
+
+print("\nGPM PMW V07 valid-pixel count per month:")
+print(v7_valid_pixel_count.to_series())
+
+bad_v7_months = v7_valid_pixel_count.where(v7_valid_pixel_count == 0, drop=True)
+
+print("\nV7 months with zero valid Antarctic pixels:")
+print(bad_v7_months.time.values)
+
+# =============================================================================
+# ATMS V7-specific QC
+# =============================================================================
+
+print("\n" + "=" * 90)
+print("ATMS V7 QC")
+print("=" * 90)
+
+if "ATMS" in gpm_v7_platform_monthly_dict:
+    for platform, da in gpm_v7_platform_monthly_dict["ATMS"].items():
+        da_check = da.reindex(time=common_time_main)
+        valid_months = da_check.notnull().any(dim=("lat", "lon"))
+        missing_months = da_check.time.where(~valid_months, drop=True)
+
+        print(f"\nATMS V7 platform: {platform}")
+        print(f"Valid months: {int(valid_months.sum().values)} / {da_check.sizes['time']}")
+        print("Missing months:")
+        print(pd.to_datetime(missing_months.values))
+
+    atms_family_v7 = gpm_family_monthly_dict.get("ATMS", None)
+
+    if atms_family_v7 is not None:
+        atms_family_v7 = atms_family_v7.reindex(time=common_time_main)
+        valid_months = atms_family_v7.notnull().any(dim=("lat", "lon"))
+        missing_months = atms_family_v7.time.where(~valid_months, drop=True)
+
+        print("\nATMS V7 family mean")
+        print(f"Valid months: {int(valid_months.sum().values)} / {atms_family_v7.sizes['time']}")
+        print("Missing months:")
+        print(pd.to_datetime(missing_months.values))
+
+else:
+    print("ATMS not found in V7 platform dictionary.")
+
+# =============================================================================
+# ATMS V7 platform-level AIS mean annual precipitation QC
+# =============================================================================
+
+print("\n" + "=" * 90)
+print("ATMS V7 PLATFORM-LEVEL MEAN ANNUAL AIS PRECIPITATION QC")
+print("=" * 90)
+
+atms_v7_qc_rows = []
+
+if "ATMS" in gpm_v7_platform_monthly_dict:
+
+    for platform, da in gpm_v7_platform_monthly_dict["ATMS"].items():
+
+        da_check = da.reindex(time=common_time_main)
+        valid_months = da_check.notnull().any(dim=("lat", "lon"))
+        n_valid_months = int(valid_months.sum().values)
+
+        try:
+            value = mean_annual_ais_from_monthly(
+                da_monthly=da,
+                basin_mask_01deg=basin_mask_01deg,
+                common_time_main=common_time_main,
+            )
+
+            print(f"ATMS V7 {platform:16s}: {value:.2f} mm yr-1 "
+                  f"({n_valid_months}/96 valid months)")
+
+            atms_v7_qc_rows.append({
+                "version": "V07",
+                "family": "ATMS",
+                "platform_or_family": platform,
+                "valid_months": n_valid_months,
+                "mean_annual_AIS_mm_yr": value,
+            })
+
+        except Exception as exc:
+            print(f"ATMS V7 {platform:16s}: failed AIS mean calculation: {exc}")
+
+            atms_v7_qc_rows.append({
+                "version": "V07",
+                "family": "ATMS",
+                "platform_or_family": platform,
+                "valid_months": n_valid_months,
+                "mean_annual_AIS_mm_yr": np.nan,
+                "error": str(exc),
+            })
+
+else:
+    print("ATMS not found in gpm_v7_platform_monthly_dict.")
+
+
+if "ATMS" in gpm_family_monthly_dict:
+
+    atms_family_da = gpm_family_monthly_dict["ATMS"]
+    atms_family_check = atms_family_da.reindex(time=common_time_main)
+    valid_months = atms_family_check.notnull().any(dim=("lat", "lon"))
+    n_valid_months = int(valid_months.sum().values)
+
+    try:
+        value = mean_annual_ais_from_monthly(
+            da_monthly=atms_family_da,
+            basin_mask_01deg=basin_mask_01deg,
+            common_time_main=common_time_main,
+        )
+
+        print(f"ATMS V7 family      : {value:.2f} mm yr-1 "
+              f"({n_valid_months}/96 valid months)")
+
+        atms_v7_qc_rows.append({
+            "version": "V07",
+            "family": "ATMS",
+            "platform_or_family": "ATMS V07 family",
+            "valid_months": n_valid_months,
+            "mean_annual_AIS_mm_yr": value,
+        })
+
+    except Exception as exc:
+        print(f"ATMS V7 family      : failed AIS mean calculation: {exc}")
+
+        atms_v7_qc_rows.append({
+            "version": "V07",
+            "family": "ATMS",
+            "platform_or_family": "ATMS V07 family",
+            "valid_months": n_valid_months,
+            "mean_annual_AIS_mm_yr": np.nan,
+            "error": str(exc),
+        })
+
+
+if len(atms_v7_qc_rows) > 0:
+    atms_v7_qc_df = pd.DataFrame(atms_v7_qc_rows)
+
+    atms_v7_qc_out = os.path.join(
+        out_dfs,
+        f"gpm_v7_ATMS_platform_mean_annual_AIS_QC_{cde_run_dte}.csv"
+    )
+
+    atms_v7_qc_df.to_csv(atms_v7_qc_out, index=False)
+
+    print("\nSaved ATMS V7 platform-level QC table:")
+    print(atms_v7_qc_out)
+    print(atms_v7_qc_df)
 
 # =============================================================================
 # SECTION 1E. GPM / GPROF V8 MONTHLY INPUT PREPARATION
+# Platform-aware processing, especially important for ATMS
 # =============================================================================
 
-# First check units manually from one file before finalizing conversion:
-# test_v8 = xr.open_dataset(
-#     "/ra1/pubdat/GPM-Constellation-Satellites_MI_and_Sounders/V8/ATMS/monthly/NOAA-20/3A-CLIM-MO.NOAA20.ATMS.GRID2025R1.20171101-S000000-E235959.11.V08A.nc",
-#     group="Grid"
-# )
-# print(test_v8["surfacePrecipitation"].attrs)
+common_time_main = pd.date_range("2013-01-01", "2020-12-01", freq="MS")
 
-gpm_v8_family_monthly_dict = build_gpm_v8_family_monthly_dict(
-    gpm_satellites_path=gpm_satellites_path,
-    target_template_01deg=target_template_01deg,
-    basin_mask_01deg=basin_mask_01deg,
-    start_time="2013-01-01",
-    end_time="2020-12-31",
-    convert_rate_to_month=True,  # set False if V8 is already mm/month
+gpm_v8_family_monthly_dict, gpm_v8_platform_monthly_dict, gpm_v8_inventory_df = (
+    build_gpm_v8_family_monthly_dict(
+        gpm_satellites_path=gpm_satellites_path,
+        target_template_01deg=target_template_01deg,
+        basin_mask_01deg=basin_mask_01deg,
+        start_time="2013-01-01",
+        end_time="2020-12-31",
+        convert_rate_to_month=True,
+        min_valid_platforms_by_family={
+            "ATMS": 1,
+            "MHS": 1,
+            "DMSP-SSMIS": 1,
+            "AMSR2": 1,
+        },
+        return_platform_dict=True,
+    )
+)
+
+# Save V8 inventory for QC
+gpm_v8_inventory_df.to_csv(
+    os.path.join(out_dfs, f"gpm_v8_platform_inventory_{cde_run_dte}.csv"),
+    index=False,
 )
 
 gpm_pmw_v08_mon_01 = build_gpm_pmw_v8_mean(
     gpm_v8_family_dict=gpm_v8_family_monthly_dict,
     mean_name="GPM PMW V08",
+    common_months=common_time_main,
+    min_valid_families=4,
 )
+
+print("\nGPM/GPROF V8 family products available:")
+for name, da in gpm_v8_family_monthly_dict.items():
+    valid_months = da.notnull().any(dim=("lat", "lon"))
+    print(
+        f"{name:18s}: "
+        f"{int(valid_months.sum().values):3d}/{da.sizes['time']} valid months, "
+        f"{str(da.time.min().values)[:10]} -> {str(da.time.max().values)[:10]}"
+    )
+
+print("\nGPM/GPROF V8 platform products available:")
+for family, platform_dict in gpm_v8_platform_monthly_dict.items():
+    print(f"\n{family}")
+    for platform, da in platform_dict.items():
+        valid_months = da.notnull().any(dim=("lat", "lon"))
+        print(
+            f"  {platform:12s}: "
+            f"{int(valid_months.sum().values):3d}/{da.sizes['time']} valid months, "
+            f"{str(da.time.min().values)[:10]} -> {str(da.time.max().values)[:10]}"
+        )
 
 print(gpm_v8_family_monthly_dict.keys())
 print(gpm_pmw_v08_mon_01.shape)
@@ -583,68 +814,273 @@ bad_v8_months = v8_valid_pixel_count.where(v8_valid_pixel_count == 0, drop=True)
 print("\nV8 months with zero valid Antarctic pixels:")
 print(bad_v8_months.time.values)
 
+# =============================================================================
+# ATMS-specific QC
+# =============================================================================
+
+print("\n" + "=" * 90)
+print("ATMS V8 QC")
+print("=" * 90)
+
+if "ATMS" in gpm_v8_platform_monthly_dict:
+    for platform, da in gpm_v8_platform_monthly_dict["ATMS"].items():
+        da_check = da.reindex(time=common_time_main)
+        valid_months = da_check.notnull().any(dim=("lat", "lon"))
+        missing_months = da_check.time.where(~valid_months, drop=True)
+
+        print(f"\nATMS platform: {platform}")
+        print(f"Valid months: {int(valid_months.sum().values)} / {da_check.sizes['time']}")
+        print("Missing months:")
+        print(pd.to_datetime(missing_months.values))
+
+    atms_family = gpm_v8_family_monthly_dict.get("ATMS V08", None)
+
+    if atms_family is not None:
+        atms_family = atms_family.reindex(time=common_time_main)
+        valid_months = atms_family.notnull().any(dim=("lat", "lon"))
+        missing_months = atms_family.time.where(~valid_months, drop=True)
+
+        print("\nATMS family mean")
+        print(f"Valid months: {int(valid_months.sum().values)} / {atms_family.sizes['time']}")
+        print("Missing months:")
+        print(pd.to_datetime(missing_months.values))
+
+else:
+    print("ATMS not found in V8 platform dictionary.")
+
+# =============================================================================
+# ATMS platform-level AIS mean annual precipitation QC
+# Place this immediately after the ATMS-specific QC block
+# =============================================================================
+
+
+print("\n" + "=" * 90)
+print("ATMS V8 PLATFORM-LEVEL MEAN ANNUAL AIS PRECIPITATION QC")
+print("=" * 90)
+
+atms_qc_rows = []
+
+if "ATMS" in gpm_v8_platform_monthly_dict:
+
+    for platform, da in gpm_v8_platform_monthly_dict["ATMS"].items():
+
+        da_check = da.reindex(time=common_time_main)
+        valid_months = da_check.notnull().any(dim=("lat", "lon"))
+        n_valid_months = int(valid_months.sum().values)
+
+        try:
+            value = mean_annual_ais_from_monthly(
+                da_monthly=da,
+                basin_mask_01deg=basin_mask_01deg,
+                common_time_main=common_time_main,
+            )
+
+            print(f"ATMS {platform:12s}: {value:.2f} mm yr-1 "
+                  f"({n_valid_months}/96 valid months)")
+
+            atms_qc_rows.append({
+                "family": "ATMS",
+                "platform_or_family": platform,
+                "valid_months": n_valid_months,
+                "mean_annual_AIS_mm_yr": value,
+            })
+
+        except Exception as exc:
+            print(f"ATMS {platform:12s}: failed AIS mean calculation: {exc}")
+
+            atms_qc_rows.append({
+                "family": "ATMS",
+                "platform_or_family": platform,
+                "valid_months": n_valid_months,
+                "mean_annual_AIS_mm_yr": np.nan,
+                "error": str(exc),
+            })
+
+else:
+    print("ATMS not found in gpm_v8_platform_monthly_dict.")
+
+
+if "ATMS V08" in gpm_v8_family_monthly_dict:
+
+    atms_family_da = gpm_v8_family_monthly_dict["ATMS V08"]
+    atms_family_check = atms_family_da.reindex(time=common_time_main)
+    valid_months = atms_family_check.notnull().any(dim=("lat", "lon"))
+    n_valid_months = int(valid_months.sum().values)
+
+    try:
+        value = mean_annual_ais_from_monthly(
+            da_monthly=atms_family_da,
+            basin_mask_01deg=basin_mask_01deg,
+            common_time_main=common_time_main,
+        )
+
+        print(f"ATMS V08 family : {value:.2f} mm yr-1 "
+              f"({n_valid_months}/96 valid months)")
+
+        atms_qc_rows.append({
+            "family": "ATMS",
+            "platform_or_family": "ATMS V08 family",
+            "valid_months": n_valid_months,
+            "mean_annual_AIS_mm_yr": value,
+        })
+
+    except Exception as exc:
+        print(f"ATMS V08 family : failed AIS mean calculation: {exc}")
+
+        atms_qc_rows.append({
+            "family": "ATMS",
+            "platform_or_family": "ATMS V08 family",
+            "valid_months": n_valid_months,
+            "mean_annual_AIS_mm_yr": np.nan,
+            "error": str(exc),
+        })
+
+
+# Save ATMS QC table
+if len(atms_qc_rows) > 0:
+    atms_qc_df = pd.DataFrame(atms_qc_rows)
+
+    atms_qc_out = os.path.join(
+        out_dfs,
+        f"gpm_v8_ATMS_platform_mean_annual_AIS_QC_{cde_run_dte}.csv"
+    )
+
+    atms_qc_df.to_csv(atms_qc_out, index=False)
+
+    print("\nSaved ATMS platform-level QC table:")
+    print(atms_qc_out)
+    print(atms_qc_df)
+
+#%%
+# =============================================================================
+# GPM V8 family-level AIS mean annual precipitation QC
+# Uses the same cosine-weighted method for every family
+# =============================================================================
+
+print("\n" + "=" * 90)
+print("GPM V8 FAMILY-LEVEL MEAN ANNUAL AIS PRECIPITATION QC")
+print("=" * 90)
+
+v8_family_qc_rows = []
+
+for family_name, da in gpm_v8_family_monthly_dict.items():
+
+    da_check = da.reindex(time=common_time_main)
+    valid_months = da_check.notnull().any(dim=("lat", "lon"))
+    n_valid_months = int(valid_months.sum().values)
+
+    try:
+        value = mean_annual_ais_from_monthly(
+            da_monthly=da_check,
+            basin_mask_01deg=basin_mask_01deg,
+            common_time_main=common_time_main,
+        )
+
+        print(
+            f"{family_name:18s}: {value:8.2f} mm yr-1 "
+            f"({n_valid_months}/96 valid months)"
+        )
+
+        v8_family_qc_rows.append({
+            "version": "V08",
+            "family": family_name,
+            "valid_months": n_valid_months,
+            "mean_annual_AIS_mm_yr": value,
+        })
+
+    except Exception as exc:
+        print(f"{family_name:18s}: failed AIS mean calculation: {exc}")
+
+        v8_family_qc_rows.append({
+            "version": "V08",
+            "family": family_name,
+            "valid_months": n_valid_months,
+            "mean_annual_AIS_mm_yr": np.nan,
+            "error": str(exc),
+        })
+
+
+# Add overall V8 PMW mean
+value = mean_annual_ais_from_monthly(
+    da_monthly=gpm_pmw_v08_mon_01,
+    basin_mask_01deg=basin_mask_01deg,
+    common_time_main=common_time_main,
+)
+
+valid_months = gpm_pmw_v08_mon_01.reindex(time=common_time_main).notnull().any(dim=("lat", "lon"))
+n_valid_months = int(valid_months.sum().values)
+
+print(
+    f"{'GPM PMW V08 mean':18s}: {value:8.2f} mm yr-1 "
+    f"({n_valid_months}/96 valid months)"
+)
+
+v8_family_qc_rows.append({
+    "version": "V08",
+    "family": "GPM PMW V08 mean",
+    "valid_months": n_valid_months,
+    "mean_annual_AIS_mm_yr": value,
+})
+
+v8_family_qc_df = pd.DataFrame(v8_family_qc_rows)
+
+v8_family_qc_out = os.path.join(
+    out_dfs,
+    f"gpm_v8_family_mean_annual_AIS_QC_{cde_run_dte}.csv"
+)
+
+v8_family_qc_df.to_csv(v8_family_qc_out, index=False)
+
+print("\nSaved V8 family-level QC table:")
+print(v8_family_qc_out)
+print(v8_family_qc_df)
 #%%
 # =============================================================================
 # ENFORCE COMMON MONTHLY TIME AXIS FOR MAIN PRODUCT COMPARISON
 # =============================================================================
-common_time_main = np.intersect1d(
-    pmb_mon_01["time"].values,
-    era5_mnth_01["time"].values,
-)
 
-common_time_main = np.intersect1d(
-    common_time_main,
-    gpcp_mon_01["time"].values,
-)
+# The study period is fixed: January 2013 through December 2020 = 96 months.
+# Use strict reindexing. Do not use nearest-time matching.
+common_time_main = pd.date_range("2013-01-01", "2020-12-01", freq="MS")
 
-common_time_main = np.intersect1d(
-    common_time_main,
-    gpm_pmw_v07_mon_01["time"].values,
-)
-
-common_time_main = np.intersect1d(
-    common_time_main,
-    gpm_pmw_v08_mon_01["time"].values,
-)
-
-common_time_main = np.intersect1d(
-    common_time_main,
-    pmb_unc_mon_01["time"].values,
-)
-
-common_time_main = np.sort(common_time_main)
-# common_time = np.intersect1d(
-#     common_time,
-#     uahipa_mon_01["time"].values,
-# )
-
-pmb_mon_01 = pmb_mon_01.sel(time=common_time_main)
-pmb_unc_mon_01 = pmb_unc_mon_01.sel(time=common_time_main)
-era5_mnth_01 = era5_mnth_01.sel(time=common_time_main)
-gpcp_mon_01 = gpcp_mon_01.sel(time=common_time_main)
-gpm_pmw_v07_mon_01 = gpm_pmw_v07_mon_01.sel(time=common_time_main)
-gpm_pmw_v08_mon_01 = gpm_pmw_v08_mon_01.sel(time=common_time_main)
-
-# uahipa_mon_01 = uahipa_mon_01.sel(time=common_time)
+pmb_mon_01 = pmb_mon_01.reindex(time=common_time_main)
+pmb_unc_mon_01 = pmb_unc_mon_01.reindex(time=common_time_main)
+era5_mnth_01 = era5_mnth_01.reindex(time=common_time_main)
+gpcp_mon_01 = gpcp_mon_01.reindex(time=common_time_main)
+gpm_pmw_v07_mon_01 = gpm_pmw_v07_mon_01.reindex(time=common_time_main)
+gpm_pmw_v08_mon_01 = gpm_pmw_v08_mon_01.reindex(time=common_time_main)
+uahipa_mon_01 = uahipa_mon_01.reindex(time=common_time_main)
 
 gpm_family_monthly_dict = {
-    name: da.sel(time=common_time_main, method="nearest")
+    name: da.reindex(time=common_time_main)
     for name, da in gpm_family_monthly_dict.items()
 }
 
 gpm_v8_family_monthly_dict = {
-    name: da.sel(time=common_time_main, method="nearest")
+    name: da.reindex(time=common_time_main)
     for name, da in gpm_v8_family_monthly_dict.items()
 }
 
-print("\n✅ Common monthly time axis enforced for main product comparison")
-print("PMB :", str(pmb_mon_01.time.min().values), "->", str(pmb_mon_01.time.max().values), pmb_mon_01.sizes["time"])
-print("PMB uncertainty:", str(pmb_unc_mon_01.time.min().values), "->", str(pmb_unc_mon_01.time.max().values), pmb_unc_mon_01.sizes["time"])
-print("ERA5:", str(era5_mnth_01.time.min().values), "->", str(era5_mnth_01.time.max().values), era5_mnth_01.sizes["time"])
-print("GPCP:", str(gpcp_mon_01.time.min().values), "->", str(gpcp_mon_01.time.max().values), gpcp_mon_01.sizes["time"])
-print("GPM V07:", str(gpm_pmw_v07_mon_01.time.min().values), "->", str(gpm_pmw_v07_mon_01.time.max().values), gpm_pmw_v07_mon_01.sizes["time"])
-print("GPM V08:", str(gpm_pmw_v08_mon_01.time.min().values), "->", str(gpm_pmw_v08_mon_01.time.max().values), gpm_pmw_v08_mon_01.sizes["time"])
-print("UA-HIPA:", str(uahipa_mon_01.time.min().values), "->", str(uahipa_mon_01.time.max().values), uahipa_mon_01.sizes["time"])
+print("\n✅ Common monthly time axis enforced using strict reindexing, not nearest matching.")
+print("Expected months:", len(common_time_main))
+
+for name, da in {
+    "PMB": pmb_mon_01,
+    "PMB uncertainty": pmb_unc_mon_01,
+    "ERA5": era5_mnth_01,
+    "GPCP": gpcp_mon_01,
+    "GPM V07": gpm_pmw_v07_mon_01,
+    "GPM V08": gpm_pmw_v08_mon_01,
+    "UA-HIPA": uahipa_mon_01,
+}.items():
+
+    valid_months = da.notnull().any(dim=("lat", "lon"))
+    print(
+        f"{name:16s}: "
+        f"{str(da.time.min().values)[:10]} -> {str(da.time.max().values)[:10]}, "
+        f"{da.sizes['time']} months, "
+        f"{int(valid_months.sum().values)} months with valid Antarctic pixels"
+    )
 
 #%%
 # =============================================================================
@@ -721,8 +1157,8 @@ fig, axes = plot_monthly_climatology(
     legend_ncol=3,
 ) # "UA-HIPA", 
 
-fig.savefig(svnme, dpi=300)
-plt.show()
+fig.savefig(svnme, dpi=150)
+plt.close()
 gc.collect()
 
 #----------------------------------------------------------------------------
@@ -1363,36 +1799,44 @@ df_gpm_pmw_v07 = compute_basin_cosine_weighted_means_from_field(
 )
 
 # -----------------------------------------------------------------------------
-# Add corrected basin-scale annual PMB uncertainty from Table S3
+# Use native PMB and PMB uncertainty from Table S3 for Table S2
 # -----------------------------------------------------------------------------
-# This file is generated by the PMB script using annual GRACE dS uncertainty
-# combined with annual discharge uncertainty.
+# This avoids small differences caused by reprojecting native PMB to the
+# common 0.1° lat-lon grid before basin averaging.
 
 table_s3_file = os.path.join(
     path_to_plots,
     f"Table_S3_basin_mean_annual_PMB_components_uncertainty_2013_2020_20260630.csv"
 )
 
-df_pmb_unc_s3 = pd.read_csv(table_s3_file)
+df_pmb_from_s3 = pd.read_csv(table_s3_file)
 
-df_pmb_unc_s3 = df_pmb_unc_s3[
-    ["basin", "P_MB uncertainty 1sigma"]
+df_pmb_from_s3 = df_pmb_from_s3[
+    ["basin", "P_MB", "P_MB uncertainty 1sigma"]
 ].copy()
 
-df_pmb_unc_s3["basin"] = df_pmb_unc_s3["basin"].astype(int)
+df_pmb_from_s3["basin"] = df_pmb_from_s3["basin"].astype(int)
+
+df_pmb_from_s3 = df_pmb_from_s3.rename(
+    columns={
+        "P_MB": r"$P_{\mathrm{MB}}$",
+        "P_MB uncertainty 1sigma": "P_MB uncertainty 1sigma",
+    }
+)
+
+df_pmb_from_s3["basin"] = df_pmb_from_s3["basin"].astype(int)
 
 # Merge
 df_basin_mean_annual = (
-    df_pmb_basin
+    df_pmb_from_s3
     .merge(df_era5_basin, on="basin", how="outer")
     .merge(df_gpcp_basin, on="basin", how="outer")
-    # .merge(df_ua_haipa_basin, on="basin", how="outer")
     .merge(df_gpm_pmw_v07, on="basin", how="outer")
     .merge(df_gpm_pmw_v08_basin, on="basin", how="outer")
-    .merge(df_pmb_unc_s3, on="basin", how="left")
     .sort_values("basin")
     .reset_index(drop=True)
 )
+
 df_table_s2 = df_basin_mean_annual.copy()
 df_table_s2["basin_label"] = df_table_s2["basin"].map(id2name)
 df_table_s2["region"] = df_table_s2["basin"].apply(basin_region)
@@ -1552,10 +1996,11 @@ amsr2_mon_01 = gpm_family_monthly_dict["AMSR2"]
 # -------------------------------------------------------------------------
 # 2. Build overall GPM PMW V07 mean monthly 0.1° field
 # -------------------------------------------------------------------------
-gpm_pmw_mon_01 = build_gpm_pmw_mean(
-    gpm_family_dict=gpm_family_monthly_dict,
-    mean_name="GPM PMW V07"
-)
+# gpm_pmw_mon_01 = build_gpm_pmw_mean(
+#     gpm_family_dict=gpm_family_monthly_dict,
+#     mean_name="GPM PMW V07"
+# )
+gpm_pmw_mon_01 = gpm_pmw_v07_mon_01
 
 print("GPM PMW V07:", gpm_pmw_mon_01.shape, gpm_pmw_mon_01.name)
 
@@ -1571,11 +2016,13 @@ amsr2_mon_01_v08 = gpm_v8_family_monthly_dict["AMSR2 V08"]
 # -------------------------------------------------------------------------
 # 2. Build overall GPM PMW V08 mean monthly 0.1° field
 # -------------------------------------------------------------------------
-gpm_pmw_mon_08 = build_gpm_pmw_v8_mean(
-    gpm_v8_family_dict=gpm_v8_family_monthly_dict,
-    mean_name="GPM PMW V08",
-)
-
+# gpm_pmw_mon_08 = build_gpm_pmw_v8_mean(
+#     gpm_v8_family_dict=gpm_v8_family_monthly_dict,
+#     mean_name="GPM PMW V08",
+#     common_months=common_time_main,
+#     min_valid_families=1,
+# )
+gpm_pmw_mon_08 = gpm_pmw_v08_mon_01
 print("GPM PMW V08:", gpm_pmw_mon_08.shape, gpm_pmw_mon_08.name)
 
 atms_pack_v08 = build_basin_mean_plot_product(
@@ -1649,6 +2096,93 @@ gpm_pmw_v08_pack = build_basin_mean_plot_product(
     BASIN_IDS,
     "GPM PMW V08"
 )
+
+# =============================================================================
+# QC: Confirm plotted GPM PMW V08 mean is direct cosine-weighted mean
+# from the final 2013-2020 mean annual 2D field
+# =============================================================================
+
+v08_direct_mean = cosine_weighted_mean_masked(
+    da_2d=gpm_pmw_v08_pack["annual_mean_field"],
+    region_mask=basin_mask_01deg_clean.notnull(),
+    lat_name="lat",
+    lon_name="lon",
+)
+
+print("\n" + "=" * 90)
+print("QC: GPM PMW V08 MAP PANEL MEAN")
+print("=" * 90)
+print(f"Direct cosine mean from annual_mean_field: {float(v08_direct_mean.values):.2f} mm yr-1")
+print(f"Panel mean passed to plot              : {gpm_pmw_v08_pack['panel_mean']:.2f} mm yr-1")
+print(f"Difference                             : {gpm_pmw_v08_pack['panel_mean'] - float(v08_direct_mean.values):.6f}")
+
+# =============================================================================
+# AUDIT: Compare direct gridded cosine mean vs plotted basin-painted panel mean
+# =============================================================================
+
+def audit_pack_panel_mean(pack, basin_mask_2d, lat_name="lat", lon_name="lon"):
+    """
+    Compare:
+      1. direct cosine-weighted AIS mean from annual_mean_field
+      2. current panel_mean passed to the map
+      3. cosine-weighted mean from basin-painted plot_grid
+    """
+    direct_mean = cosine_weighted_panel_mean(
+        da_2d=pack["annual_mean_field"],
+        valid_mask=basin_mask_2d.notnull(),
+        lat_name=lat_name,
+        lon_name=lon_name,
+    )
+
+    painted_mean = basin_panel_mean_cosine_from_plot_grid(
+        basin_plot_grid=pack["plot_grid"],
+        basin_mask_2d=basin_mask_2d,
+        lat_name=lat_name,
+    )
+
+    return {
+        "product": pack["product"],
+        "direct_gridded_cosine_mean": direct_mean,
+        "current_panel_mean": pack["panel_mean"],
+        "painted_grid_cosine_mean": painted_mean,
+        "panel_minus_direct": pack["panel_mean"] - direct_mean,
+        "painted_minus_direct": painted_mean - direct_mean,
+    }
+
+
+packs_to_audit = [
+    pmb_pack,
+    era5_pack,
+    gpcp_pack,
+    atms_pack_v08,
+    mhs_pack_v08,
+    dmsp_pack_v08,
+    amsr2_pack_v08,
+    gpm_pmw_v08_pack,
+    atms_pack,
+    mhs_pack,
+    dmsp_pack,
+    amsr2_pack,
+    gpm_pmw_pack,
+]
+
+audit_df = pd.DataFrame([
+    audit_pack_panel_mean(pack, basin_mask_01deg_clean)
+    for pack in packs_to_audit
+])
+
+audit_out = os.path.join(
+    out_dfs,
+    f"map_panel_mean_audit_direct_vs_basin_painted_{cde_run_dte}.csv"
+)
+
+audit_df.to_csv(audit_out, index=False)
+
+print("\n" + "=" * 90)
+print("MAP PANEL MEAN AUDIT: DIRECT GRIDDED COSINE VS BASIN-PAINTED PANEL MEAN")
+print("=" * 90)
+print(audit_df.round(3))
+print("\nSaved:", audit_out)
 
 # -------------------------------------------------------------------------
 # 4. Assemble the final list for plotting
@@ -1808,6 +2342,122 @@ fig.savefig(svnme, dpi=150)
 
 plt.show()
 gc.collect()
+
+#%%
+# -----------------------------------------------------------------------------
+# Build V8 annual AIS series for each family and the full GPM PMW V08 mean
+# -----------------------------------------------------------------------------
+
+v8_yearly_series_list = []
+
+v8_family_for_timeseries = {
+    "ATMS V08": gpm_v8_family_monthly_dict["ATMS V08"],
+    "MHS V08": gpm_v8_family_monthly_dict["MHS V08"],
+    "DMSP-SSMIS V08": gpm_v8_family_monthly_dict["DMSP SSMIS V08"],
+    "AMSR2 V08": gpm_v8_family_monthly_dict["AMSR2 V08"],
+    "GPM PMW V08": gpm_pmw_v08_mon_01,
+}
+
+for product_name, da in v8_family_for_timeseries.items():
+    df_tmp = annual_ais_cosine_series_from_monthly(
+        da_monthly=da,
+        basin_mask_01deg=basin_mask_01deg,
+        product_name=product_name,
+        common_time_main=common_time_main,
+        year_start=ANNUAL_YEAR_START,
+        year_end=ANNUAL_YEAR_END,
+        lat_name="lat",
+        lon_name="lon",
+    )
+
+    v8_yearly_series_list.append(df_tmp)
+
+gpm_v8_family_annual_ais_df = pd.concat(
+    v8_yearly_series_list,
+    ignore_index=True,
+)
+
+# Save table
+out_v8_family_ts = os.path.join(
+    out_dfs,
+    f"gpm_v8_family_annual_AIS_cosine_timeseries_{cde_run_dte}.csv"
+)
+
+gpm_v8_family_annual_ais_df.to_csv(out_v8_family_ts, index=False)
+
+print("\n" + "=" * 90)
+print("GPM V8 FAMILY YEARLY AIS COSINE-WEIGHTED TIME SERIES")
+print("=" * 90)
+print(gpm_v8_family_annual_ais_df.pivot(index="year", columns="product", values="precipitation").round(2))
+print("\nSaved:", out_v8_family_ts)
+
+# =============================================================================
+# Plot yearly AIS GPM V8 family time series
+# =============================================================================
+
+product_order_v8_ts = [
+    "ATMS V08",
+    "MHS V08",
+    "DMSP-SSMIS V08",
+    "AMSR2 V08",
+    "GPM PMW V08",
+]
+
+product_styles_v8_ts = {
+    "ATMS V08":        {"color": "tab:cyan",   "marker": "o", "lw": 2.4},
+    "MHS V08":         {"color": "tab:blue",   "marker": "s", "lw": 2.4},
+    "DMSP-SSMIS V08":  {"color": "tab:orange", "marker": "D", "lw": 2.4},
+    "AMSR2 V08":       {"color": "tab:green",  "marker": "^", "lw": 2.4},
+    "GPM PMW V08":     {"color": "black",      "marker": "o", "lw": 3.0},
+}
+
+fig, ax = plt.subplots(figsize=(8.8, 5.2), dpi=300)
+
+for product in product_order_v8_ts:
+    sub = (
+        gpm_v8_family_annual_ais_df[
+            gpm_v8_family_annual_ais_df["product"] == product
+        ]
+        .sort_values("year")
+    )
+
+    style = product_styles_v8_ts[product]
+
+    ax.plot(
+        sub["year"],
+        sub["precipitation"],
+        label=product,
+        color=style["color"],
+        marker=style["marker"],
+        linewidth=style["lw"],
+        markersize=6,
+    )
+
+ax.set_xlabel("Year", fontsize=13)
+ax.set_ylabel(r"AIS mean annual precipitation [mm yr$^{-1}$]", fontsize=13)
+ax.set_title("GPM V08 family-level annual precipitation over Antarctica", fontsize=14)
+
+ax.set_xticks(np.arange(ANNUAL_YEAR_START, ANNUAL_YEAR_END + 1, 1))
+ax.grid(True, alpha=0.25)
+
+ax.legend(
+    frameon=False,
+    ncol=2,
+    fontsize=11,
+    loc="best",
+)
+
+plt.tight_layout()
+
+svnme = os.path.join(
+    path_to_plots,
+    f"gpm_v8_family_annual_AIS_cosine_timeseries_{cde_run_dte}.png"
+)
+
+fig.savefig(svnme, dpi=300, bbox_inches="tight")
+plt.show()
+
+print("Saved figure:", svnme)
 
 #%% THE CLOUDSAT COMPARATIVE ANALYSIS
 cs_ant_file_path = r'/ra1/pubdat/AVHRR_CloudSat_proj/CS_Antartica_analysis_kkk/CS-Antarctica_maps'
