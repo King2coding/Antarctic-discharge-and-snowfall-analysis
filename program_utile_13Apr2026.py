@@ -6065,3 +6065,965 @@ def plot_regional_mean_annual_bars(
     plt.tight_layout()
 
     return fig, ax
+
+# =============================================================================
+# PMB-BASED SEASONAL SATELLITE CORRECTION FUNCTIONS
+#
+# Initial framework:
+#   E2 = one seasonal correction factor over the entire AIS
+#   E4 = separate seasonal factors over WAIS and EAIS
+#
+# General philosophy:
+#   1. Derive correction factors ONLY from the calibration period.
+#   2. Derive factors from regional seasonal totals, not pixel-level PMB.
+#   3. Apply the resulting factor back to every monthly grid cell.
+#   4. Validate corrected fields using years not used to derive the factors.
+#
+# These functions are deliberately generic so that the same code can later
+# be used for E4 with only a change in the region definition.
+# =============================================================================
+
+
+def month_to_season_pmb_correction(month):
+    """
+    Convert month number to conventional meteorological season.
+
+    Parameters
+    ----------
+    month : int
+        Calendar month, 1-12.
+
+    Returns
+    -------
+    str
+        DJF, MAM, JJA, or SON.
+    """
+    if month in [12, 1, 2]:
+        return "DJF"
+    elif month in [3, 4, 5]:
+        return "MAM"
+    elif month in [6, 7, 8]:
+        return "JJA"
+    elif month in [9, 10, 11]:
+        return "SON"
+    else:
+        raise ValueError(f"Unexpected month: {month}")
+
+
+# =============================================================================
+
+
+def add_season_year_for_correction(df, time_col="time"):
+    """
+    Add season and season_year columns to a monthly tidy dataframe.
+
+    IMPORTANT DJF convention
+    ------------------------
+    December is assigned to the NEXT calendar year's DJF.
+
+    Example
+    -------
+    December 2017, January 2018, February 2018
+        -> DJF 2018
+
+    This convention lets us split calibration and validation using complete
+    meteorological seasons.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain a datetime column.
+    time_col : str
+        Name of datetime column.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
+    out = df.copy()
+
+    out[time_col] = pd.to_datetime(out[time_col])
+
+    out["month"] = out[time_col].dt.month
+    out["year"] = out[time_col].dt.year
+
+    out["season"] = out["month"].map(month_to_season_pmb_correction)
+
+    # Meteorological-season year:
+    # December belongs to the following year's DJF.
+    out["season_year"] = out["year"]
+
+    dec_mask = out["month"] == 12
+    out.loc[dec_mask, "season_year"] = (
+        out.loc[dec_mask, "year"] + 1
+    )
+
+    return out
+
+
+# =============================================================================
+
+
+def build_complete_seasonal_totals_for_correction(
+    monthly_region_df,
+    region_col="region",
+    product_col="product",
+    time_col="time",
+    value_col="precipitation",
+    require_complete_season=True,
+):
+    """
+    Convert regional monthly precipitation into seasonal totals.
+
+    This function is specifically intended for calibration/validation
+    experiments because it explicitly carries a season_year.
+
+    For example:
+        Dec 2017 + Jan 2018 + Feb 2018 = DJF 2018.
+
+    Parameters
+    ----------
+    monthly_region_df : pandas.DataFrame
+        Tidy monthly regional precipitation dataframe.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns:
+            region
+            product
+            season_year
+            season
+            precipitation
+            nmonths
+    """
+    df = add_season_year_for_correction(
+        monthly_region_df,
+        time_col=time_col
+    )
+
+    group_cols = [
+        region_col,
+        product_col,
+        "season_year",
+        "season",
+    ]
+
+    seasonal_sum = (
+        df.groupby(group_cols, as_index=False)[value_col]
+        .sum()
+    )
+
+    seasonal_count = (
+        df.groupby(group_cols, as_index=False)
+        .size()
+        .rename(columns={"size": "nmonths"})
+    )
+
+    seasonal = seasonal_sum.merge(
+        seasonal_count,
+        on=group_cols,
+        how="left",
+    )
+
+    if require_complete_season:
+        seasonal = seasonal[
+            seasonal["nmonths"] == 3
+        ].copy()
+
+    return seasonal
+
+
+# =============================================================================
+
+
+def split_seasonal_calibration_validation(
+    seasonal_df,
+    calibration_years,
+    validation_years,
+):
+    """
+    Split seasonal data using season_year rather than calendar month.
+
+    This prevents DJF from being accidentally split across calibration and
+    validation periods.
+
+    Parameters
+    ----------
+    seasonal_df : pandas.DataFrame
+        Output from build_complete_seasonal_totals_for_correction().
+
+    calibration_years : iterable of int
+        Example: [2013, 2014, 2015, 2016, 2017]
+
+    validation_years : iterable of int
+        Example: [2018, 2019, 2020]
+
+    Returns
+    -------
+    calibration_df, validation_df
+    """
+    calibration_years = list(calibration_years)
+    validation_years = list(validation_years)
+
+    calibration_df = seasonal_df[
+        seasonal_df["season_year"].isin(calibration_years)
+    ].copy()
+
+    validation_df = seasonal_df[
+        seasonal_df["season_year"].isin(validation_years)
+    ].copy()
+
+    return calibration_df, validation_df
+
+
+# =============================================================================
+
+
+def derive_seasonal_correction_factors(
+    calibration_seasonal_df,
+    reference_product=r"$P_{\mathrm{MB}}$",
+    target_products=("GPCP V3.3", "GPM PMW V08"),
+    regions=("Antarctica",),
+    seasons=("DJF", "MAM", "JJA", "SON"),
+    value_col="precipitation",
+):
+    """
+    Derive multiplicative seasonal correction factors.
+
+    Definition
+    ----------
+        CF = long-term mean PMB seasonal precipitation
+             -----------------------------------------
+             long-term mean target-product seasonal precipitation
+
+    This calculates the RATIO OF LONG-TERM MEANS, not the mean of
+    year-by-year ratios.
+
+    That distinction is intentional and follows the current PMB correction
+    design.
+
+    Parameters
+    ----------
+    calibration_seasonal_df : pandas.DataFrame
+        Seasonal regional totals restricted to the calibration period.
+
+    reference_product : str
+        PMB product name.
+
+    target_products : tuple/list
+        Products to correct.
+
+    regions : tuple/list
+        For E2:
+            ("Antarctica",)
+
+        For E4 later:
+            ("West Antarctica", "East Antarctica")
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns include:
+            region
+            season
+            product
+            reference_mean
+            product_mean
+            correction_factor
+            n_reference
+            n_product
+    """
+    rows = []
+
+    for region in regions:
+
+        for season in seasons:
+
+            sub = calibration_seasonal_df[
+                (calibration_seasonal_df["region"] == region) &
+                (calibration_seasonal_df["season"] == season)
+            ].copy()
+
+            ref = sub[
+                sub["product"] == reference_product
+            ][value_col].astype(float)
+
+            ref_mean = ref.mean()
+            n_ref = ref.notna().sum()
+
+            for product in target_products:
+
+                prod = sub[
+                    sub["product"] == product
+                ][value_col].astype(float)
+
+                prod_mean = prod.mean()
+                n_prod = prod.notna().sum()
+
+                if (
+                    np.isfinite(ref_mean)
+                    and np.isfinite(prod_mean)
+                    and prod_mean > 0
+                ):
+                    cf = ref_mean / prod_mean
+                else:
+                    cf = np.nan
+
+                rows.append(
+                    {
+                        "region": region,
+                        "season": season,
+                        "product": product,
+                        "reference_mean": ref_mean,
+                        "product_mean": prod_mean,
+                        "correction_factor": cf,
+                        "n_reference": int(n_ref),
+                        "n_product": int(n_prod),
+                    }
+                )
+
+    out = pd.DataFrame(rows)
+
+    season_order = {
+        "DJF": 1,
+        "MAM": 2,
+        "JJA": 3,
+        "SON": 4,
+    }
+
+    out["season_order"] = out["season"].map(season_order)
+
+    out = (
+        out.sort_values(
+            ["region", "product", "season_order"]
+        )
+        .drop(columns="season_order")
+        .reset_index(drop=True)
+    )
+
+    return out
+
+
+# =============================================================================
+
+
+def print_correction_factor_summary(correction_factor_df):
+    """
+    Clean diagnostic printout of calibration-derived correction factors.
+
+    This is useful during interactive execution before any corrected fields
+    are generated.
+    """
+    show = correction_factor_df.copy()
+
+    show["reference_mean"] = show["reference_mean"].round(2)
+    show["product_mean"] = show["product_mean"].round(2)
+    show["correction_factor"] = show["correction_factor"].round(4)
+
+    print("\n" + "=" * 100)
+    print("PMB-BASED SEASONAL CORRECTION FACTORS")
+    print("=" * 100)
+
+    print(
+        show[
+            [
+                "region",
+                "season",
+                "product",
+                "reference_mean",
+                "product_mean",
+                "correction_factor",
+                "n_reference",
+                "n_product",
+            ]
+        ].to_string(index=False)
+    )
+
+    print("=" * 100)
+
+
+# =============================================================================
+
+
+def apply_e2_seasonal_ais_correction(
+    da_monthly,
+    correction_factor_df,
+    product_name,
+    ais_mask,
+    time_name="time",
+    lat_name="lat",
+    lon_name="lon",
+    corrected_name=None,
+):
+    """
+    Apply E2 seasonal AIS-wide correction coefficients to a gridded
+    monthly precipitation product.
+
+    E2 definition
+    -------------
+    All Antarctic grid cells receive the SAME coefficient within a given
+    season.
+
+    Therefore:
+        corrected(x,y,t) = original(x,y,t) * CF(season)
+
+    Outside the AIS mask, values are set to NaN.
+
+    Parameters
+    ----------
+    da_monthly : xr.DataArray
+        Monthly precipitation field [mm/month].
+
+    correction_factor_df : pandas.DataFrame
+        Output from derive_seasonal_correction_factors().
+
+    product_name : str
+        Must match the product column used to derive the factors.
+
+    ais_mask : xr.DataArray or ndarray
+        Boolean AIS mask on the same grid.
+
+    corrected_name : str, optional
+        Name assigned to returned DataArray.
+
+    Returns
+    -------
+    xr.DataArray
+    """
+    fac = correction_factor_df[
+        (correction_factor_df["region"] == "Antarctica") &
+        (correction_factor_df["product"] == product_name)
+    ].copy()
+
+    if fac.empty:
+        raise ValueError(
+            f"No E2 correction factors found for {product_name}"
+        )
+
+    factor_map = dict(
+        zip(
+            fac["season"],
+            fac["correction_factor"]
+        )
+    )
+
+    required_seasons = {"DJF", "MAM", "JJA", "SON"}
+
+    if set(factor_map.keys()) != required_seasons:
+        print(
+            "WARNING: Expected factors for DJF, MAM, JJA, SON. "
+            f"Found: {factor_map.keys()}"
+        )
+
+    corrected = da_monthly.copy(deep=False)
+
+    # Build one correction-factor value for each monthly time step.
+    factors_by_time = []
+
+    for time_val in pd.to_datetime(da_monthly[time_name].values):
+
+        season = month_to_season_pmb_correction(time_val.month)
+
+        factor = factor_map.get(season, np.nan)
+
+        factors_by_time.append(factor)
+
+    factor_da = xr.DataArray(
+        factors_by_time,
+        dims=[time_name],
+        coords={time_name: da_monthly[time_name]},
+        name="seasonal_correction_factor",
+    )
+
+    # xarray automatically broadcasts the 1-D time factor across lat/lon.
+    corrected = da_monthly * factor_da
+
+    # Keep only Antarctic Ice Sheet pixels.
+    if not isinstance(ais_mask, xr.DataArray):
+        ais_mask = xr.DataArray(
+            ais_mask,
+            dims=(lat_name, lon_name),
+            coords={
+                lat_name: da_monthly[lat_name],
+                lon_name: da_monthly[lon_name],
+            },
+        )
+
+    corrected = corrected.where(ais_mask)
+
+    if corrected_name is None:
+        corrected_name = f"{product_name}_corrected_E2"
+
+    corrected.name = corrected_name
+
+    corrected.attrs.update(da_monthly.attrs)
+
+    corrected.attrs["correction_experiment"] = "E2 Seasonal AIS"
+    corrected.attrs["correction_reference"] = "PMB"
+    corrected.attrs["correction_method"] = (
+        "seasonal ratio of calibration-period long-term regional means"
+    )
+
+    return corrected
+
+
+# =============================================================================
+
+
+def subset_monthly_years(
+    da,
+    years,
+    time_name="time",
+):
+    """
+    Subset a monthly DataArray by calendar year.
+
+    Intended mainly for annual fields, monthly climatology, and maps.
+
+    Note
+    ----
+    Seasonal calibration/validation splitting should NOT use this function.
+    Seasonal splitting should use season_year so that DJF remains intact.
+    """
+    years = list(years)
+
+    return da.where(
+        da[time_name].dt.year.isin(years),
+        drop=True
+    )
+
+
+# =============================================================================
+
+
+def subset_regional_monthly_df_years(
+    df,
+    years,
+    time_col="time",
+):
+    """
+    Subset a regional monthly dataframe to selected calendar years.
+    """
+    years = list(years)
+
+    out = df.copy()
+    out[time_col] = pd.to_datetime(out[time_col])
+
+    return out[
+        out[time_col].dt.year.isin(years)
+    ].copy()
+
+
+# =============================================================================
+
+
+def add_corrected_products_to_monthly_dictionary(
+    product_monthly_dict,
+    corrected_products_dict,
+):
+    """
+    Convenience helper.
+
+    Does not modify the input dictionary in-place.
+    """
+    out = product_monthly_dict.copy()
+
+    for name, da in corrected_products_dict.items():
+        out[name] = da
+
+    return out
+
+
+# =============================================================================
+
+
+def validation_monthly_climatology_from_fields(
+    product_dict,
+    region_masks,
+    validation_years,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+):
+    """
+    Compute monthly climatology using ONLY validation years.
+
+    Example with validation 2018-2020:
+        January climatology =
+        mean(Jan 2018, Jan 2019, Jan 2020)
+
+    The regional spatial mean is first computed for each individual month,
+    then the three validation Januaries are averaged, etc.
+    """
+    validation_dict = {}
+
+    for product_name, da in product_dict.items():
+
+        validation_dict[product_name] = subset_monthly_years(
+            da,
+            validation_years,
+            time_name=time_name,
+        )
+
+    monthly_df = build_all_region_monthly_series_cosine(
+        product_dict=validation_dict,
+        region_masks=region_masks,
+        lat_name=lat_name,
+        lon_name=lon_name,
+        time_name=time_name,
+    )
+
+    monthly_clim = compute_monthly_climatology_from_regional_series(
+        monthly_df
+    )
+
+    return monthly_df, monthly_clim
+
+
+# =============================================================================
+
+
+def validation_seasonal_climatology_from_monthly_df(
+    full_monthly_region_df,
+    validation_years,
+    require_complete_season=True,
+):
+    """
+    Build seasonal climatology for the validation period using season_year.
+
+    This is intentionally based on the FULL monthly regional dataframe first.
+    December immediately preceding a validation year can therefore be included
+    in the corresponding DJF without contaminating calibration.
+
+    Example:
+        validation year 2018 includes:
+        Dec 2017 + Jan 2018 + Feb 2018 = DJF 2018.
+    """
+    seasonal = build_complete_seasonal_totals_for_correction(
+        full_monthly_region_df,
+        require_complete_season=require_complete_season,
+    )
+
+    seasonal_val = seasonal[
+        seasonal["season_year"].isin(validation_years)
+    ].copy()
+
+    seasonal_clim_val = (
+        seasonal_val
+        .groupby(
+            ["region", "product", "season"],
+            as_index=False
+        )["precipitation"]
+        .mean()
+    )
+
+    season_order = {
+        "DJF": 1,
+        "MAM": 2,
+        "JJA": 3,
+        "SON": 4,
+    }
+
+    seasonal_clim_val["season_order"] = (
+        seasonal_clim_val["season"].map(season_order)
+    )
+
+    seasonal_clim_val = (
+        seasonal_clim_val
+        .sort_values(
+            ["region", "product", "season_order"]
+        )
+        .drop(columns="season_order")
+        .reset_index(drop=True)
+    )
+
+    return seasonal_val, seasonal_clim_val
+
+
+# =============================================================================
+
+
+def build_validation_annual_mean_fields(
+    product_dict,
+    validation_years,
+):
+    """
+    Convert monthly gridded fields to validation-period mean annual fields.
+
+    For validation_years = [2018, 2019, 2020]:
+
+        monthly -> annual totals for each year
+                -> mean of 2018, 2019, 2020
+
+    Returns
+    -------
+    dict of xr.DataArray
+    """
+    out = {}
+
+    year_start = min(validation_years)
+    year_end = max(validation_years)
+
+    for product_name, da in product_dict.items():
+
+        da_val = subset_monthly_years(
+            da,
+            validation_years,
+        )
+
+        annual = monthly_to_annual_totals_field(
+            da_val
+        )
+
+        annual_mean = annual_to_multiyear_mean_field(
+            annual,
+            year_start=year_start,
+            year_end=year_end,
+        )
+
+        out[product_name] = annual_mean
+
+    return out
+
+
+# =============================================================================
+
+
+def build_validation_basin_plot_products(
+    annual_mean_field_dict,
+    basin_mask_2d,
+    basin_ids,
+):
+    """
+    Convert validation-period pixel fields into basin-painted maps.
+
+    This is ONLY for visualization/comparison.
+
+    The correction itself is still performed directly on the gridded
+    monthly fields.
+    """
+    out = []
+
+    for product_name, field in annual_mean_field_dict.items():
+
+        basin_df = compute_basin_cosine_weighted_means_from_field(
+            da_2d=field,
+            basin_mask_2d=basin_mask_2d,
+            basin_ids=basin_ids,
+            value_name="precipitation",
+        )
+
+        plot_grid = basin_means_to_plot_grid(
+            basin_mean_df=basin_df,
+            basin_mask_2d=basin_mask_2d,
+            basin_col="basin",
+            value_col="precipitation",
+        )
+
+        panel_mean = cosine_weighted_mean_masked(
+            da_2d=field,
+            region_mask=basin_mask_2d.notnull(),
+            lat_name="lat",
+            lon_name="lon",
+        )
+
+        out.append(
+            (
+                product_name,
+                plot_grid,
+                float(panel_mean.values),
+            )
+        )
+
+    return out
+
+
+# =============================================================================
+
+
+def validation_regional_annual_dataframe(
+    product_dict,
+    region_masks,
+    validation_years,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+):
+    """
+    Generate annual regional totals and mean annual precipitation for the
+    validation period.
+
+    Useful for the AIS/WAIS/EAIS grouped bar figure.
+    """
+    validation_dict = {
+        name: subset_monthly_years(
+            da,
+            validation_years,
+            time_name=time_name,
+        )
+        for name, da in product_dict.items()
+    }
+
+    monthly_df = build_all_region_monthly_series_cosine(
+        product_dict=validation_dict,
+        region_masks=region_masks,
+        lat_name=lat_name,
+        lon_name=lon_name,
+        time_name=time_name,
+    )
+
+    monthly_df["year"] = pd.to_datetime(
+        monthly_df["time"]
+    ).dt.year
+
+    annual_df = (
+        monthly_df
+        .groupby(
+            ["region", "product", "year"],
+            as_index=False
+        )["precipitation"]
+        .sum()
+    )
+
+    mean_annual_df = (
+        annual_df
+        .groupby(
+            ["region", "product"],
+            as_index=False
+        )["precipitation"]
+        .mean()
+    )
+
+    return annual_df, mean_annual_df
+
+
+# =============================================================================
+# E4 -- GRIDDING FUNCTION
+#
+# We will not use it immediately for E2, but I think it is worth having now
+# because it makes the distinction between E2 and E4 explicit.
+# =============================================================================
+
+
+def apply_e4_seasonal_wais_eais_correction(
+    da_monthly,
+    correction_factor_df,
+    product_name,
+    wais_mask,
+    eais_mask,
+    time_name="time",
+    lat_name="lat",
+    lon_name="lon",
+    corrected_name=None,
+):
+    """
+    Apply E4 piecewise-constant seasonal WAIS/EAIS correction.
+
+    IMPORTANT
+    ---------
+    This is the deliberately UNSMOOTHED baseline.
+
+    Every WAIS grid cell receives the WAIS seasonal coefficient.
+    Every EAIS grid cell receives the EAIS seasonal coefficient.
+
+    Boundary smoothing should only be introduced later if diagnostics show
+    that the regional coefficient discontinuity creates an artificial feature.
+    """
+    fac_prod = correction_factor_df[
+        correction_factor_df["product"] == product_name
+    ].copy()
+
+    if fac_prod.empty:
+        raise ValueError(
+            f"No E4 correction factors found for {product_name}"
+        )
+
+    if not isinstance(wais_mask, xr.DataArray):
+        wais_mask = xr.DataArray(
+            wais_mask,
+            dims=(lat_name, lon_name),
+            coords={
+                lat_name: da_monthly[lat_name],
+                lon_name: da_monthly[lon_name],
+            },
+        )
+
+    if not isinstance(eais_mask, xr.DataArray):
+        eais_mask = xr.DataArray(
+            eais_mask,
+            dims=(lat_name, lon_name),
+            coords={
+                lat_name: da_monthly[lat_name],
+                lon_name: da_monthly[lon_name],
+            },
+        )
+
+    corrected_months = []
+
+    for t in da_monthly[time_name].values:
+
+        da_t = da_monthly.sel({time_name: t})
+
+        month = pd.to_datetime(t).month
+        season = month_to_season_pmb_correction(month)
+
+        fac_wais_row = fac_prod[
+            (fac_prod["region"] == "West Antarctica") &
+            (fac_prod["season"] == season)
+        ]
+
+        fac_eais_row = fac_prod[
+            (fac_prod["region"] == "East Antarctica") &
+            (fac_prod["season"] == season)
+        ]
+
+        if fac_wais_row.empty or fac_eais_row.empty:
+            raise ValueError(
+                f"Missing E4 factor for {product_name}, {season}"
+            )
+
+        cf_wais = float(
+            fac_wais_row["correction_factor"].iloc[0]
+        )
+
+        cf_eais = float(
+            fac_eais_row["correction_factor"].iloc[0]
+        )
+
+        corrected_t = xr.where(
+            wais_mask,
+            da_t * cf_wais,
+            xr.where(
+                eais_mask,
+                da_t * cf_eais,
+                np.nan
+            )
+        )
+
+        corrected_t = corrected_t.expand_dims(
+            {time_name: [t]}
+        )
+
+        corrected_months.append(corrected_t)
+
+    corrected = xr.concat(
+        corrected_months,
+        dim=time_name
+    )
+
+    if corrected_name is None:
+        corrected_name = f"{product_name}_corrected_E4"
+
+    corrected.name = corrected_name
+
+    corrected.attrs.update(da_monthly.attrs)
+    corrected.attrs["correction_experiment"] = (
+        "E4 Seasonal WAIS/EAIS"
+    )
+    corrected.attrs["correction_reference"] = "PMB"
+    corrected.attrs["boundary_treatment"] = (
+        "piecewise constant; no smoothing"
+    )
+
+    return corrected
