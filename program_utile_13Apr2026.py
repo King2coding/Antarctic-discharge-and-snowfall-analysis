@@ -7027,3 +7027,268 @@ def apply_e4_seasonal_wais_eais_correction(
     )
 
     return corrected
+
+
+def plot_validation_monthly_climatology_numeric_months(
+    clim_df,
+    region_order=(
+        "Antarctica",
+        "West Antarctica",
+        "East Antarctica",
+    ),
+    product_order=None,
+    product_styles=None,
+    figsize=(10, 9),
+    ylabel="mm/month",
+):
+    """
+    Monthly validation climatology with x-axis explicitly shown as 1-12.
+    """
+    if product_order is None:
+        product_order = list(
+            clim_df["product"].unique()
+        )
+
+    fig, axes = plt.subplots(
+        len(region_order),
+        1,
+        figsize=figsize,
+        sharex=True,
+    )
+
+    axes = np.atleast_1d(axes)
+
+    for ax, region in zip(
+        axes,
+        region_order,
+    ):
+
+        sub = clim_df[
+            clim_df["region"] == region
+        ]
+
+        for product in product_order:
+
+            ss = (
+                sub[
+                    sub["product"] == product
+                ]
+                .sort_values("month")
+            )
+
+            if ss.empty:
+                continue
+
+            style = {}
+
+            if product_styles is not None:
+                style = product_styles.get(
+                    product,
+                    {}
+                ).copy()
+
+            ax.plot(
+                ss["month"],
+                ss["precipitation"],
+                label=product,
+                **style,
+            )
+
+        ax.set_title(
+            region,
+            fontsize=17,
+            fontweight="bold",
+        )
+
+        ax.set_xticks(
+            np.arange(1, 13)
+        )
+
+        ax.grid(
+            True,
+            alpha=0.3,
+        )
+
+    axes[-1].set_xlabel(
+        "Month",
+        fontsize=14,
+        fontweight="bold",
+    )
+
+    fig.supylabel(
+        ylabel,
+        fontsize=16,
+        fontweight="bold",
+    )
+
+    handles, labels = (
+        axes[0].get_legend_handles_labels()
+    )
+
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.01),
+        ncol=3,
+        frameon=False,
+        fontsize=12,
+    )
+
+    plt.tight_layout(
+        rect=[0.04, 0.08, 1, 1]
+    )
+
+    return fig, axes
+
+
+
+def compare_mean_precip_basin_2x3_common_cbar(
+    arr_lst_mean,
+    basin_mask_latlon,
+    figsize=(14, 9),
+    cmap=None,
+    gamma=0.6,
+    vmin=0,
+    vmax=400,
+    cbar_ticks=None,
+    cbar_label=r"Precipitation [mm yr$^{-1}$]",
+    panel_letters=True,
+    show_panel_mean=True,
+):
+    """
+    Six-panel Antarctic basin-painted precipitation comparison.
+
+    Designed for:
+        PMB
+        ERA5
+        GPCP uncorrected
+        GPCP corrected
+        GPM PMW V08 uncorrected
+        GPM PMW V08 corrected
+    """
+    if len(arr_lst_mean) != 6:
+        raise ValueError(
+            "This plotting function expects exactly six products."
+        )
+
+    proj = ccrs.SouthPolarStereo()
+
+    if cmap is None:
+        cmap = plt.cm.jet
+
+    norm = PowerNorm(
+        gamma=gamma,
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+    if cbar_ticks is None:
+        cbar_ticks = [
+            0,
+            25,
+            50,
+            100,
+            200,
+            300,
+            400,
+        ]
+
+    fig, axes = plt.subplots(
+        2,
+        3,
+        figsize=figsize,
+        subplot_kw={
+            "projection": proj
+        },
+    )
+
+    axes = axes.ravel()
+
+    letters = list(
+        "abcdef"
+    )
+
+    for i, (
+        ax,
+        item,
+    ) in enumerate(
+        zip(
+            axes,
+            arr_lst_mean,
+        )
+    ):
+
+        product_name, plot_grid, panel_mean = item
+
+        _plot_single_polar_basin_panel(
+            ax=ax,
+
+            product_name=product_name,
+
+            basin_plot_grid=plot_grid,
+
+            basin_mask_latlon=basin_mask_latlon,
+
+            panel_mean=(
+                panel_mean
+                if show_panel_mean
+                else np.nan
+            ),
+
+            proj=proj,
+
+            cmap=cmap,
+
+            norm=norm,
+
+            panel_label=(
+                letters[i]
+                if panel_letters
+                else None
+            ),
+        )
+
+    fig.subplots_adjust(
+        left=0.04,
+        right=0.90,
+        top=0.95,
+        bottom=0.08,
+        wspace=0.10,
+        hspace=0.15,
+    )
+
+    cax = fig.add_axes(
+        [
+            0.92,
+            0.17,
+            0.018,
+            0.66,
+        ]
+    )
+
+    sm = ScalarMappable(
+        norm=norm,
+        cmap=cmap,
+    )
+
+    sm.set_array([])
+
+    cb = fig.colorbar(
+        sm,
+        cax=cax,
+        orientation="vertical",
+        extend="max",
+    )
+
+    cb.set_ticks(
+        cbar_ticks
+    )
+
+    cb.set_label(
+        cbar_label,
+        fontsize=14,
+        fontweight="bold",
+    )
+
+    return fig, axes, cb

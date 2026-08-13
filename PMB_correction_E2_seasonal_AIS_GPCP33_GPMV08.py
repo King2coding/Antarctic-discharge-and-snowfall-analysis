@@ -348,7 +348,7 @@ print("GPCP time range:", str(gpcp_mon_01.time.min().values), "->", str(gpcp_mon
 print("ERA5 time range:", str(era5_mon_01.time.min().values), "->", str(era5_mon_01.time.max().values))
 print("PMB time range :", str(pmb_mon_01.time.min().values),  "->", str(pmb_mon_01.time.max().values))
 print("PMB uncertainty time range :", str(pmb_unc_mon_01.time.min().values), "->", str(pmb_unc_mon_01.time.max().values))
-
+print("GPM PMW V08 time range:", str(gpm_pmw_v08_mon_01.time.min().values), "->", str(gpm_pmw_v08_mon_01.time.max().values))
 #%%
 # =============================================================================
 # SECTION 9. E2-A. BUILD REGIONAL MONTHLY SERIES FROM UNCORRECTED DATA
@@ -545,3 +545,608 @@ e2_correction_factors.to_csv(
 
 print("Saved:")
 print(e2_cf_file)
+
+#%%
+# =============================================================================
+# SECTION 12_B. QUICK DIAGNOSTIC: E2 CORRECTION FACTORS
+# =============================================================================
+
+
+fig, ax = plt.subplots(
+    figsize=(8, 5),
+    dpi=150
+)
+
+
+season_order = ["DJF", "MAM", "JJA", "SON"]
+
+
+for product in [GPCP_NAME, PMW8_NAME]:
+
+    sub = (
+        e2_correction_factors[
+            e2_correction_factors["product"] == product
+        ]
+        .set_index("season")
+        .reindex(season_order)
+    )
+
+    ax.plot(
+        season_order,
+        sub["correction_factor"],
+        marker="o",
+        linewidth=2.5,
+        label=product,
+    )
+
+
+# CF = 1 means no correction required.
+ax.axhline(
+    1.0,
+    color="k",
+    linestyle="--",
+    linewidth=1.2,
+)
+
+
+ax.set_ylabel(
+    "PMB correction factor",
+    fontsize=13,
+    fontweight="bold",
+)
+
+ax.set_xlabel(
+    "Season",
+    fontsize=13,
+    fontweight="bold",
+)
+
+ax.grid(
+    True,
+    alpha=0.3,
+)
+
+ax.legend(
+    frameon=False,
+    fontsize=12,
+)
+
+plt.tight_layout()
+plt.show()
+
+#%%
+# =============================================================================
+# SECTION 13. E2-F. APPLY SEASONAL AIS CORRECTION TO THE MONTHLY GRIDDED PRODUCTS
+# =============================================================================
+
+
+AIS_MASK_01 = basin_mask_01deg.isin(AIS_BASINS)
+
+
+gpcp_mon_01_e2_corr = apply_e2_seasonal_ais_correction(
+    da_monthly=gpcp_mon_01,
+
+    correction_factor_df=e2_correction_factors,
+
+    product_name=GPCP_NAME,
+
+    ais_mask=AIS_MASK_01,
+
+    corrected_name=GPCP_CORR_NAME,
+)
+
+
+gpm_pmw_v08_mon_01_e2_corr = apply_e2_seasonal_ais_correction(
+    da_monthly=gpm_pmw_v08_mon_01,
+
+    correction_factor_df=e2_correction_factors,
+
+    product_name=PMW8_NAME,
+
+    ais_mask=AIS_MASK_01,
+
+    corrected_name=PMW8_CORR_NAME,
+)
+
+
+print(gpcp_mon_01_e2_corr)
+print(gpm_pmw_v08_mon_01_e2_corr)
+
+#%%
+# =============================================================================
+# SECTION 13_A. QUICK DIAGNOSTIC: E2 GRID-LEVEL SANITY CHECK
+# =============================================================================
+
+
+test_time = "2019-07-01"
+
+
+gpcp_ratio_test = (
+    gpcp_mon_01_e2_corr.sel(time=test_time)
+    /
+    gpcp_mon_01.sel(time=test_time)
+)
+
+
+pmw8_ratio_test = (
+    gpm_pmw_v08_mon_01_e2_corr.sel(time=test_time)
+    /
+    gpm_pmw_v08_mon_01.sel(time=test_time)
+)
+
+
+print(
+    "GPCP corrected/original ratio range:",
+    float(gpcp_ratio_test.min(skipna=True)),
+    float(gpcp_ratio_test.max(skipna=True)),
+)
+
+
+print(
+    "PMW8 corrected/original ratio range:",
+    float(pmw8_ratio_test.min(skipna=True)),
+    float(pmw8_ratio_test.max(skipna=True)),
+)
+
+#%%
+# =============================================================================
+# SECTION 14. E2-H. MASTER PRODUCT DICTIONARY
+#
+# This becomes the common input for nearly all downstream figures.
+# =============================================================================
+
+
+e2_product_dict = {
+    REFERENCE_NAME: pmb_mon_01,
+
+    ERA5_NAME: era5_mon_01,
+
+    GPCP_NAME: gpcp_mon_01,
+    GPCP_CORR_NAME: gpcp_mon_01_e2_corr,
+
+    PMW8_NAME: gpm_pmw_v08_mon_01,
+    PMW8_CORR_NAME: gpm_pmw_v08_mon_01_e2_corr,
+}
+
+
+print(e2_product_dict.keys())
+
+#%%
+# =============================================================================
+# SECTION 15. E2 VALIDATION MONTHLY CLIMATOLOGY
+#
+# Validation only: 2018-2020
+#
+# Products:
+#   ERA5
+#   GPCP V3.3 uncorrected
+#   GPCP V3.3 corrected
+#   GPM PMW V08 uncorrected
+#   GPM PMW V08 corrected
+# =============================================================================
+
+
+e2_monthly_clim_products = {
+    ERA5_NAME: era5_mon_01,
+
+    GPCP_NAME: gpcp_mon_01,
+    GPCP_CORR_NAME: gpcp_mon_01_e2_corr,
+
+    PMW8_NAME: gpm_pmw_v08_mon_01,
+    PMW8_CORR_NAME: gpm_pmw_v08_mon_01_e2_corr,
+}
+
+
+(
+    e2_validation_monthly_regional_df,
+    e2_validation_monthly_clim_df,
+) = validation_monthly_climatology_from_fields(
+    product_dict=e2_monthly_clim_products,
+
+    region_masks=region_masks_01deg,
+
+    validation_years=VALIDATION_YEARS,
+
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+
+print(e2_validation_monthly_clim_df)
+
+#%% SECTION 15.A. PLOT VALIDATION MONTHLY CLIMATOLOGY FOR E2
+product_styles_e2 = {
+
+    ERA5_NAME: {
+        "color": "blue",
+        "marker": "s",
+        "lw": 2.5,
+    },
+
+    GPCP_NAME: {
+        "color": "orange",
+        "marker": "D",
+        "lw": 2.2,
+        "linestyle": "--",
+    },
+
+    GPCP_CORR_NAME: {
+        "color": "orange",
+        "marker": "o",
+        "lw": 3.0,
+        "linestyle": "-",
+    },
+
+    PMW8_NAME: {
+        "color": "green",
+        "marker": "s",
+        "lw": 2.2,
+        "linestyle": "--",
+    },
+
+    PMW8_CORR_NAME: {
+        "color": "green",
+        "marker": "o",
+        "lw": 3.0,
+        "linestyle": "-",
+    },
+}
+
+
+fig, axes = plot_validation_monthly_climatology_numeric_months(
+    clim_df=e2_validation_monthly_clim_df,
+
+    region_order=(
+        "Antarctica",
+        "West Antarctica",
+        "East Antarctica",
+    ),
+
+    product_order=(
+        ERA5_NAME,
+        GPCP_NAME,
+        GPCP_CORR_NAME,
+        PMW8_NAME,
+        PMW8_CORR_NAME,
+    ),
+
+    product_styles=product_styles_e2,
+
+    figsize=(10, 9),
+
+    ylabel="mm/month",
+)
+
+
+plt.show()
+
+#%%
+# =============================================================================
+# SECTION 16. E2 VALIDATION SEASONAL CLIMATOLOGY
+# =============================================================================
+
+
+e2_regional_monthly_all = (
+    build_all_region_monthly_series_cosine(
+        product_dict=e2_product_dict,
+
+        region_masks=region_masks_01deg,
+
+        lat_name="lat",
+        lon_name="lon",
+        time_name="time",
+    )
+)
+
+
+(
+    e2_validation_seasonal_df,
+    e2_validation_seasonal_clim_df,
+) = validation_seasonal_climatology_from_monthly_df(
+    full_monthly_region_df=e2_regional_monthly_all,
+
+    validation_years=VALIDATION_YEARS,
+
+    require_complete_season=True,
+)
+
+
+print(e2_validation_seasonal_clim_df)
+
+#%% SECTION 16.A. PLOT VALIDATION SEASONAL CLIMATOLOGY FOR E2
+fig, axes = plot_seasonal_climatology(
+    clim_df=e2_validation_seasonal_clim_df,
+
+    region_order=(
+        "Antarctica",
+        "West Antarctica",
+        "East Antarctica",
+    ),
+
+    product_order=(
+        REFERENCE_NAME,
+        ERA5_NAME,
+        GPCP_NAME,
+        GPCP_CORR_NAME,
+        PMW8_NAME,
+        PMW8_CORR_NAME,
+    ),
+
+    product_styles=product_styles_e2,
+
+    figsize=(10, 9),
+
+    ylabel="mm/season",
+
+    y_nbins=4,
+
+    legend_ncol=3,
+)
+
+
+plt.show()
+
+#%%
+# =============================================================================
+# SECTION 17. E2 VALIDATION REGIONAL MEAN ANNUAL PRECIPITATION
+# =============================================================================
+
+
+(
+    e2_validation_annual_regional_df,
+    e2_validation_mean_annual_regional_df,
+) = validation_regional_annual_dataframe(
+    product_dict=e2_product_dict,
+
+    region_masks=region_masks_01deg,
+
+    validation_years=VALIDATION_YEARS,
+)
+
+
+print(
+    e2_validation_mean_annual_regional_df
+)
+
+#%% SECTION 17.A. PLOT VALIDATION REGIONAL MEAN ANNUAL PRECIPITATION FOR E2
+product_colors_e2 = {
+
+    REFERENCE_NAME: {
+        "color": "black",
+    },
+
+    ERA5_NAME: {
+        "color": "blue",
+    },
+
+    GPCP_NAME: {
+        "color": "orange",
+        "alpha": 0.50,
+    },
+
+    GPCP_CORR_NAME: {
+        "color": "orange",
+        "alpha": 1.00,
+    },
+
+    PMW8_NAME: {
+        "color": "green",
+        "alpha": 0.50,
+    },
+
+    PMW8_CORR_NAME: {
+        "color": "green",
+        "alpha": 1.00,
+    },
+}
+
+
+fig, ax = plot_regional_mean_annual_bars(
+    df_mean_regional=e2_validation_mean_annual_regional_df,
+
+    region_order=(
+        "Antarctica",
+        "West Antarctica",
+        "East Antarctica",
+    ),
+
+    product_order=(
+        REFERENCE_NAME,
+        ERA5_NAME,
+        GPCP_NAME,
+        GPCP_CORR_NAME,
+        PMW8_NAME,
+        PMW8_CORR_NAME,
+    ),
+
+    product_colors=product_colors_e2,
+
+    ylabel="[mm/year]",
+
+    title="",
+
+    annotate=True,
+
+    legend_ncol=2,
+)
+
+
+plt.show()
+
+
+#%%
+# =============================================================================
+# SECTION 18. E2 VALIDATION PIXEL-LEVEL MEAN ANNUAL FIELDS
+# =============================================================================
+
+
+e2_pixel_map_products = {
+
+    ERA5_NAME: era5_mon_01,
+
+    GPCP_NAME: gpcp_mon_01,
+
+    GPCP_CORR_NAME: gpcp_mon_01_e2_corr,
+
+    PMW8_NAME: gpm_pmw_v08_mon_01,
+
+    PMW8_CORR_NAME: gpm_pmw_v08_mon_01_e2_corr,
+}
+
+
+e2_validation_annual_mean_fields = (
+    build_validation_annual_mean_fields(
+        product_dict=e2_pixel_map_products,
+
+        validation_years=VALIDATION_YEARS,
+    )
+)
+
+
+for name, field in e2_validation_annual_mean_fields.items():
+
+    print(
+        name,
+        field.shape,
+        float(field.mean(skipna=True)),
+    )
+
+
+#%% SECTION 18.A. PLOT VALIDATION PIXEL-LEVEL MEAN ANNUAL FIELDS FOR E2
+
+BASIN_IDS = sorted(AIS_BASINS)
+
+basin_mask_01deg_clean = basin_mask_01deg.where(basin_mask_01deg.isin(BASIN_IDS))
+
+
+e2_pixel_arr_lst = [
+    (
+        ERA5_NAME,
+        e2_validation_annual_mean_fields[ERA5_NAME]
+    ),
+
+    (
+        GPCP_NAME,
+        e2_validation_annual_mean_fields[GPCP_NAME]
+    ),
+
+    (
+        GPCP_CORR_NAME,
+        e2_validation_annual_mean_fields[GPCP_CORR_NAME]
+    ),
+
+    (
+        PMW8_NAME,
+        e2_validation_annual_mean_fields[PMW8_NAME]
+    ),
+
+    (
+        PMW8_CORR_NAME,
+        e2_validation_annual_mean_fields[PMW8_CORR_NAME]
+    ),
+]
+
+
+fig, axes = compare_mean_precip_grid_power_latlon(
+    arr_lst_mean=e2_pixel_arr_lst,
+
+    basin_mask_latlon=basin_mask_01deg_clean,
+
+    ncols=3,
+
+    figsize=(14, 9),
+
+    gamma=0.6,
+
+    vmin=0,
+
+    vmax=400,
+
+    cbar_tcks=[
+        0,
+        25,
+        50,
+        100,
+        200,
+        300,
+        400,
+    ],
+
+    cbar_label=r"Precipitation [mm yr$^{-1}$]",
+
+    panel_letters=True,
+
+    show_panel_mean=True,
+)
+
+
+plt.show()
+
+#%%
+# =============================================================================
+# SECTION 19. E2 VALIDATION BASIN-PAINTED MEAN ANNUAL FIELDS
+# =============================================================================
+
+
+e2_validation_all_annual_mean_fields = (
+    build_validation_annual_mean_fields(
+        product_dict=e2_product_dict,
+
+        validation_years=VALIDATION_YEARS,
+    )
+)
+
+
+e2_validation_basin_plot_list = (
+    build_validation_basin_plot_products(
+        annual_mean_field_dict=e2_validation_all_annual_mean_fields,
+
+        basin_mask_2d=basin_mask_01deg_clean,
+
+        basin_ids=BASIN_IDS,
+    )
+)
+
+
+for item in e2_validation_basin_plot_list:
+    print(
+        item[0],
+        "AIS panel mean =",
+        round(item[2], 2)
+    )
+
+
+#%% SECTION 19.A. PLOT E2 VALIDATION BASIN-PAINTED MEAN ANNUAL FIELDS
+fig, axes, cb = compare_mean_precip_basin_2x3_common_cbar(
+    arr_lst_mean=e2_validation_basin_plot_list,
+
+    basin_mask_latlon=basin_mask_01deg_clean,
+
+    figsize=(14, 9),
+
+    gamma=0.6,
+
+    vmin=0,
+
+    vmax=400,
+
+    cbar_ticks=[
+        0,
+        25,
+        50,
+        100,
+        200,
+        300,
+        400,
+    ],
+
+    cbar_label=r"Precipitation [mm yr$^{-1}$]",
+
+    panel_letters=True,
+
+    show_panel_mean=True,
+)
+
+
+plt.show()
