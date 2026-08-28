@@ -79,11 +79,30 @@ ANNUAL_PERIOD_TAG = f"{ANNUAL_YEAR_START}_{ANNUAL_YEAR_END}"
 #%%
 
 # =============================================================================
-# SECTION 5. LOAD BASIN GRID AND BUILD COMMON 0.1° TARGET GRID
+# SECTION 5 A. LOAD BASIN GRID AND BUILD COMMON 0.1° TARGET GRID
 # =============================================================================
 
 basins = load_basin_grid(basins_path, crs_stereo)
 print_basin_grid_info(basins)
+
+
+# Common 0.1° comparison grid in lat-lon, derived from basin geometry
+target_template_01deg = build_target_latlon_template_from_basin_grid(basins)
+
+# Basin IDs remapped onto the same common target grid
+basin_mask_01deg = reproject_basin_ids_to_target_grid(basins, target_template_01deg)
+
+# Region masks on the same target grid
+region_masks_01deg = make_region_masks_from_basin_mask(basin_mask_01deg, REGION_BASINS)
+
+print("✅ Common 0.1° target grid ready")
+print("Target dims:", target_template_01deg.dims)
+print("Basin-mask dims:", basin_mask_01deg.dims)
+
+#%%
+# =============================================================================
+# SECTION 5 B. PLOT BASINS ON COMMON 0.1° TARGET GRID
+# =============================================================================
 
 colors = plt.cm.gist_ncar(np.linspace(0, 1, 19))
 
@@ -221,20 +240,6 @@ output_path = os.path.join(path_to_plots, 'imbie_basins_with_ids.png')
 # plt.savefig(svnme, dpi=150, bbox_inches='tight')
 gc.collect()
 plt.close()
-
-# Common 0.1° comparison grid in lat-lon, derived from basin geometry
-target_template_01deg = build_target_latlon_template_from_basin_grid(basins)
-
-# Basin IDs remapped onto the same common target grid
-basin_mask_01deg = reproject_basin_ids_to_target_grid(basins, target_template_01deg)
-
-# Region masks on the same target grid
-region_masks_01deg = make_region_masks_from_basin_mask(basin_mask_01deg, REGION_BASINS)
-
-print("✅ Common 0.1° target grid ready")
-print("Target dims:", target_template_01deg.dims)
-print("Basin-mask dims:", basin_mask_01deg.dims)
-# floating variables
 
 #%%
 # =============================================================================
@@ -1299,30 +1304,37 @@ fig, axes = plot_seasonal_bias_or_ratio(
 )
 
 #----------------------------------------------------------------------------
-seasonal_pmb_unc_df = monthly_uncertainty_df_to_conventional_seasonal_uncertainty(
-    regional_pmb_unc_monthly_df,
-    require_complete_season=True,
+# seasonal_pmb_unc_df = monthly_uncertainty_df_to_conventional_seasonal_uncertainty(
+#     regional_pmb_unc_monthly_df,
+#     require_complete_season=True,
+# )
+
+# region_seasonal_clim_pmb_unc = compute_seasonal_climatology_uncertainty_from_seasonal_unc_df(
+#     seasonal_pmb_unc_df
+# )
+
+# seasonal_pmb_unc_df.to_csv(
+#     os.path.join(out_dfs, 
+#                  f"seasonal_timeseries_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"),
+#     index=False,
+#     )
+
+# region_seasonal_clim_pmb_unc.to_csv(
+#     os.path.join(out_dfs, 
+#                  f"seasonal_climatology_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"),
+#     index=False,
+# )
+
+# print("\nPMB seasonal climatology uncertainty:")
+# print(region_seasonal_clim_pmb_unc.head())
+
+seasonal_unc_file = "/home/kkumah/Projects/Antarctic_discharge_work/plots/seasonal_PMB_uncertainty_AIS_WAIS_EAIS_2013_2020_20260815.csv"
+
+seasonal_pmb_unc_df = pd.read_csv(
+    seasonal_unc_file
 )
 
-region_seasonal_clim_pmb_unc = compute_seasonal_climatology_uncertainty_from_seasonal_unc_df(
-    seasonal_pmb_unc_df
-)
-
-seasonal_pmb_unc_df.to_csv(
-    os.path.join(out_dfs, 
-                 f"seasonal_timeseries_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"),
-    index=False,
-    )
-
-region_seasonal_clim_pmb_unc.to_csv(
-    os.path.join(out_dfs, 
-                 f"seasonal_climatology_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.csv"),
-    index=False,
-)
-
-print("\nPMB seasonal climatology uncertainty:")
-
-print(region_seasonal_clim_pmb_unc)
+print(seasonal_pmb_unc_df.head())
 
 
 #----------------------------------------------------------------------------
@@ -1349,11 +1361,11 @@ fig, axes = plot_seasonal_climatology_with_pmb_uncertainty(
 
 svnme = os.path.join(
     path_to_plots,
-    f"seasonal_climatology_precip_with_PMB_uncertainty_over_imbie_basins_GRACE_updated_{cde_run_dte}.png"
+    f"Fig04_regional_seasonal_climatology_AIS_WAIS_EAIS_2013_2020_GRACE_updated_with_UNC_{cde_run_dte}.png"
 )
 
-fig.savefig(svnme, dpi=500, bbox_inches="tight")
-plt.show()
+fig.savefig(svnme, dpi=150, bbox_inches="tight")
+# plt.show()
 gc.collect()
 #%% YEAR BY YEAR SEASONAL TIMESERIES
 # Convert monthly regional values to conventional seasonal means

@@ -24,6 +24,13 @@ REGION_BASINS = {
     "East Antarctica": [2, 3, 4, 5, 6, 7, 8, 9, 18, 19],
 }
 
+SEASON_MONTHS = {
+    "DJF": [(12, -1), (2, 0)],
+    "MAM": [(3, 0), (5, 0)],
+    "JJA": [(6, 0), (8, 0)],
+    "SON": [(9, 0), (11, 0)],
+}
+
 # Name of the date/time column in David's 1-sigma sheet, if present.
 # If the sheet uses year/month columns instead, the helper below will try to infer them.
 RIGNOT_ERR_DATE_CANDIDATES = ["date", "Date", "time", "Time"]
@@ -179,6 +186,169 @@ def storage_sigma_to_xarray(sigmaS_df, basin_id_da, basin_name_da):
 
     return sigmaS_xr
 
+def seasonal_deltaS_uncertainty_from_storage_endpoints(
+    sigmaS_xr,
+    years,
+):
+    """
+    Seasonal GRACE/GRACE-FO storage-change uncertainty from
+    storage-anomaly endpoint uncertainties.
+
+    Returns:
+        DataArray(year, season, basin_id)
+    """
+
+    seasons = {
+        "DJF": {
+            "start_month": 12,
+            "start_offset": -1,
+            "end_month": 3,
+            "end_offset": 0,
+        },
+        "MAM": {
+            "start_month": 3,
+            "start_offset": 0,
+            "end_month": 6,
+            "end_offset": 0,
+        },
+        "JJA": {
+            "start_month": 6,
+            "start_offset": 0,
+            "end_month": 9,
+            "end_offset": 0,
+        },
+        "SON": {
+            "start_month": 9,
+            "start_offset": 0,
+            "end_month": 12,
+            "end_offset": 0,
+        },
+    }
+
+    sigmaS_xr = sigmaS_xr.copy()
+
+    # ensure datetime
+    sigmaS_xr["date"] = pd.to_datetime(
+        sigmaS_xr["date"].values
+    )
+
+    values = []
+    years_out = []
+    seasons_out = []
+
+    for yr in years:
+
+        for season, info in seasons.items():
+
+            start_date = pd.Timestamp(
+                year=yr + info["start_offset"],
+                month=info["start_month"],
+                day=1,
+            )
+
+            end_date = pd.Timestamp(
+                year=yr + info["end_offset"],
+                month=info["end_month"],
+                day=1,
+            )
+
+
+            # skip unavailable endpoints
+            if (
+                start_date not in sigmaS_xr.date.values
+                or end_date not in sigmaS_xr.date.values
+            ):
+                continue
+
+
+            sigma_start = sigmaS_xr.sel(
+                date=start_date
+            )
+
+            sigma_end = sigmaS_xr.sel(
+                date=end_date
+            )
+
+
+            sigma_season = np.sqrt(
+                sigma_start.values**2 +
+                sigma_end.values**2
+            )
+
+
+            values.append(sigma_season)
+            years_out.append(yr)
+            seasons_out.append(season)
+
+
+    if len(values) == 0:
+        raise ValueError(
+            "No seasonal endpoint uncertainties found. "
+            "Check sigmaS_xr date coverage."
+        )
+
+
+    # --------------------------------------------------
+    # Build clean array
+    # --------------------------------------------------
+
+    data = np.stack(values, axis=0)
+
+
+    da = xr.DataArray(
+        data,
+        dims=[
+            "year_season",
+            "basin_id"
+        ],
+        coords={
+            "year_season": np.arange(len(values)),
+            "year": (
+                "year_season",
+                years_out
+            ),
+            "season": (
+                "year_season",
+                seasons_out
+            ),
+            "basin_id": sigmaS_xr.basin_id,
+        },
+        name="seasonal_deltaS_uncertainty_Gt",
+    )
+
+
+    # Convert year_season → year × season
+    da = (
+        da
+        .set_index(
+            year_season=[
+                "year",
+                "season"
+            ]
+        )
+        .unstack("year_season")
+    )
+
+
+    # final order
+    da = da.transpose(
+        "year",
+        "season",
+        "basin_id"
+    )
+
+
+    # keep only available seasons
+    da = da.reindex(
+        season=[
+            "DJF",
+            "MAM",
+            "JJA",
+            "SON"
+        ]
+    )
+
+    return da
 
 def annual_deltaS_uncertainty_from_storage_endpoints(
     sigmaS_xr,

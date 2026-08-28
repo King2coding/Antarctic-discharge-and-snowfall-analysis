@@ -1698,6 +1698,112 @@ df_PMB_unc = mean_over_years_df(
     "P_MB uncertainty 1sigma"
 )
 
+# =============================================================================
+# Seasonal PMB uncertainty using GRACE storage endpoints
+# =============================================================================
+
+
+seasonal_dS_unc_Gt = seasonal_deltaS_uncertainty_from_storage_endpoints(
+    sigmaS_xr,
+    YEARS
+)
+
+print(seasonal_dS_unc_Gt)
+print(seasonal_dS_unc_Gt.dims)
+print(seasonal_dS_unc_Gt.year.values)
+print(seasonal_dS_unc_Gt.season.values)
+
+
+D_unc_seasonal_mm = (
+    D_unc_annual_mm
+    .expand_dims(
+        season=["DJF", "MAM", "JJA", "SON"]
+    )
+    .transpose(
+        "year",
+        "season",
+        "basin_id"
+    )
+    * 3/12
+)
+
+seasonal_dS_unc_mm = (
+    seasonal_dS_unc_Gt *
+    1e12 /
+    basin_area_m2
+)
+
+# Explicit alignment
+seasonal_dS_unc_mm, D_unc_seasonal_mm = xr.align(
+    seasonal_dS_unc_mm,
+    D_unc_seasonal_mm,
+    join="inner"
+)
+
+seasonal_PMB_unc_mm = np.sqrt(
+    seasonal_dS_unc_mm**2 +
+    D_unc_seasonal_mm**2
+)
+seasonal_PMB_unc_mm.name = "seasonal_P_MB_uncertainty_mm"
+
+print(seasonal_PMB_unc_mm)
+
+# ============================================================
+# Seasonal regional PMB uncertainty
+# ============================================================
+
+regional_seasonal_unc = []
+
+for region, basin_ids in REGION_BASINS.items():
+
+    sigma_b = seasonal_PMB_unc_mm.sel(
+        basin_id=basin_ids
+    )
+
+    area_b = basin_area_m2.sel(
+        basin_id=basin_ids
+    )
+
+    weights = area_b / area_b.sum("basin_id")
+
+    sigma_region = np.sqrt(
+        ((weights * sigma_b)**2).sum("basin_id")
+    )
+
+    df_region = (
+        sigma_region
+        .to_dataframe(name="pmb_uncertainty")
+        .reset_index()
+    )
+
+    df_region["region"] = region
+
+    regional_seasonal_unc.append(
+        df_region[
+            [
+                "region",
+                "year",
+                "season",
+                "pmb_uncertainty"
+            ]
+        ]
+    )
+
+
+regional_seasonal_pmb_unc_df = pd.concat(
+    regional_seasonal_unc,
+    ignore_index=True
+)
+
+
+regional_seasonal_pmb_unc_df.to_csv(os.path.join(
+    path_to_plots,
+    f"seasonal_PMB_uncertainty_AIS_WAIS_EAIS_2013_2020_{cde_run_dte}.csv"
+), index=False)
+
+
+print(regional_seasonal_pmb_unc_df.head())
+
 # -----------------------------------------------------------------------------
 # Merge Table S3
 # -----------------------------------------------------------------------------

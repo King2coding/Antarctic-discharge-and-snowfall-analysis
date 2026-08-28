@@ -97,6 +97,7 @@ REFERENCE_NAME = r"$P_{\mathrm{MB}}$"
 
 GPCP_NAME = "GPCP V3.3"
 GPCP_CORR_NAME = "GPCP V3.3 corrected"
+GPCP_DEADJ_NAME = "GPCP V3.3 / 1.4"
 
 PMW8_NAME = "GPM PMW V08"
 PMW8_CORR_NAME = "GPM PMW V08 corrected"
@@ -110,6 +111,34 @@ ERA5_NAME = "ERA5"
 
 print("Loading GPCP monthly dataset ...")
 
+
+# -------------------------------------------------------------------------
+# Build the expected monthly time coordinate directly from the filenames.
+#
+# Example:
+#   GPCPMON_L3_201710_V3.3.nc4
+#                    ^^^^^^
+#                    YYYYMM
+#
+# We use the filename as the authoritative monthly timestamp because
+# open_mfdataset() was found to introduce one duplicate timestamp
+# (2018-11) and lose 2017-10 even though the individual source files
+# themselves contain the correct timestamps.
+# -------------------------------------------------------------------------
+
+gpcp_time_from_files = pd.DatetimeIndex([
+    pd.to_datetime(
+        os.path.basename(f).split("_")[2],
+        format="%Y%m"
+    )
+    for f in all_gpcp_v3pt3_mnthly_files_2013_2020
+])
+
+
+# -------------------------------------------------------------------------
+# Load the monthly GPCP files in their sorted filename order.
+# -------------------------------------------------------------------------
+
 gpcp_ds_v3pt3 = xr.open_mfdataset(
     all_gpcp_v3pt3_mnthly_files_2013_2020,
     combine="nested",
@@ -122,20 +151,30 @@ gpcp_ds_v3pt3 = xr.open_mfdataset(
     cache=False,
 )
 
-gpcp_ds_v3pt3 = ds_swaplon(gpcp_ds_v3pt3)
 
-# Keep the monthly precipitation variable
-# Your file shows the variable name is sat_gauge_precip
-gpcp_mnth = gpcp_ds_v3pt3["sat_gauge_precip"].copy()
+# -------------------------------------------------------------------------
+# Explicitly restore the correct monthly chronology using the filenames.
+#
+# Because combine="nested" concatenates according to the supplied file-list
+# order, each time index corresponds directly to the same-index filename.
+# -------------------------------------------------------------------------
 
-# Normalize monthly timestamps to month-start
-gpcp_mnth = gpcp_mnth.assign_coords(
-    time=pd.to_datetime(gpcp_mnth["time"].values).to_period("M").to_timestamp()
+gpcp_ds_v3pt3 = gpcp_ds_v3pt3.assign_coords(
+    time=gpcp_time_from_files
 )
 
-# Convert from mm/day to mm/month
+
+# Longitude conversion can now proceed normally.
+gpcp_ds_v3pt3 = ds_swaplon(gpcp_ds_v3pt3)
+
+
+# Keep monthly precipitation variable.
+gpcp_mnth = gpcp_ds_v3pt3["sat_gauge_precip"].copy()
+
+
+# Convert from mm/day to mm/month.
 days_in_month = xr.DataArray(
-    pd.to_datetime(gpcp_mnth["time"].values).days_in_month,
+    gpcp_mnth["time"].dt.days_in_month,
     dims=["time"],
     coords={"time": gpcp_mnth["time"]}
 )
@@ -143,15 +182,24 @@ days_in_month = xr.DataArray(
 gpcp_mnth = gpcp_mnth * days_in_month
 gpcp_mnth.name = "gpcp_mm_month"
 
-# Replace fill/missing with NaN if needed
+
+# Replace fill/missing values with NaN if needed.
 fillv = gpcp_mnth.attrs.get("_FillValue", None)
+
 if fillv is not None:
-    gpcp_mnth = gpcp_mnth.where(gpcp_mnth != fillv)
-gpcp_mnth = gpcp_mnth.where(np.isfinite(gpcp_mnth))
+    gpcp_mnth = gpcp_mnth.where(
+        gpcp_mnth != fillv
+    )
 
-# Subset Antarctica
-gpcp_mnth = gpcp_mnth.sel(lat=slice(-60, -90))
+gpcp_mnth = gpcp_mnth.where(
+    np.isfinite(gpcp_mnth)
+)
 
+
+# Subset Antarctica.
+gpcp_mnth = gpcp_mnth.sel(
+    lat=slice(-60, -90)
+)
 #----------------------------------------------------------------------------
 
 
@@ -243,6 +291,36 @@ gpcp_mon_01 = gpcp_mon_01.sortby("lat", ascending=False)
 # Apply valid basin-analysis mask
 gpcp_mon_01 = gpcp_mon_01.where(basin_mask_01deg.notnull())
 gpcp_mon_01 = gpcp_mon_01.where(gpcp_mon_01["lat"] < -60)
+
+# =============================================================================
+# GPCP ANTARCTIC LEGACY ADJUSTMENT REMOVAL
+#
+# GPCP applies an approximately 1.4 adjustment to its AIRS/TOVS-based
+# Antarctic precipitation estimate.
+#
+# For the PMB experiment, remove that legacy multiplicative adjustment first
+# so that the PMB-derived correction replaces, rather than compounds, it.
+# =============================================================================
+
+GPCP_ANTARCTIC_LEGACY_FACTOR = 1.4
+
+gpcp_mon_01_deadjusted = (
+    gpcp_mon_01
+    / GPCP_ANTARCTIC_LEGACY_FACTOR
+)
+
+gpcp_mon_01_deadjusted.name = (
+    "GPCP V3.3 legacy-adjustment removed"
+)
+
+gpcp_mon_01_deadjusted.attrs.update(
+    gpcp_mon_01.attrs
+)
+
+gpcp_mon_01_deadjusted.attrs[
+    "Antarctic_legacy_adjustment_removed"
+] = GPCP_ANTARCTIC_LEGACY_FACTOR
+
 #----------------------------------------------------------------------------
 
 print("Reprojecting PMB monthly to common 0.1° grid ...")
@@ -313,6 +391,54 @@ gpm_pmw_v08_mon_01 = build_gpm_pmw_v8_mean(
     min_valid_families=4,
 )
 
+#%%
+# =============================================================================
+# SECTION X. BUILD COMMON MONTHLY TIME AXES
+#
+# These common time axes ensure that products are always compared over
+# identical months.
+#
+# common_time_main
+#     Entire PMB study period (expected: Feb 2013 – Nov 2020)
+#
+# common_time_validation
+#     Validation-period intersection only
+#
+# =============================================================================
+
+common_time_main = sorted(
+    set(pd.to_datetime(pmb_mon_01.time.values))
+    &
+    set(pd.to_datetime(era5_mnth_01.time.values))
+    &
+    set(pd.to_datetime(gpcp_mon_01.time.values))
+    &
+    set(pd.to_datetime(gpcp_mon_01_deadjusted.time.values))
+    &
+    set(pd.to_datetime(gpm_pmw_v08_mon_01.time.values))
+)
+
+common_time_main = pd.DatetimeIndex(common_time_main)
+
+
+validation_mask = (
+    common_time_main.year.isin(VALIDATION_YEARS)
+)
+
+common_time_validation = common_time_main[
+    validation_mask
+]
+
+
+print("Common study months      :", len(common_time_main))
+print("Common validation months :", len(common_time_validation))
+
+print(
+    common_time_main.min(),
+    "to",
+    common_time_main.max()
+)
+
 gc.collect()
 
 #%%
@@ -325,16 +451,53 @@ gc.collect()
 valid_basin_mask = basin_mask_01deg.notnull()
 
 gpcp_mon_01 = gpcp_mon_01.where(valid_basin_mask)
+gpcp_mon_01_deadjusted = gpcp_mon_01_deadjusted.where(valid_basin_mask)
 era5_mon_01 = era5_mnth_01.where(valid_basin_mask)
 pmb_mon_01 = pmb_mon_01.where(valid_basin_mask)
-pmb_unc_mon_01 = pmb_unc_mon_01.where(valid_basin_mask)
 
 print("✅ Common masked monthly fields ready")
 print("GPCP  :", gpcp_mon_01.shape)
+print("GPCP deadjusted :", gpcp_mon_01_deadjusted.shape)
 print("ERA5  :", era5_mon_01.shape)
 print("PMB   :", pmb_mon_01.shape)
-print("PMB unc:", pmb_unc_mon_01.shape)
 
+# =============================================================================
+# Coincident monthly datasets
+# =============================================================================
+
+pmb_mon_common = pmb_mon_01.sel(time=common_time_main)
+
+era5_mon_common = era5_mon_01.sel(time=common_time_main)
+
+gpcp_mon_common = gpcp_mon_01.sel(time=common_time_main)
+
+gpcp_mon_common_deadjusted = gpcp_mon_01_deadjusted.sel(time=common_time_main)
+
+gpm_pmw_v08_mon_common = gpm_pmw_v08_mon_01.sel(time=common_time_main)
+
+# =============================================================================
+# Validation-period monthly datasets
+# =============================================================================
+
+pmb_mon_validation = pmb_mon_01.sel(
+    time=common_time_validation
+)
+
+era5_mon_validation = era5_mon_01.sel(
+    time=common_time_validation
+)
+
+gpcp_mon_validation = gpcp_mon_01.sel(
+    time=common_time_validation
+)
+
+gpcp_mon_validation_deadjusted = gpcp_mon_01_deadjusted.sel(
+    time=common_time_validation
+)
+
+gpm_pmw_v08_mon_validation = gpm_pmw_v08_mon_01.sel(
+    time=common_time_validation
+)
 
 # =============================================================================
 # SECTION 8. QUICK SANITY CHECKS
@@ -344,11 +507,11 @@ print("\n--- Sanity checks ---")
 print("Target grid CRS:", target_template_01deg.rio.crs)
 print("Basin mask CRS :", basin_mask_01deg.rio.crs)
 
-print("GPCP time range:", str(gpcp_mon_01.time.min().values), "->", str(gpcp_mon_01.time.max().values))
-print("ERA5 time range:", str(era5_mon_01.time.min().values), "->", str(era5_mon_01.time.max().values))
-print("PMB time range :", str(pmb_mon_01.time.min().values),  "->", str(pmb_mon_01.time.max().values))
-print("PMB uncertainty time range :", str(pmb_unc_mon_01.time.min().values), "->", str(pmb_unc_mon_01.time.max().values))
-print("GPM PMW V08 time range:", str(gpm_pmw_v08_mon_01.time.min().values), "->", str(gpm_pmw_v08_mon_01.time.max().values))
+print("GPCP time range:", str(gpcp_mon_common.time.min().values), "->", str(gpcp_mon_common.time.max().values))
+print("GPCP deadjusted time range:", str(gpcp_mon_common_deadjusted.time.min().values), "->", str(gpcp_mon_common_deadjusted.time.max().values))
+print("ERA5 time range:", str(era5_mon_common.time.min().values), "->", str(era5_mon_common.time.max().values))
+print("PMB time range :", str(pmb_mon_common.time.min().values),  "->", str(pmb_mon_common.time.max().values))
+print("GPM PMW V08 time range:", str(gpm_pmw_v08_mon_common.time.min().values), "->", str(gpm_pmw_v08_mon_common.time.max().values))
 #%%
 # =============================================================================
 # SECTION 9. E2-A. BUILD REGIONAL MONTHLY SERIES FROM UNCORRECTED DATA
@@ -359,10 +522,10 @@ print("GPM PMW V08 time range:", str(gpm_pmw_v08_mon_01.time.min().values), "->"
 
 
 e2_uncorrected_product_dict = {
-    REFERENCE_NAME: pmb_mon_01,
-    ERA5_NAME: era5_mon_01,
-    GPCP_NAME: gpcp_mon_01,
-    PMW8_NAME: gpm_pmw_v08_mon_01,
+    REFERENCE_NAME: pmb_mon_common,
+    ERA5_NAME: era5_mon_common,
+    GPCP_DEADJ_NAME: gpcp_mon_common_deadjusted,
+    PMW8_NAME: gpm_pmw_v08_mon_common,
 }
 
 
@@ -391,6 +554,7 @@ print(
     e2_regional_monthly_uncorrected["time"].max()
 )
 
+
 #%%
 # =============================================================================
 # SECTION 10. E2-B. BUILD COMPLETE METEOROLOGICAL SEASONS
@@ -414,13 +578,13 @@ e2_seasonal_uncorrected = (
 )
 
 
-print(
-    e2_seasonal_uncorrected
-    .sort_values(
-        ["region", "product", "season_year", "season"]
-    )
-    .head(30)
-)
+# print(
+#     e2_seasonal_uncorrected
+#     .sort_values(
+#         ["region", "product", "season_year", "season"]
+#     )
+#     .head(30)
+# )
 
 #%%
 # =============================================================================
@@ -438,8 +602,8 @@ season_counts = (
 )
 
 
-print("\nNumber of complete seasons:")
-print(season_counts)
+# print("\nNumber of complete seasons:")
+# print(season_counts)
 
 
 #%%
@@ -503,7 +667,7 @@ e2_correction_factors = derive_seasonal_correction_factors(
     reference_product=REFERENCE_NAME,
 
     target_products=(
-        GPCP_NAME,
+        GPCP_DEADJ_NAME,
         PMW8_NAME,
     ),
 
@@ -561,7 +725,7 @@ fig, ax = plt.subplots(
 season_order = ["DJF", "MAM", "JJA", "SON"]
 
 
-for product in [GPCP_NAME, PMW8_NAME]:
+for product in [GPCP_DEADJ_NAME, PMW8_NAME]:
 
     sub = (
         e2_correction_factors[
@@ -610,9 +774,15 @@ ax.legend(
     frameon=False,
     fontsize=12,
 )
+svnme = os.path.join(
+    path_to_plots,
+    f" E2_seasonal_AIS_PMB_correction_factors_"
+    f"cal2013_2017_val2018_2020_{cde_run_dte}.png"
+)
+fig.savefig(svnme, dpi=150)
 
 plt.tight_layout()
-plt.show()
+# plt.show()
 
 #%%
 # =============================================================================
@@ -624,11 +794,11 @@ AIS_MASK_01 = basin_mask_01deg.isin(AIS_BASINS)
 
 
 gpcp_mon_01_e2_corr = apply_e2_seasonal_ais_correction(
-    da_monthly=gpcp_mon_01,
+    da_monthly=gpcp_mon_01_deadjusted,
 
     correction_factor_df=e2_correction_factors,
 
-    product_name=GPCP_NAME,
+    product_name=GPCP_DEADJ_NAME,
 
     ais_mask=AIS_MASK_01,
 
@@ -649,8 +819,8 @@ gpm_pmw_v08_mon_01_e2_corr = apply_e2_seasonal_ais_correction(
 )
 
 
-print(gpcp_mon_01_e2_corr)
-print(gpm_pmw_v08_mon_01_e2_corr)
+# print(gpcp_mon_01_e2_corr)
+# print(gpm_pmw_v08_mon_01_e2_corr)
 
 #%%
 # =============================================================================
@@ -664,7 +834,7 @@ test_time = "2019-07-01"
 gpcp_ratio_test = (
     gpcp_mon_01_e2_corr.sel(time=test_time)
     /
-    gpcp_mon_01.sel(time=test_time)
+    gpcp_mon_01_deadjusted.sel(time=test_time)
 )
 
 
@@ -675,17 +845,57 @@ pmw8_ratio_test = (
 )
 
 
+# print(
+#     "GPCP corrected/original ratio range:",
+#     float(gpcp_ratio_test.min(skipna=True)),
+#     float(gpcp_ratio_test.max(skipna=True)),
+# )
+
+
+# print(
+#     "PMW8 corrected/original ratio range:",
+#     float(pmw8_ratio_test.min(skipna=True)),
+#     float(pmw8_ratio_test.max(skipna=True)),
+# )
+
+gpcp_net_ratio_test = (
+    gpcp_mon_01_e2_corr.sel(time=test_time)
+    /
+    gpcp_mon_01.sel(time=test_time)
+)
+
 print(
-    "GPCP corrected/original ratio range:",
+    "GPCP PMB-corrected / de-adjusted ratio:",
     float(gpcp_ratio_test.min(skipna=True)),
     float(gpcp_ratio_test.max(skipna=True)),
 )
 
-
 print(
-    "PMW8 corrected/original ratio range:",
-    float(pmw8_ratio_test.min(skipna=True)),
-    float(pmw8_ratio_test.max(skipna=True)),
+    "GPCP PMB-corrected / published GPCP ratio:",
+    float(gpcp_net_ratio_test.min(skipna=True)),
+    float(gpcp_net_ratio_test.max(skipna=True)),
+)
+
+#%%
+# =============================================================================
+# SECTION 13_B. COMMON-TIME CORRECTED PRODUCTS
+# =============================================================================
+
+gpcp_mon_e2_corr_common = gpcp_mon_01_e2_corr.sel(
+    time=common_time_main
+)
+
+gpm_pmw_v08_mon_e2_corr_common = gpm_pmw_v08_mon_01_e2_corr.sel(
+    time=common_time_main
+)
+
+
+gpcp_mon_e2_corr_validation = gpcp_mon_01_e2_corr.sel(
+    time=common_time_validation
+)
+
+gpm_pmw_v08_mon_e2_corr_validation = gpm_pmw_v08_mon_01_e2_corr.sel(
+    time=common_time_validation
 )
 
 #%%
@@ -698,12 +908,9 @@ print(
 
 e2_product_dict = {
     REFERENCE_NAME: pmb_mon_01,
-
     ERA5_NAME: era5_mon_01,
-
     GPCP_NAME: gpcp_mon_01,
     GPCP_CORR_NAME: gpcp_mon_01_e2_corr,
-
     PMW8_NAME: gpm_pmw_v08_mon_01,
     PMW8_CORR_NAME: gpm_pmw_v08_mon_01_e2_corr,
 }
@@ -752,8 +959,18 @@ e2_monthly_clim_products = {
     time_name="time",
 )
 
+# Common validation-month dictionary for annual comparisons only
+e2_product_dict_validation_common = {
+    REFERENCE_NAME: pmb_mon_validation,
+    ERA5_NAME: era5_mon_validation,
+    GPCP_NAME: gpcp_mon_validation,
+    GPCP_CORR_NAME: gpcp_mon_e2_corr_validation,
+    PMW8_NAME: gpm_pmw_v08_mon_validation,
+    PMW8_CORR_NAME: gpm_pmw_v08_mon_e2_corr_validation,
+}
 
-print(e2_validation_monthly_clim_df)
+
+# print(e2_validation_monthly_clim_df)
 
 #%% SECTION 15.A. PLOT VALIDATION MONTHLY CLIMATOLOGY FOR E2
 product_styles_e2 = {
@@ -818,8 +1035,13 @@ fig, axes = plot_validation_monthly_climatology_numeric_months(
     ylabel="mm/month",
 )
 
+svnme = os.path.join(
+    path_to_plots,
+    f"e2_validation_monthly_climatology_{cde_run_dte}.png",
+)
 
-plt.show()
+plt.savefig(svnme, dpi=150, bbox_inches="tight")
+# plt.show()
 
 #%%
 # =============================================================================
@@ -852,7 +1074,7 @@ e2_regional_monthly_all = (
 )
 
 
-print(e2_validation_seasonal_clim_df)
+# print(e2_validation_seasonal_clim_df)
 
 #%% SECTION 16.A. PLOT VALIDATION SEASONAL CLIMATOLOGY FOR E2
 fig, axes = plot_seasonal_climatology(
@@ -884,29 +1106,28 @@ fig, axes = plot_seasonal_climatology(
     legend_ncol=3,
 )
 
+svnme = os.path.join(
+    path_to_plots,
+    f"e2_validation_seasonal_climatology_{cde_run_dte}.png",
+)
 
-plt.show()
-
+plt.savefig(svnme, dpi=150, bbox_inches="tight")
+# plt.show()
+gc.collect()
 #%%
 # =============================================================================
 # SECTION 17. E2 VALIDATION REGIONAL MEAN ANNUAL PRECIPITATION
 # =============================================================================
 
-
 (
     e2_validation_annual_regional_df,
     e2_validation_mean_annual_regional_df,
 ) = validation_regional_annual_dataframe(
-    product_dict=e2_product_dict,
+    product_dict=e2_product_dict_validation_common,
 
     region_masks=region_masks_01deg,
 
     validation_years=VALIDATION_YEARS,
-)
-
-
-print(
-    e2_validation_mean_annual_regional_df
 )
 
 #%% SECTION 17.A. PLOT VALIDATION REGIONAL MEAN ANNUAL PRECIPITATION FOR E2
@@ -970,28 +1191,31 @@ fig, ax = plot_regional_mean_annual_bars(
 
     legend_ncol=2,
 )
+svnme = os.path.join(
+    path_to_plots,
+    f"e2_validation_annual_regional_{cde_run_dte}.png",
+)
 
+plt.savefig(svnme, dpi=150, bbox_inches="tight")
 
-plt.show()
-
+# plt.show()
+gc.collect()
 
 #%%
 # =============================================================================
 # SECTION 18. E2 VALIDATION PIXEL-LEVEL MEAN ANNUAL FIELDS
 # =============================================================================
-
-
 e2_pixel_map_products = {
 
-    ERA5_NAME: era5_mon_01,
+    ERA5_NAME: era5_mon_validation,
 
-    GPCP_NAME: gpcp_mon_01,
+    GPCP_NAME: gpcp_mon_validation,
 
-    GPCP_CORR_NAME: gpcp_mon_01_e2_corr,
+    GPCP_CORR_NAME: gpcp_mon_e2_corr_validation,
 
-    PMW8_NAME: gpm_pmw_v08_mon_01,
+    PMW8_NAME: gpm_pmw_v08_mon_validation,
 
-    PMW8_CORR_NAME: gpm_pmw_v08_mon_01_e2_corr,
+    PMW8_CORR_NAME: gpm_pmw_v08_mon_e2_corr_validation,
 }
 
 
@@ -1021,77 +1245,141 @@ basin_mask_01deg_clean = basin_mask_01deg.where(basin_mask_01deg.isin(BASIN_IDS)
 
 
 e2_pixel_arr_lst = [
+
     (
         ERA5_NAME,
-        e2_validation_annual_mean_fields[ERA5_NAME]
+        e2_validation_annual_mean_fields[
+            ERA5_NAME
+        ]
     ),
 
     (
         GPCP_NAME,
-        e2_validation_annual_mean_fields[GPCP_NAME]
+        e2_validation_annual_mean_fields[
+            GPCP_NAME
+        ]
     ),
 
     (
         GPCP_CORR_NAME,
-        e2_validation_annual_mean_fields[GPCP_CORR_NAME]
+        e2_validation_annual_mean_fields[
+            GPCP_CORR_NAME
+        ]
     ),
 
     (
         PMW8_NAME,
-        e2_validation_annual_mean_fields[PMW8_NAME]
+        e2_validation_annual_mean_fields[
+            PMW8_NAME
+        ]
     ),
 
     (
         PMW8_CORR_NAME,
-        e2_validation_annual_mean_fields[PMW8_CORR_NAME]
+        e2_validation_annual_mean_fields[
+            PMW8_CORR_NAME
+        ]
     ),
 ]
 
+# =============================================================================
+# AIS MEAN VALUES FOR PIXEL-WISE PANELS
+# =============================================================================
 
-fig, axes = compare_mean_precip_grid_power_latlon(
+AIS_MASK_01 = basin_mask_01deg.isin(
+    AIS_BASINS
+)
+
+
+e2_pixel_mean_vals = {}
+
+
+for product_name, field in e2_pixel_arr_lst:
+
+    mean_val = cosine_weighted_mean_masked(
+        da_2d=field,
+        region_mask=AIS_MASK_01,
+        lat_name="lat",
+        lon_name="lon"
+    )
+
+    e2_pixel_mean_vals[
+        product_name
+    ] = float(
+        mean_val.values
+    )
+
+
+print(
+    e2_pixel_mean_vals
+)
+
+fig, axes, cb = plot_annual_comparison_multi_row_grid_spec(
+
     arr_lst_mean=e2_pixel_arr_lst,
 
-    basin_mask_latlon=basin_mask_01deg_clean,
+    mean_vals=e2_pixel_mean_vals,
+
+    vmin=0,
+    vmax=400,
+
+    smooth=False,
+
+    cbr_lbl=r"Precipitation [mm yr$^{-1}$]",
+
+    extent_plt=[
+        -180,
+        180,
+        -90,
+        -60
+    ],
+
+    hem="SH",
 
     ncols=3,
 
-    figsize=(14, 9),
+    figsize_per_row=(
+        22,
+        7
+    ),
 
-    gamma=0.6,
-
-    vmin=0,
-
-    vmax=400,
-
-    cbar_tcks=[
+    cbar_ticks=[
         0,
         25,
         50,
         100,
+        150,
         200,
+        250,
         300,
-        400,
+        350,
+        400
     ],
-
-    cbar_label=r"Precipitation [mm yr$^{-1}$]",
 
     panel_letters=True,
 
-    show_panel_mean=True,
+    show_mean=True,
+)
+svnme = os.path.join(
+    path_to_plots,
+    f"e2_validation_pixel_annual_{cde_run_dte}.png",
 )
 
+plt.savefig(
+    svnme,
+    dpi=150,
+    bbox_inches="tight"
+)
 
-plt.show()
-
+# plt.show()
 #%%
 # =============================================================================
 # SECTION 19. E2 VALIDATION BASIN-PAINTED MEAN ANNUAL FIELDS
 # =============================================================================
 
-
 e2_validation_all_annual_mean_fields = (
     build_validation_annual_mean_fields(
-        product_dict=e2_product_dict,
+        product_dict=e2_product_dict_validation_common,
 
         validation_years=VALIDATION_YEARS,
     )
@@ -1148,5 +1436,438 @@ fig, axes, cb = compare_mean_precip_basin_2x3_common_cbar(
     show_panel_mean=True,
 )
 
+svneme = os.path.join(
+    path_to_plots,
+    f"e2_validation_basin_annual_{cde_run_dte}.png",
+)
+plt.savefig(
+    svneme,
+    dpi=150,
+    bbox_inches="tight"
+)
+# plt.show()
+gc.collect()
 
-plt.show()
+#%%
+# =============================================================================
+# SECTION 20. E2 ANNUAL DIFFERENCE MAPS
+# =============================================================================
+
+gpcp_corr_minus_uncorr = (
+    e2_validation_annual_mean_fields[GPCP_CORR_NAME]
+    -
+    e2_validation_annual_mean_fields[GPCP_NAME]
+)
+
+pmw8_corr_minus_uncorr = (
+    e2_validation_annual_mean_fields[PMW8_CORR_NAME]
+    -
+    e2_validation_annual_mean_fields[PMW8_NAME]
+)
+
+
+# -------------------------------------------------------------------------
+# Residual relative to ERA5:
+# corrected product - ERA5
+# -------------------------------------------------------------------------
+
+gpcp_corr_minus_era5 = (
+    e2_validation_annual_mean_fields[GPCP_CORR_NAME]
+    -
+    e2_validation_annual_mean_fields[ERA5_NAME]
+)
+
+pmw8_corr_minus_era5 = (
+    e2_validation_annual_mean_fields[PMW8_CORR_NAME]
+    -
+    e2_validation_annual_mean_fields[ERA5_NAME]
+)
+
+
+# -------------------------------------------------------------------------
+# Row 1: what did the PMB adjustment actually change?
+# -------------------------------------------------------------------------
+
+correction_difference_data = [
+
+    (
+        "GPCP V3.3 corrected - GPCP V3.3",
+        gpcp_corr_minus_uncorr,
+    ),
+
+    (
+        "GPM PMW V08 corrected - GPM PMW V08",
+        pmw8_corr_minus_uncorr,
+    ),
+]
+
+
+# -------------------------------------------------------------------------
+# Row 2: what discrepancy remains relative to ERA5?
+# -------------------------------------------------------------------------
+
+era5_residual_difference_data = [
+
+    (
+        "GPCP V3.3 corrected - ERA5",
+        gpcp_corr_minus_era5,
+    ),
+
+    (
+        "GPM PMW V08 corrected - ERA5",
+        pmw8_corr_minus_era5,
+    ),
+]
+
+
+fig, axes = plot_antarctic_difference_maps_2x2(
+
+    correction_data=correction_difference_data,
+
+    residual_data=era5_residual_difference_data,
+
+    extent_plt=(-180, 180, -90, -60),
+
+    gpcp_vmin=-5,
+    gpcp_vmax=50,
+    gpcp_step=5,
+
+    pmw_vmin=-2,
+    pmw_vmax=150,
+    pmw_step=10,
+
+    residual_vmin=-200,
+    residual_vmax=200,
+    residual_step=25,
+
+    cmap_name="RdBu_r",
+
+    figsize=(15, 11),
+)
+
+gc.collect()
+
+
+#%% AIS Specific Analysis For GPCP Meeting
+#SECTION 15.B. AIS-ONLY MONTHLY CLIMATOLOGY FOR PRESENTATION
+
+ais_monthly_df = (
+    e2_validation_monthly_clim_df[
+        e2_validation_monthly_clim_df["region"] == "Antarctica"
+    ]
+    .copy()
+)
+
+fig, ax = plt.subplots(figsize=(9, 5.5), dpi=150)
+
+for product in (
+    ERA5_NAME,
+    GPCP_NAME,
+    GPCP_CORR_NAME,
+    PMW8_NAME,
+    PMW8_CORR_NAME,
+):
+
+    ss = (
+        ais_monthly_df[
+            ais_monthly_df["product"] == product
+        ]
+        .sort_values("month")
+    )
+
+    style = product_styles_e2[product].copy()
+
+    ax.plot(
+        ss["month"],
+        ss["precipitation"],
+        label=product,
+        **style,
+    )
+
+ax.set_xticks(np.arange(1, 13))
+
+ax.set_xlabel(
+    "Month",
+    fontsize=14,
+    fontweight="bold",
+)
+
+ax.set_ylabel(
+    "Precipitation [mm month$^{-1}$]",
+    fontsize=14,
+    fontweight="bold",
+)
+
+ax.set_title(
+    "AIS Monthly Climatology:\nIndependent Validation Period (2018–2020)",
+    fontsize=16,
+    fontweight="bold",
+)
+
+ax.grid(True, alpha=0.25)
+
+# ------------------------------------------------------------------
+# Custom legend order
+# ------------------------------------------------------------------
+handles, labels = ax.get_legend_handles_labels()
+
+desired_order = [
+    GPCP_NAME,
+    GPCP_CORR_NAME,
+    PMW8_NAME,
+    PMW8_CORR_NAME,
+    ERA5_NAME,
+]
+
+handle_dict = dict(zip(labels, handles))
+
+ax.legend(
+    [handle_dict[l] for l in desired_order],
+    desired_order,
+    loc="upper center",
+    bbox_to_anchor=(0.5, -0.14),
+    ncol=3,
+    frameon=False,
+    fontsize=11.5,
+    handlelength=4.0,
+    handletextpad=0.8,
+    columnspacing=2.0,
+)
+
+plt.tight_layout()
+
+svnme = os.path.join(
+    path_to_plots,
+    f"e2_AIS_validation_monthly_climatology_{cde_run_dte}.png",
+)
+
+plt.savefig(
+    svnme,
+    dpi=150,
+    bbox_inches="tight",
+)
+
+# plt.show()
+gc.collect()
+
+#=============================================================================
+# SECTION 16.B. AIS-ONLY SEASONAL CLIMATOLOGY FOR PRESENTATION
+
+ais_seasonal_df = (
+    e2_validation_seasonal_clim_df[
+        e2_validation_seasonal_clim_df["region"] == "Antarctica"
+    ]
+    .copy()
+)
+
+season_order = ["DJF", "MAM", "JJA", "SON"]
+
+fig, ax = plt.subplots(figsize=(9, 5.5), dpi=150)
+
+for product in (
+    # REFERENCE_NAME,
+    ERA5_NAME,
+    GPCP_NAME,
+    GPCP_CORR_NAME,
+    PMW8_NAME,
+    PMW8_CORR_NAME,
+):
+
+    ss = (
+        ais_seasonal_df[
+            ais_seasonal_df["product"] == product
+        ]
+        .set_index("season")
+        .reindex(season_order)
+    )
+
+    if product == REFERENCE_NAME:
+        style = {
+            "color": "black",
+            "marker": "o",
+            "lw": 2.8,
+        }
+    else:
+        style = product_styles_e2[product].copy()
+
+    ax.plot(
+        season_order,
+        ss["precipitation"],
+        label=product,
+        **style,
+    )
+
+ax.set_xlabel(
+    "Season",
+    fontsize=14,
+    fontweight="bold",
+)
+
+ax.set_ylabel(
+    "Precipitation [mm season$^{-1}$]",
+    fontsize=14,
+    fontweight="bold",
+)
+
+ax.set_title(
+    "AIS Seasonal Climatology:\nIndependent Validation Period (2018–2020)",
+    fontsize=16,
+    fontweight="bold",
+)
+
+ax.grid(True, alpha=0.25)
+
+ax.legend(
+    loc="upper center",
+    bbox_to_anchor=(0.5, -0.14),
+    ncol=3,
+    frameon=False,
+    fontsize=11.5,
+    handlelength=4.0,   # longer legend line
+)
+
+plt.tight_layout()
+
+svnme = os.path.join(
+    path_to_plots,
+    f"e2_AIS_validation_seasonal_climatology_{cde_run_dte}.png",
+)
+
+plt.savefig(
+    svnme,
+    dpi=200,
+    bbox_inches="tight",
+)
+
+# plt.show()
+gc.collect()
+#============================================================================
+# SECTION 17.B. AIS-ONLY MEAN ANNUAL PRECIPITATION FOR PRESENTATION
+
+ais_annual_df = (
+    e2_validation_mean_annual_regional_df[
+        e2_validation_mean_annual_regional_df["region"] == "Antarctica"
+    ]
+    .copy()
+)
+
+
+product_order_ais = [
+    # REFERENCE_NAME,
+    ERA5_NAME,
+    GPCP_NAME,
+    GPCP_CORR_NAME,
+    PMW8_NAME,
+    PMW8_CORR_NAME,
+]
+
+ais_annual_df["product"] = pd.Categorical(
+    ais_annual_df["product"],
+    categories=product_order_ais,
+    ordered=True,
+)
+
+ais_annual_df = (
+    ais_annual_df[
+        ais_annual_df["product"].isin(product_order_ais)
+    ]
+    .sort_values("product")
+    .reset_index(drop=True)
+)
+
+ais_annual_df = ais_annual_df.sort_values("product")
+
+colors = [
+    # "black",
+    "blue",
+    "orange",
+    "orange",
+    "green",
+    "green",
+]
+
+alphas = [
+    # 1.0,
+    1.0,
+    0.50,
+    1.0,
+    0.50,
+    1.0,
+]
+
+fig, ax = plt.subplots(figsize=(9, 5.5), dpi=150)
+
+bars = ax.bar(
+    np.arange(len(ais_annual_df)),
+    ais_annual_df["precipitation"],
+    color=colors,
+)
+
+for bar, alpha in zip(bars, alphas):
+    bar.set_alpha(alpha)
+
+ax.set_xticks(
+    np.arange(len(ais_annual_df))
+)
+
+ax.set_xticklabels(
+    [
+        # r"$P_{MB}$",
+        "ERA5",
+        "GPCP\nV3.3",
+        "GPCP V3.3\ncorrected",
+        "PMW\nV08",
+        "PMW V08\ncorrected",
+    ],
+    fontsize=11,
+)
+
+ax.set_ylabel(
+    "Precipitation [mm yr$^{-1}$]",
+    fontsize=14,
+    fontweight="bold",
+)
+
+ax.set_title(
+    "AIS Mean Annual Precipitation:\nIndependent Validation (2018–2020)",
+    fontsize=16,
+    fontweight="bold",
+)
+
+ax.grid(
+    axis="y",
+    alpha=0.25,
+)
+
+for bar, value in zip(
+    bars,
+    ais_annual_df["precipitation"]
+):
+
+    ax.text(
+        bar.get_x() + bar.get_width()/2,
+        bar.get_height() + 2,
+        f"{value:.0f}",
+        ha="center",
+        va="bottom",
+        fontsize=11,
+        fontweight="bold",
+    )
+
+plt.tight_layout()
+
+svnme = os.path.join(
+    path_to_plots,
+    f"e2_AIS_validation_annual_mean_{cde_run_dte}.png",
+)
+
+plt.savefig(
+    svnme,
+    dpi=200,
+    bbox_inches="tight",
+)
+
+# plt.show()
+gc.collect()
+
+#=============================================================================

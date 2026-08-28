@@ -6056,13 +6056,14 @@ def plot_regional_mean_annual_bars(
         legend_ncol = 1 if n_products <= 5 else 2
 
     ax.legend(
-        frameon=False,
-        fontsize=13 if n_products >= 5 else 15,
-        ncol=legend_ncol,
-        loc=legend_loc,
+    loc="lower center",
+    bbox_to_anchor=(0.5, 1.02),
+    ncol=3,
+    frameon=False,
+    fontsize=12,
     )
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
 
     return fig, ax
 
@@ -7292,3 +7293,931 @@ def compare_mean_precip_basin_2x3_common_cbar(
     )
 
     return fig, axes, cb
+
+
+def plot_annual_comparison_multi_row_grid_spec(
+    arr_lst_mean,
+    mean_vals=None,
+    vmin=0,
+    vmax=400,
+    smooth=False,
+    cbr_lbl=r"Precipitation [mm yr$^{-1}$]",
+    extent_plt=(-180, 180, -90, -60),
+    hem="SH",
+    ncols=3,
+    figsize_per_row=(24, 8),
+    levels=None,
+    cbar_ticks=None,
+    panel_letters=True,
+    show_mean=True,
+):
+    """
+    Plot pixel-wise annual precipitation fields on a multi-panel polar map.
+
+    Intended for gridded products such as:
+        ERA5
+        GPCP V3.3
+        GPCP V3.3 corrected
+        GPM PMW V08
+        GPM PMW V08 corrected
+
+    PMB is intentionally omitted because PMB is not a pixel-scale
+    precipitation estimate.
+
+    Parameters
+    ----------
+    arr_lst_mean : list of tuples
+        [(product_name, annual_mean_2d), ...]
+
+        annual_mean_2d must be an xarray.DataArray with spatial dimensions
+        ('lat', 'lon') or ('y', 'x').
+
+    mean_vals : dict, optional
+        Dictionary of panel-wide mean values keyed by product name.
+        Example:
+            {
+                "ERA5": 180.2,
+                "GPCP V3.3": 165.3,
+                ...
+            }
+
+    vmin, vmax : float
+        Color scale limits.
+
+    smooth : bool
+        If True, apply the existing apply_filter() function.
+
+    cbr_lbl : str
+        Colorbar label.
+
+    extent_plt : tuple
+        Cartopy extent:
+            (lon_min, lon_max, lat_min, lat_max)
+
+    hem : str
+        'SH' or 'NH'.
+
+    ncols : int
+        Number of plot columns.
+
+    figsize_per_row : tuple
+        Width and height contribution per row.
+
+    levels : array-like, optional
+        Explicit color boundaries.
+
+    cbar_ticks : array-like, optional
+        Explicit colorbar tick locations.
+
+    panel_letters : bool
+        Add (a), (b), ... labels.
+
+    show_mean : bool
+        Show domain-average value if mean_vals is supplied.
+
+    Returns
+    -------
+    fig, axes, cb
+    """
+
+    # ---------------------------------------------------------------------
+    # Projection
+    # ---------------------------------------------------------------------
+    if hem == "SH":
+        proj = ccrs.SouthPolarStereo()
+    else:
+        proj = ccrs.NorthPolarStereo()
+
+
+    # ---------------------------------------------------------------------
+    # Colormap
+    #
+    # Preserve the same visual character as the previous PMB manuscript
+    # plotting code so figures remain stylistically consistent.
+    # ---------------------------------------------------------------------
+    mpl_cm = cm.get_cmap(
+        "nipy_spectral",
+        21
+    )
+
+    ncolors = mpl_cm(
+        np.linspace(0, 1, 21)
+    )[:20]
+
+    ncolors[0] = [
+        128 / 256,
+        100 / 256,
+        128 / 256,
+        1
+    ]
+
+    ncolors[2] = ncolors[1].copy()
+
+    ncolors[1] = [
+        0.7,
+        0.1,
+        0.7,
+        1
+    ]
+
+    newcmap = ListedColormap(
+        ncolors
+    )
+
+
+    # ---------------------------------------------------------------------
+    # Color levels
+    # ---------------------------------------------------------------------
+    if levels is None:
+
+        levels = np.linspace(
+            vmin,
+            vmax,
+            len(ncolors) + 1
+        )
+
+    norm = BoundaryNorm(
+        levels,
+        newcmap.N
+    )
+
+
+    # ---------------------------------------------------------------------
+    # Figure geometry
+    # ---------------------------------------------------------------------
+    n_products = len(
+        arr_lst_mean
+    )
+
+    nrows = int(
+        np.ceil(
+            n_products / ncols
+        )
+    )
+
+    fig_width = figsize_per_row[0]
+
+    fig_height = (
+        figsize_per_row[1]
+        * nrows
+    )
+
+    fig = plt.figure(
+        figsize=(
+            fig_width,
+            fig_height
+        )
+    )
+
+    gs = gridspec.GridSpec(
+        nrows,
+        ncols,
+        wspace=0.025,
+        hspace=0.12
+    )
+
+
+    axes = []
+
+    letters = list(
+        "abcdefghijklmnopqrstuvwxyz"
+    )
+
+
+    # ---------------------------------------------------------------------
+    # Plot each product
+    # ---------------------------------------------------------------------
+    for i, (
+        product_name,
+        annual_mean
+    ) in enumerate(
+        arr_lst_mean
+    ):
+
+        ax = fig.add_subplot(
+            gs[i],
+            projection=proj
+        )
+
+        ax.set_extent(
+            extent_plt,
+            crs=ccrs.PlateCarree()
+        )
+
+        ax.coastlines(
+            linewidth=0.35,
+            resolution="110m",
+            zorder=3
+        )
+
+
+        # -------------------------------------------------------------
+        # Standardize spatial dimension names
+        # -------------------------------------------------------------
+        field = annual_mean.copy()
+
+        rename_dict = {}
+
+        if "x" in field.dims:
+            rename_dict["x"] = "lon"
+
+        if "y" in field.dims:
+            rename_dict["y"] = "lat"
+
+        if rename_dict:
+            field = field.rename(
+                rename_dict
+            )
+
+
+        # -------------------------------------------------------------
+        # Optional smoothing
+        #
+        # For the correction experiment I recommend smooth=False first.
+        # We want to see the actual spatial effects of the correction.
+        # -------------------------------------------------------------
+        if smooth:
+
+            field_plot = apply_filter(
+                field,
+                method="convolution",
+                sigma=0.1,
+                kernel_size=3
+            )
+
+        else:
+
+            field_plot = field
+
+
+        # -------------------------------------------------------------
+        # Pixel-wise precipitation field
+        # -------------------------------------------------------------
+        im = ax.pcolormesh(
+            field_plot["lon"],
+            field_plot["lat"],
+            field_plot,
+            cmap=newcmap,
+            norm=norm,
+            transform=ccrs.PlateCarree(),
+            shading="auto",
+            zorder=1
+        )
+
+
+        # -------------------------------------------------------------
+        # Ocean background
+        # -------------------------------------------------------------
+        ax.add_feature(
+            cfeature.OCEAN,
+            zorder=2,
+            edgecolor=None,
+            linewidth=0,
+            facecolor="silver",
+            alpha=0.5
+        )
+
+
+        # -------------------------------------------------------------
+        # Product title
+        # -------------------------------------------------------------
+        ax.set_title(
+            product_name,
+            fontsize=20,
+            fontweight="bold",
+            pad=8
+        )
+
+
+        # -------------------------------------------------------------
+        # Mean precipitation annotation
+        # -------------------------------------------------------------
+        if (
+            show_mean
+            and mean_vals is not None
+            and product_name in mean_vals
+        ):
+
+            ax.text(
+                0.97,
+                0.97,
+                (
+                    f"Mean: "
+                    f"{mean_vals[product_name]:.0f} "
+                    f"mm yr$^{{-1}}$"
+                ),
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=16,
+                color="k",
+                bbox=dict(
+                    facecolor="white",
+                    edgecolor="none",
+                    alpha=0.65,
+                    pad=2.5
+                )
+            )
+
+
+        # -------------------------------------------------------------
+        # Panel letters
+        # -------------------------------------------------------------
+        if (
+            panel_letters
+            and i < len(letters)
+        ):
+
+            ax.text(
+                0.02,
+                0.98,
+                f"({letters[i]})",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=19,
+                fontweight="bold"
+            )
+
+
+        # -------------------------------------------------------------
+        # Gridlines
+        # -------------------------------------------------------------
+        gl = ax.gridlines(
+            draw_labels=True,
+            x_inline=False,
+            y_inline=False,
+            linestyle="--",
+            color="k",
+            linewidth=0.6,
+            alpha=0.6
+        )
+
+        gl.xlocator = MaxNLocator(
+            nbins=5
+        )
+
+        gl.ylocator = MaxNLocator(
+            nbins=5
+        )
+
+        gl.xlabel_style = {
+            "size": 14,
+            "color": "k"
+        }
+
+        gl.ylabel_style = {
+            "size": 14,
+            "color": "k"
+        }
+
+
+        row = i // ncols
+        col = i % ncols
+
+        gl.top_labels = False
+
+        gl.bottom_labels = (
+            row == nrows - 1
+        )
+
+        gl.left_labels = (
+            col == 0
+        )
+
+        gl.right_labels = (
+            col == ncols - 1
+        )
+
+
+        axes.append(
+            ax
+        )
+
+
+    # ---------------------------------------------------------------------
+    # Hide unused GridSpec cells
+    # ---------------------------------------------------------------------
+    for j in range(
+        n_products,
+        nrows * ncols
+    ):
+
+        ax_empty = fig.add_subplot(
+            gs[j],
+            projection=proj
+        )
+
+        ax_empty.set_visible(
+            False
+        )
+
+
+    # ---------------------------------------------------------------------
+    # Common horizontal colorbar
+    # ---------------------------------------------------------------------
+    sm = ScalarMappable(
+        norm=norm,
+        cmap=newcmap
+    )
+
+    sm.set_array([])
+
+
+    cb = fig.colorbar(
+        sm,
+        ax=axes,
+        orientation="horizontal",
+        fraction=0.035,
+        pad=0.07,
+        extend="max"
+    )
+
+
+    if cbar_ticks is None:
+
+        cbar_ticks = np.arange(
+            vmin,
+            vmax + 1,
+            50
+        )
+
+
+    cb.set_ticks(
+        cbar_ticks
+    )
+
+    cb.ax.tick_params(
+        labelsize=16
+    )
+
+    cb.set_label(
+        cbr_lbl,
+        fontsize=18,
+        fontweight="bold"
+    )
+
+
+    return fig, axes, cb
+
+def plot_antarctic_difference_maps_2x2(
+    correction_data,
+    residual_data,
+    extent_plt=(-180, 180, -90, -60),
+    gpcp_vmin=-5,
+    gpcp_vmax=50,
+    gpcp_step=5,
+
+    pmw_vmin=-5,
+    pmw_vmax=150,
+    pmw_step=25,
+
+    residual_vmin=-500,
+    residual_vmax=500,
+    residual_step=100,
+    cmap_name="RdBu_r",
+    figsize=(15, 11),
+    coast_lw=0.7,
+):
+    """
+    Plot four Antarctic difference maps:
+
+        (a) GPCP corrected - published GPCP
+        (b) PMW corrected - PMW
+        (c) ERA5 - corrected GPCP
+        (d) ERA5 - corrected PMW
+
+    Separate color scales are used for:
+        GPCP correction effect
+        PMW correction effect
+        ERA5 residuals
+
+    Clean manually positioned polar latitude/longitude labels are added.
+    """
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+
+    from matplotlib import cm
+    from matplotlib.colors import BoundaryNorm
+    from matplotlib.cm import ScalarMappable
+
+
+    # ------------------------------------------------------------------
+    # Helper: standardize spatial dimension names
+    # ------------------------------------------------------------------
+    def _standardize_dims(da):
+
+        field = da.copy()
+
+        rename_dict = {}
+
+        if "x" in field.dims:
+            rename_dict["x"] = "lon"
+
+        if "y" in field.dims:
+            rename_dict["y"] = "lat"
+
+        if rename_dict:
+            field = field.rename(rename_dict)
+
+        return field
+
+
+    # ------------------------------------------------------------------
+    # Helper: create a discrete symmetric diverging scale
+    # ------------------------------------------------------------------
+    def _make_diff_scale(vmin, vmax, step):
+
+        bounds = np.arange(
+            vmin,
+            vmax + step,
+            step,
+        )
+
+        cmap = cm.get_cmap(
+            cmap_name,
+            len(bounds) - 1,
+        )
+
+        norm = BoundaryNorm(
+            bounds,
+            cmap.N,
+        )
+
+        return cmap, norm, bounds
+
+
+    # ------------------------------------------------------------------
+    # Helper: add clean polar labels
+    #
+    # This follows the same philosophy as the basin-map figure:
+    # manually place labels instead of using Cartopy's automatic labels.
+    # ------------------------------------------------------------------
+    def _add_polar_latlon_labels(ax):
+
+        # --------------------------------------------------------------
+        # Longitude labels
+        # --------------------------------------------------------------
+        lon_labels = [
+            (0,    -59.2, "0°"),
+            (30,   -59.8, "30°E"),
+            (60,   -60.8, "60°E"),
+            (90,   -61.0, "90°E"),
+            (120,  -60.8, "120°E"),
+            (150,  -59.8, "150°E"),
+            (180,  -59.2, "180°"),
+            (-150, -59.8, "150°W"),
+            (-120, -60.8, "120°W"),
+            (-90,  -61.0, "90°W"),
+            (-60,  -60.8, "60°W"),
+            (-30,  -59.8, "30°W"),
+        ]
+
+        for lon, lat, label in lon_labels:
+
+            ax.text(
+                lon,
+                lat,
+                label,
+                transform=ccrs.PlateCarree(),
+                fontsize=11,
+                fontweight="bold",
+                ha="center",
+                va="center",
+                zorder=10,
+            )
+
+
+        # --------------------------------------------------------------
+        # Latitude labels
+        #
+        # Place these close to 180° longitude, similar to your basin map.
+        # --------------------------------------------------------------
+        lat_labels = [
+            (-70, "70°S"),
+            (-75, "75°S"),
+            (-80, "80°S"),
+        ]
+
+        for lat, label in lat_labels:
+
+            ax.text(
+                180,
+                lat,
+                label,
+                transform=ccrs.PlateCarree(),
+                fontsize=10,
+                fontweight="bold",
+                ha="center",
+                va="center",
+                zorder=10,
+            )
+
+
+    # ------------------------------------------------------------------
+    # Prepare fields
+    # ------------------------------------------------------------------
+    correction_data = [
+        (name, _standardize_dims(field))
+        for name, field in correction_data
+    ]
+
+    residual_data = [
+        (name, _standardize_dims(field))
+        for name, field in residual_data
+    ]
+
+
+    gpcp_cmap, gpcp_norm, gpcp_bounds = _make_diff_scale(
+        gpcp_vmin,
+        gpcp_vmax,
+        gpcp_step,
+    )
+
+    pmw_cmap, pmw_norm, pmw_bounds = _make_diff_scale(
+        pmw_vmin,
+        pmw_vmax,
+        pmw_step,
+    )
+
+    residual_cmap, residual_norm, residual_bounds = _make_diff_scale(
+        residual_vmin,
+        residual_vmax,
+        residual_step,
+    )
+
+
+    # ------------------------------------------------------------------
+    # Figure
+    # ------------------------------------------------------------------
+    proj = ccrs.SouthPolarStereo()
+
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=figsize,
+        subplot_kw={
+            "projection": proj
+        },
+    )
+
+
+    plot_info = [
+
+        (
+            axes[0, 0],
+            "(a)",
+            correction_data[0],
+            gpcp_cmap,
+            gpcp_norm,
+        ),
+
+        (
+            axes[0, 1],
+            "(b)",
+            correction_data[1],
+            pmw_cmap,
+            pmw_norm,
+        ),
+
+        (
+            axes[1, 0],
+            "(c)",
+            residual_data[0],
+            residual_cmap,
+            residual_norm,
+        ),
+
+        (
+            axes[1, 1],
+            "(d)",
+            residual_data[1],
+            residual_cmap,
+            residual_norm,
+        ),
+    ]
+
+
+    # ------------------------------------------------------------------
+    # Panels
+    # ------------------------------------------------------------------
+    for (
+        ax,
+        letter,
+        (title, field),
+        cmap,
+        norm,
+    ) in plot_info:
+
+        ax.set_extent(
+            extent_plt,
+            crs=ccrs.PlateCarree(),
+        )
+
+
+        ax.pcolormesh(
+            field["lon"],
+            field["lat"],
+            field,
+            cmap=cmap,
+            norm=norm,
+            shading="auto",
+            transform=ccrs.PlateCarree(),
+            zorder=1,
+        )
+
+
+        ax.add_feature(
+            cfeature.OCEAN,
+            facecolor="0.85",
+            edgecolor="none",
+            zorder=2,
+        )
+
+
+        ax.coastlines(
+            resolution="110m",
+            linewidth=coast_lw,
+            color="k",
+            zorder=3,
+        )
+
+
+        gl = ax.gridlines(
+            crs=ccrs.PlateCarree(),
+            draw_labels=False,
+            linewidth=0.45,
+            linestyle="--",
+            color="0.35",
+            alpha=0.55,
+        )
+
+        gl.xlocator = plt.FixedLocator(
+            [-180, -150, -120, -90, -60, -30,
+             0, 30, 60, 90, 120, 150, 180]
+        )
+
+        gl.ylocator = plt.FixedLocator(
+            [-80, -75, -70]
+        )
+
+
+        _add_polar_latlon_labels(
+            ax
+        )
+
+
+        ax.set_title(
+            f"{letter} {title}",
+            fontsize=16,
+            fontweight="bold",
+            pad=10,
+        )
+
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+    fig.subplots_adjust(
+        left=0.04,
+        right=0.96,
+        top=0.94,
+        bottom=0.11,
+        wspace=0.12,
+        hspace=0.38,
+    )
+
+
+    # ------------------------------------------------------------------
+    # GPCP correction colorbar
+    # ------------------------------------------------------------------
+    cax1 = fig.add_axes(
+        [0.08, 0.505, 0.36, 0.018]
+    )
+
+    sm1 = ScalarMappable(
+        norm=gpcp_norm,
+        cmap=gpcp_cmap,
+    )
+
+    sm1.set_array([])
+
+    cb1 = fig.colorbar(
+        sm1,
+        cax=cax1,
+        orientation="horizontal",
+        boundaries=gpcp_bounds,
+        extend="both",
+    )
+
+    cb1.set_ticks(
+        np.arange(
+            gpcp_vmin,
+            gpcp_vmax + 1e-9,
+            gpcp_step,
+        )
+    )
+
+    cb1.ax.set_title(
+        "GPCP corrected − GPCP [mm yr$^{-1}$]",
+        fontsize=13,
+        fontweight="bold",
+        pad=8,
+    )
+
+    cb1.ax.tick_params(
+        labelsize=9,
+        pad=1,
+    )
+
+
+    # ------------------------------------------------------------------
+    # PMW correction colorbar
+    # ------------------------------------------------------------------
+    cax2 = fig.add_axes(
+        [0.56, 0.505, 0.36, 0.018]
+    )
+
+    sm2 = ScalarMappable(
+        norm=pmw_norm,
+        cmap=pmw_cmap,
+    )
+
+    sm2.set_array([])
+
+    cb2 = fig.colorbar(
+        sm2,
+        cax=cax2,
+        orientation="horizontal",
+        boundaries=pmw_bounds,
+        extend="both",
+    )
+
+    cb2.set_ticks(
+        np.arange(
+            pmw_vmin,
+            pmw_vmax + 1e-9,
+            pmw_step,
+        )
+    )
+
+    cb2.ax.set_title(
+            "GPM PMW V08 corrected − GPM PMW V08 [mm yr$^{-1}$]",
+            fontsize=13,
+            fontweight="bold",
+            pad=8,
+    )
+
+    cb2.ax.tick_params(
+        labelsize=9,
+        pad=1,
+    )
+
+
+    # ------------------------------------------------------------------
+    # Shared ERA5 residual colorbar
+    # ------------------------------------------------------------------
+    cax3 = fig.add_axes(
+        [0.20, 0.045, 0.60, 0.020]
+    )
+
+    sm3 = ScalarMappable(
+        norm=residual_norm,
+        cmap=residual_cmap,
+    )
+
+    sm3.set_array([])
+
+    cb3 = fig.colorbar(
+        sm3,
+        cax=cax3,
+        orientation="horizontal",
+        boundaries=residual_bounds,
+        extend="both",
+    )
+
+    cb3.set_ticks(
+        np.arange(
+            residual_vmin,
+            residual_vmax + 1e-9,
+            residual_step,
+        )
+    )
+
+    cb3.ax.set_title(
+            "Corrected product − ERA5 [mm yr$^{-1}$]",
+            fontsize=13,
+            fontweight="bold",
+            pad=8,
+    )
+
+    cb3.ax.tick_params(
+        labelsize=9,
+        pad=1,
+    )
+
+
+    return fig, axes
