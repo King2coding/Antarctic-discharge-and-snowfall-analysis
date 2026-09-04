@@ -6404,10 +6404,453 @@ def derive_seasonal_correction_factors(
     )
 
     return out
+# =============================================================================
 
+def derive_single_ais_correction_factors(
+    monthly_region_df,
+    period_years,
+    reference_product=r"$P_{\mathrm{MB}}$",
+    target_products=("GPCP V3.3", "GPM PMW V08"),
+    regions=("Antarctica",),
+    time_col="time",
+    value_col="precipitation",
+):
+    """Derive one year-round multiplicative CF per AIS product.
+
+    The calculation is performed on exact reference/product month pairs:
+
+        CF_product = sum(PMB over common months)
+                     / sum(product over the same common months)
+
+    With identical month support this is also the ratio of monthly means.
+    Pairing first prevents missing months in one product from silently changing
+    the numerator and denominator sampling.
+
+    Parameters
+    ----------
+    monthly_region_df : pandas.DataFrame
+        Tidy regional monthly series with region, product, time, and value
+        columns.
+    period_years : iterable of int
+        Years used to derive the factor. For independent validation this must
+        be the calibration period only (2013-2017).
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per region/product with the paired means, factor, common-month
+        count, and actual paired time bounds.
+    """
+    years = sorted({int(year) for year in period_years})
+    if not years:
+        raise ValueError("period_years must contain at least one year")
+
+    required = {"region", "product", time_col, value_col}
+    missing = required.difference(monthly_region_df.columns)
+    if missing:
+        raise ValueError(f"monthly_region_df is missing columns: {sorted(missing)}")
+
+    data = monthly_region_df.copy()
+    data[time_col] = pd.to_datetime(data[time_col])
+    data = data[data[time_col].dt.year.isin(years)].copy()
+
+    rows = []
+    for region in regions:
+        region_data = data[data["region"] == region]
+
+        ref = (
+            region_data[region_data["product"] == reference_product]
+            [[time_col, value_col]]
+            .rename(columns={value_col: "reference_precipitation"})
+        )
+
+        for product in target_products:
+            target = (
+                region_data[region_data["product"] == product]
+                [[time_col, value_col]]
+                .rename(columns={value_col: "product_precipitation"})
+            )
+
+            paired = (
+                ref.merge(target, on=time_col, how="inner")
+                .dropna(subset=["reference_precipitation", "product_precipitation"])
+                .sort_values(time_col)
+            )
+
+            reference_mean = paired["reference_precipitation"].mean()
+            product_mean = paired["product_precipitation"].mean()
+
+            if (
+                len(paired) > 0
+                and np.isfinite(reference_mean)
+                and np.isfinite(product_mean)
+                and product_mean > 0
+            ):
+                correction_factor = (
+                    paired["reference_precipitation"].sum()
+                    / paired["product_precipitation"].sum()
+                )
+            else:
+                correction_factor = np.nan
+
+            rows.append({
+                "region": region,
+                "product": product,
+                "period_start_year": years[0],
+                "period_end_year": years[-1],
+                "reference_mean": reference_mean,
+                "product_mean": product_mean,
+                "correction_factor": correction_factor,
+                "n_common_months": int(len(paired)),
+                "first_common_month": (
+                    paired[time_col].min() if len(paired) else pd.NaT
+                ),
+                "last_common_month": (
+                    paired[time_col].max() if len(paired) else pd.NaT
+                ),
+            })
+
+    return pd.DataFrame(rows)
 
 # =============================================================================
 
+def apply_e2_single_ais_correction(
+    da_monthly,
+    correction_factor_df,
+    product_name,
+    ais_mask,
+    lat_name="lat",
+    lon_name="lon",
+    corrected_name=None,
+):
+    """Apply one constant, year-round AIS correction factor to monthly fields."""
+    selected = correction_factor_df[
+        (correction_factor_df["region"] == "Antarctica")
+        & (correction_factor_df["product"] == product_name)
+    ]
+
+    if len(selected) != 1:
+        raise ValueError(
+            "Expected exactly one AIS single-CF row for "
+            f"{product_name!r}; found {len(selected)}"
+        )
+
+    factor = float(selected["correction_factor"].iloc[0])
+    if not np.isfinite(factor) or factor <= 0:
+        raise ValueError(f"Invalid single correction factor for {product_name}: {factor}")
+
+    if not isinstance(ais_mask, xr.DataArray):
+        ais_mask = xr.DataArray(
+            ais_mask,
+            dims=(lat_name, lon_name),
+            coords={
+                lat_name: da_monthly[lat_name],
+                lon_name: da_monthly[lon_name],
+            },
+        )
+
+    corrected = (da_monthly * factor).where(ais_mask)
+    corrected.name = corrected_name or f"{product_name}_single_CF_corrected_E2"
+    corrected.attrs.update(da_monthly.attrs)
+    corrected.attrs.update({
+        "correction_experiment": "E2 single year-round AIS CF",
+        "correction_reference": "PMB",
+        "correction_method": "ratio of calibration-period paired monthly sums",
+        "correction_factor": factor,
+    })
+    return corrected
+# =============================================================================
+
+def plot_e2_seasonal_cf_period_comparison(
+    calibration_cf_df,
+    final_cf_df,
+    calibration_single_cf_df,
+    final_single_cf_df,
+    product_order,
+    product_colors,
+    calibration_label="2013-2017 calibration",
+    final_label="2013-2020 final",
+    region="Antarctica",
+    figsize=(10, 7),
+):
+    """
+    Compare seasonal and single year-round AIS correction factors.
+
+    The figure contains eight correction scenarios:
+
+        1-2. Seasonal CFs derived from 2013-2017
+        3-4. Seasonal CFs derived from 2013-2020
+        5-6. Single CFs derived from 2013-2017
+        7-8. Single CFs derived from 2013-2020
+
+    Visual encoding
+    ---------------
+    Color:
+        Orange = GPCP
+        Green  = GPM PMW V08
+
+    Period:
+        Dashed line with circles = 2013-2017 calibration
+        Solid line with squares  = 2013-2020 final
+
+    Method:
+        Varying values across seasons = seasonal CF
+        Horizontal values             = single year-round CF
+    """
+
+    season_order = ["DJF", "MAM", "JJA", "SON"]
+    x_values = np.arange(len(season_order))
+
+    fig, ax = plt.subplots(
+        figsize=figsize,
+        dpi=150,
+    )
+
+    # -------------------------------------------------------------------------
+    # 1. Plot the four season-specific CF curves
+    # -------------------------------------------------------------------------
+
+    seasonal_periods = [
+        (
+            calibration_cf_df,
+            calibration_label,
+            "--",
+            "o",
+        ),
+        (
+            final_cf_df,
+            final_label,
+            "-",
+            "s",
+        ),
+    ]
+
+    for frame, period_label, linestyle, marker in seasonal_periods:
+
+        for product in product_order:
+
+            selected = (
+                frame[
+                    (frame["region"] == region)
+                    & (frame["product"] == product)
+                ]
+                .set_index("season")
+                .reindex(season_order)
+            )
+
+            if selected["correction_factor"].isna().any():
+
+                raise ValueError(
+                    "Missing seasonal correction factor for "
+                    f"{product!r}, {period_label!r}"
+                )
+
+            ax.plot(
+                x_values,
+                selected["correction_factor"].values,
+                color=product_colors[product],
+                linestyle=linestyle,
+                marker=marker,
+                linewidth=2.5,
+                markersize=6,
+                label=(
+                    f"{product} seasonal - "
+                    f"{period_label}"
+                ),
+            )
+
+    # -------------------------------------------------------------------------
+    # 2. Plot the four single year-round CF lines
+    # -------------------------------------------------------------------------
+
+    single_periods = [
+        (
+            calibration_single_cf_df,
+            calibration_label,
+            "--",
+            "o",
+        ),
+        (
+            final_single_cf_df,
+            final_label,
+            "-",
+            "s",
+        ),
+    ]
+
+    for frame, period_label, linestyle, marker in single_periods:
+
+        for product in product_order:
+
+            selected = frame[
+                (frame["region"] == region)
+                & (frame["product"] == product)
+            ]
+
+            if len(selected) != 1:
+
+                raise ValueError(
+                    "Expected exactly one single correction factor for "
+                    f"{product!r}, {period_label!r}; "
+                    f"found {len(selected)}"
+                )
+
+            factor = float(
+                selected["correction_factor"].iloc[0]
+            )
+
+            if not np.isfinite(factor):
+
+                raise ValueError(
+                    "Invalid single correction factor for "
+                    f"{product!r}, {period_label!r}: {factor}"
+                )
+
+            # Repeat the same value across all four seasons to make the
+            # year-round factor appear as a horizontal comparison line.
+            ax.plot(
+                x_values,
+                np.repeat(factor, len(season_order)),
+                color=product_colors[product],
+                linestyle=linestyle,
+                marker=marker,
+                linewidth=1.8,
+                markersize=5,
+                alpha=0.65,
+                label=(
+                    f"{product} single "
+                    f"(CF={factor:.3f}) - {period_label}"
+                ),
+            )
+
+    # -------------------------------------------------------------------------
+    # 3. Reference and formatting
+    # -------------------------------------------------------------------------
+
+    ax.axhline(
+        1.0,
+        color="0.25",
+        linestyle=":",
+        linewidth=1.3,
+        label="No correction (CF=1)",
+    )
+
+    ax.set_xticks(x_values)
+
+    ax.set_xticklabels(
+        season_order,
+        fontsize=12,
+        fontweight="bold",
+    )
+
+    ax.set_xlabel(
+        "Season",
+        fontsize=12,
+        fontweight="bold",
+    )
+
+    ax.set_ylabel(
+        "PMB correction factor",
+        fontsize=12,
+        fontweight="bold",
+    )
+
+    ax.set_title(
+        "AIS Correction-Factor Scenarios",
+        fontsize=16,
+        fontweight="bold",
+    )
+
+    ax.grid(
+        True,
+        alpha=0.25,
+    )
+
+    # Put the nine-entry legend below the axes so it does not obscure the data.
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.16),
+        ncol=2,
+        frameon=False,
+        fontsize=8.5,
+    )
+
+    fig.subplots_adjust(
+        bottom=0.34,
+    )
+
+    return fig, ax
+# =============================================================================
+
+def plot_e2_single_vs_seasonal_monthly_climatology(
+    monthly_clim_df,
+    product_panels,
+    era5_product="ERA5",
+    region="Antarctica",
+    value_col="precipitation",
+    figsize=(12, 5),
+):
+    """Compare original, single-CF, and seasonal-CF monthly climatologies.
+
+    ``product_panels`` is a mapping whose keys are panel titles and whose values
+    contain the product names under ``original``, ``single``, and ``seasonal``.
+    ERA5 is shown in both panels as a comparison dataset, not as the PMB target.
+    """
+    n_panels = len(product_panels)
+    fig, axes = plt.subplots(1, n_panels, figsize=figsize, dpi=150, sharey=True)
+    axes = np.atleast_1d(axes)
+
+    line_specs = {
+        "ERA5": {"color": "blue", "linestyle": "-", "marker": "s"},
+        "original": {"color": "0.45", "linestyle": ":", "marker": "D"},
+        "single": {"color": "tab:purple", "linestyle": "--", "marker": "^"},
+        "seasonal": {"color": "tab:red", "linestyle": "-", "marker": "o"},
+    }
+
+    region_df = monthly_clim_df[monthly_clim_df["region"] == region]
+
+    for ax, (panel_title, names) in zip(axes, product_panels.items()):
+        plot_names = {
+            "ERA5": era5_product,
+            "original": names["original"],
+            "single": names["single"],
+            "seasonal": names["seasonal"],
+        }
+        for role, product_name in plot_names.items():
+            selected = (
+                region_df[region_df["product"] == product_name]
+                .sort_values("month")
+            )
+            if len(selected) != 12:
+                raise ValueError(
+                    f"Expected 12 monthly climatology rows for {product_name!r}; "
+                    f"found {len(selected)}"
+                )
+            spec = line_specs[role]
+            ax.plot(
+                selected["month"],
+                selected[value_col],
+                label=role if role == "ERA5" else role.capitalize(),
+                linewidth=2.2,
+                markersize=5,
+                **spec,
+            )
+
+        ax.set_title(panel_title, fontsize=13, fontweight="bold")
+        ax.set_xlabel("Month", fontsize=11, fontweight="bold")
+        ax.set_xticks(np.arange(1, 13))
+        ax.grid(True, alpha=0.25)
+        ax.legend(frameon=False, fontsize=9)
+
+    axes[0].set_ylabel("Precipitation [mm month$^{-1}$]", fontsize=11, fontweight="bold")
+    fig.suptitle(
+        "AIS Monthly Climatology: Independent Validation (2018-2020)",
+        fontsize=15,
+        fontweight="bold",
+    )
+    fig.tight_layout()
+    return fig, axes
+# =============================================================================
 
 def print_correction_factor_summary(correction_factor_df):
     """
@@ -6568,9 +7011,7 @@ def apply_e2_seasonal_ais_correction(
 
     return corrected
 
-
 # =============================================================================
-
 
 def subset_monthly_years(
     da,
