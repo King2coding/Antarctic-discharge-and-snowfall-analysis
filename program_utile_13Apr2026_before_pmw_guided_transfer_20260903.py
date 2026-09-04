@@ -5911,8 +5911,7 @@ def plot_regional_mean_annual_bars(
     min_bar_width=0.10,
     max_bar_width=0.22,
     legend_ncol=None,
-    legend_loc="upper center",
-    legend_bbox_to_anchor=(0.5, -0.14),
+    legend_loc="upper right",
     ylim_pad_frac=0.14,
 ):
     """
@@ -5971,8 +5970,7 @@ def plot_regional_mean_annual_bars(
     # 4. Get y-axis range for annotation placement
     # -------------------------------------------------------------------------
     y_all = df_mean_regional.loc[
-        df_mean_regional["product"].isin(product_order)
-        & df_mean_regional["region"].isin(region_order),
+        df_mean_regional["product"].isin(product_order),
         "precipitation"
     ].astype(float).values
 
@@ -6040,15 +6038,7 @@ def plot_regional_mean_annual_bars(
     # 6. Axes formatting
     # -------------------------------------------------------------------------
     ax.set_xticks(x)
-    region_tick_labels = [
-        region_name2short.get(region, region)
-        for region in region_order
-    ]
-    ax.set_xticklabels(
-        region_tick_labels,
-        fontsize=14,
-        fontweight="bold",
-    )
+    ax.set_xticklabels(["AIS", "WAIS", "EAIS"], fontsize=14, fontweight="bold")
 
     ax.set_ylabel(ylabel, fontsize=14, fontweight="bold")
 
@@ -6066,14 +6056,14 @@ def plot_regional_mean_annual_bars(
         legend_ncol = 1 if n_products <= 5 else 2
 
     ax.legend(
-        loc=legend_loc,
-        bbox_to_anchor=legend_bbox_to_anchor,
-        ncol=legend_ncol,
-        frameon=False,
-        fontsize=12,
+    loc="lower center",
+    bbox_to_anchor=(0.5, 1.02),
+    ncol=3,
+    frameon=False,
+    fontsize=12,
     )
 
-    plt.tight_layout(rect=[0, 0.14, 1, 1])
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
 
     return fig, ax
 
@@ -6684,84 +6674,6 @@ def derive_monthly_climatological_correction_factors(
 
 # =============================================================================
 
-def derive_pmw_guided_gpcp_transfer_factors(
-    monthly_region_df,
-    period_years,
-    corrected_pmw_product,
-    gpcp_product,
-    regions=("Antarctica",),
-    months=tuple(range(1, 13)),
-    time_col="time",
-    value_col="precipitation",
-):
-    """Derive monthly factors that transfer corrected-PMW behavior to GPCP.
-
-    For each region and calendar month:
-
-        TF[m] = mean(corrected PMW[m]) / mean(de-adjusted GPCP[m])
-
-    The corrected PMW field must already have been produced using PMB-derived
-    seasonal factors for the same derivation period. Exact corrected-PMW/GPCP
-    timestamps are paired before the monthly means are calculated.
-
-    This function deliberately delegates the numerical calculation to
-    ``derive_monthly_climatological_correction_factors`` so that monthly-CF and
-    PMW-guided scenarios use identical pairing, missing-data, and diagnostic
-    rules. The returned ``correction_factor`` is retained for compatibility
-    with ``apply_monthly_climatological_correction``; ``transfer_factor`` is an
-    explicit semantic alias.
-
-    Parameters
-    ----------
-    monthly_region_df : pandas.DataFrame
-        Regional monthly series containing the corrected PMW guide and the
-        de-adjusted GPCP target.
-    period_years : iterable of int
-        2013-2017 for independent-validation parameters or 2013-2020 for final
-        operational parameters.
-    corrected_pmw_product : str
-        Product label for PMB-corrected PMW in ``monthly_region_df``.
-    gpcp_product : str
-        Product label for de-adjusted GPCP in ``monthly_region_df``.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Twelve rows per region with paired means, transfer factors, sample
-        counts, time support, and explicit guide/target labels.
-    """
-    if corrected_pmw_product == gpcp_product:
-        raise ValueError(
-            "corrected_pmw_product and gpcp_product must be different"
-        )
-
-    transfer_df = derive_monthly_climatological_correction_factors(
-        monthly_region_df=monthly_region_df,
-        period_years=period_years,
-        reference_product=corrected_pmw_product,
-        target_products=(gpcp_product,),
-        regions=regions,
-        months=months,
-        time_col=time_col,
-        value_col=value_col,
-    ).copy()
-
-    transfer_df["guide_product"] = corrected_pmw_product
-    transfer_df["target_product"] = gpcp_product
-    transfer_df["correction_method"] = (
-        "monthly corrected-PMW to de-adjusted-GPCP transfer"
-    )
-
-    # Retain the generic column names for compatibility while adding names that
-    # make the two-stage scientific interpretation explicit in saved tables.
-    transfer_df["corrected_pmw_mean"] = transfer_df["reference_mean"]
-    transfer_df["gpcp_mean"] = transfer_df["product_mean"]
-    transfer_df["transfer_factor"] = transfer_df["correction_factor"]
-
-    return transfer_df
-
-# =============================================================================
-
 def apply_monthly_climatological_correction(
     da_monthly,
     correction_factor_df,
@@ -6922,271 +6834,6 @@ def apply_monthly_climatological_correction(
             )
 
     return corrected
-
-# =============================================================================
-
-def apply_pmw_guided_gpcp_correction(
-    da_gpcp_monthly,
-    transfer_factor_df,
-    gpcp_product,
-    ais_mask,
-    region="Antarctica",
-    time_name="time",
-    lat_name="lat",
-    lon_name="lon",
-    corrected_name=None,
-):
-    """Apply frozen corrected-PMW-to-GPCP monthly transfer factors.
-
-    This is the application step of the two-stage scenario:
-
-        PMB -> seasonally corrected PMW -> monthly GPCP transfer factors
-
-    For independent validation, ``transfer_factor_df`` must be derived only
-    from 2013-2017 and is then applied unchanged to 2018-2020 GPCP fields. The
-    generic monthly correction engine performs the numerical multiplication
-    and its full 12-month validity checks; this wrapper adds scenario-specific
-    validation and provenance metadata.
-
-    Parameters
-    ----------
-    da_gpcp_monthly : xarray.DataArray
-        Monthly de-adjusted GPCP precipitation field to correct.
-    transfer_factor_df : pandas.DataFrame
-        Output from ``derive_pmw_guided_gpcp_transfer_factors``.
-    gpcp_product : str
-        GPCP label used when the transfer factors were derived.
-    ais_mask : xarray.DataArray or array-like
-        Boolean AIS mask on the same spatial grid as ``da_gpcp_monthly``.
-
-    Returns
-    -------
-    xarray.DataArray
-        PMW-guided, monthly corrected GPCP precipitation field.
-    """
-    required_columns = {
-        "product",
-        "guide_product",
-        "target_product",
-        "correction_factor",
-        "transfer_factor",
-    }
-    missing_columns = required_columns.difference(transfer_factor_df.columns)
-    if missing_columns:
-        raise ValueError(
-            "transfer_factor_df is missing PMW-guided columns: "
-            f"{sorted(missing_columns)}"
-        )
-
-    selected = transfer_factor_df[
-        (transfer_factor_df["region"] == region)
-        & (transfer_factor_df["product"] == gpcp_product)
-    ]
-    if selected.empty:
-        raise ValueError(
-            f"No PMW-guided transfer factors found for {gpcp_product!r} "
-            f"in region {region!r}"
-        )
-
-    if not (selected["target_product"] == gpcp_product).all():
-        raise ValueError(
-            "The selected transfer factors do not all target "
-            f"{gpcp_product!r}"
-        )
-
-    if not np.allclose(
-        selected["correction_factor"].astype(float),
-        selected["transfer_factor"].astype(float),
-        equal_nan=True,
-    ):
-        raise ValueError(
-            "correction_factor and transfer_factor columns are inconsistent"
-        )
-
-    guide_products = selected["guide_product"].dropna().unique()
-    if len(guide_products) != 1:
-        raise ValueError(
-            "Expected exactly one corrected-PMW guide product; found "
-            f"{guide_products.tolist()}"
-        )
-
-    corrected = apply_monthly_climatological_correction(
-        da_monthly=da_gpcp_monthly,
-        correction_factor_df=transfer_factor_df,
-        product_name=gpcp_product,
-        ais_mask=ais_mask,
-        region=region,
-        time_name=time_name,
-        lat_name=lat_name,
-        lon_name=lon_name,
-        corrected_name=(
-            corrected_name or f"{gpcp_product}_PMW_guided_CF_corrected"
-        ),
-    )
-
-    corrected.attrs.update({
-        "correction_experiment": "E2 PMW-guided GPCP monthly CF",
-        "correction_reference": str(guide_products[0]),
-        "correction_method": (
-            "12 calendar-month transfer factors from PMB-corrected PMW "
-            "to de-adjusted GPCP"
-        ),
-        "correction_target_product": gpcp_product,
-        "correction_chain": "PMB -> corrected PMW -> corrected GPCP",
-        "correction_region": region,
-    })
-
-    return corrected
-
-# =============================================================================
-
-def plot_pmw_guided_cf_comparison(
-    calibration_pmw_seasonal_cf_df,
-    operational_pmw_seasonal_cf_df,
-    calibration_gpcp_transfer_cf_df,
-    operational_gpcp_transfer_cf_df,
-    pmw_product,
-    gpcp_product,
-    region="Antarctica",
-    calibration_label="2013-2017 validation factors",
-    operational_label="2013-2020 operational factors",
-    pmw_color="tab:green",
-    gpcp_color="tab:orange",
-    figsize=(13, 5.8),
-    annotation_decimals=2,
-):
-    """Plot both stages of the PMB-corrected-PMW-guided GPCP scenario.
-
-    The left panel shows the four PMB-to-PMW seasonal factors. The right panel
-    shows the twelve corrected-PMW-to-GPCP monthly transfer factors. Because
-    these stages have different temporal structures and scientific meanings,
-    each panel uses its own quantitative y-axis. The final 2013-2020
-    operational values are annotated for science-team delivery.
-
-    Returns
-    -------
-    tuple
-        ``(fig, axes)`` from matplotlib.
-    """
-    season_order = ["DJF", "MAM", "JJA", "SON"]
-    month_order = np.arange(1, 13)
-
-    def _prepare(frame, product, index_col, order, factor_col, description):
-        required = {"region", "product", index_col, factor_col}
-        missing = required.difference(frame.columns)
-        if missing:
-            raise ValueError(
-                f"{description} is missing columns: {sorted(missing)}"
-            )
-
-        selected = frame[
-            (frame["region"] == region) & (frame["product"] == product)
-        ].copy()
-        if selected[index_col].duplicated().any():
-            raise ValueError(
-                f"Duplicate {index_col} values in {description} for "
-                f"{product!r}"
-            )
-
-        selected = selected.set_index(index_col).reindex(order)
-        values = selected[factor_col].astype(float)
-        invalid = values.isna().values | (values.values <= 0)
-        if invalid.any():
-            bad = np.asarray(order, dtype=object)[invalid].tolist()
-            raise ValueError(
-                f"Invalid or missing factors in {description}: {bad}"
-            )
-        return values.values
-
-    seasonal_calibration = _prepare(
-        calibration_pmw_seasonal_cf_df, pmw_product, "season",
-        season_order, "correction_factor", "calibration PMW seasonal factors",
-    )
-    seasonal_operational = _prepare(
-        operational_pmw_seasonal_cf_df, pmw_product, "season",
-        season_order, "correction_factor", "operational PMW seasonal factors",
-    )
-    transfer_calibration = _prepare(
-        calibration_gpcp_transfer_cf_df, gpcp_product, "month",
-        month_order, "transfer_factor", "calibration GPCP transfer factors",
-    )
-    transfer_operational = _prepare(
-        operational_gpcp_transfer_cf_df, gpcp_product, "month",
-        month_order, "transfer_factor", "operational GPCP transfer factors",
-    )
-
-    def _axis_limits(calibration, operational):
-        """Return panel-specific limits and an annotation offset."""
-        panel_values = np.concatenate(([1.0], calibration, operational))
-        panel_min = float(np.nanmin(panel_values))
-        panel_max = float(np.nanmax(panel_values))
-        value_range = max(panel_max - panel_min, 0.1)
-        lower = max(0.0, panel_min - 0.12 * value_range)
-        upper = panel_max + 0.22 * value_range
-        return lower, upper, 0.025 * (upper - lower)
-
-    fig, axes = plt.subplots(
-        1, 2, figsize=figsize, dpi=150, sharey=False,
-        gridspec_kw={"width_ratios": [1.0, 2.15]},
-    )
-
-    panel_specs = (
-        (
-            axes[0], np.arange(4), season_order, seasonal_calibration,
-            seasonal_operational, pmw_color,
-            f"PMB to {pmw_product}\nSeasonal correction factors", "Season",
-            "PMB-to-PMW seasonal correction factor",
-        ),
-        (
-            axes[1], month_order, month_order, transfer_calibration,
-            transfer_operational, gpcp_color,
-            f"Corrected {pmw_product} to {gpcp_product}\nMonthly transfer factors",
-            "Month",
-            "Corrected-PMW-to-GPCP monthly transfer factor",
-        ),
-    )
-
-    for (
-        ax, x_values, tick_labels, calibration, operational, color, title,
-        xlabel, ylabel,
-    ) in panel_specs:
-        lower_limit, upper_limit, annotation_offset = _axis_limits(
-            calibration, operational
-        )
-        ax.plot(
-            x_values, calibration, color=color, linestyle="--", marker="o",
-            linewidth=2.0, markersize=5, alpha=0.75,
-            label=calibration_label,
-        )
-        ax.plot(
-            x_values, operational, color=color, linestyle="-", marker="s",
-            linewidth=2.6, markersize=5.5, label=operational_label,
-        )
-        for x_value, factor in zip(x_values, operational):
-            ax.text(
-                x_value, factor + annotation_offset,
-                f"{factor:.{annotation_decimals}f}", color=color,
-                fontsize=7.5, fontweight="bold", ha="center", va="bottom",
-            )
-        ax.axhline(
-            1.0, color="0.25", linestyle=":", linewidth=1.2,
-            label="No correction (CF=1)",
-        )
-        ax.set_xticks(x_values)
-        ax.set_xticklabels(tick_labels)
-        ax.set_xlabel(xlabel, fontsize=11, fontweight="bold")
-        ax.set_ylabel(ylabel, fontsize=10.5, fontweight="bold")
-        ax.set_title(title, fontsize=12.5, fontweight="bold")
-        ax.set_ylim(lower_limit, upper_limit)
-        ax.grid(True, alpha=0.25)
-        ax.legend(frameon=False, fontsize=8.2, loc="best")
-
-    fig.suptitle(
-        "AIS PMB-Corrected-PMW-Guided GPCP Correction Factors",
-        fontsize=15, fontweight="bold",
-    )
-    fig.tight_layout()
-    return fig, axes
 
 # =============================================================================
 
@@ -7465,112 +7112,33 @@ def plot_e2_single_vs_seasonal_monthly_climatology(
     region="Antarctica",
     value_col="precipitation",
     figsize=(12, 5),
-    include_seasonal=True,
 ):
     """Compare original, single-CF, and seasonal-CF monthly climatologies.
 
     ``product_panels`` is a mapping whose keys are panel titles and whose values
-    contain ``original``, ``single``, the product ``color``, and optionally
-    ``seasonal``. Set ``include_seasonal=False`` for the standalone single-CF
-    scenario so that results from the seasonal-CF scenario are not mixed in.
-    The color remains fixed by product while line and marker styles distinguish
-    correction methods. ERA5 is shown in both panels as a comparison dataset.
+    contain the product names under ``original``, ``single``, and ``seasonal``.
+    ERA5 is shown in both panels as a comparison dataset, not as the PMB target.
     """
-    region_df = monthly_clim_df[monthly_clim_df["region"] == region]
-
-    # Standalone single-CF scenario: use one common axis so GPCP and PMW can be
-    # compared directly, matching the monthly, seasonal, and guided scenarios.
-    if not include_seasonal:
-        fig, ax = plt.subplots(figsize=(9.5, 5.8), dpi=150)
-
-        era5_selected = (
-            region_df[region_df["product"] == era5_product]
-            .sort_values("month")
-        )
-        if len(era5_selected) != 12:
-            raise ValueError(
-                f"Expected 12 monthly climatology rows for {era5_product!r}; "
-                f"found {len(era5_selected)}"
-            )
-        ax.plot(
-            era5_selected["month"],
-            era5_selected[value_col],
-            color="blue",
-            linestyle="-",
-            marker="s",
-            linewidth=2.4,
-            markersize=5,
-            label="ERA5",
-        )
-
-        for panel_title, names in product_panels.items():
-            for role, linestyle, marker, suffix in (
-                ("original", "--", "D", ""),
-                ("single", "-", "o", " corrected"),
-            ):
-                product_name = names[role]
-                selected = (
-                    region_df[region_df["product"] == product_name]
-                    .sort_values("month")
-                )
-                if len(selected) != 12:
-                    raise ValueError(
-                        f"Expected 12 monthly climatology rows for "
-                        f"{product_name!r}; found {len(selected)}"
-                    )
-                ax.plot(
-                    selected["month"],
-                    selected[value_col],
-                    color=names["color"],
-                    linestyle=linestyle,
-                    marker=marker,
-                    linewidth=2.4,
-                    markersize=5,
-                    label=f"{panel_title}{suffix}",
-                )
-
-        ax.set_xlabel("Month", fontsize=12, fontweight="bold")
-        ax.set_ylabel(
-            "Precipitation [mm month$^{-1}$]",
-            fontsize=12,
-            fontweight="bold",
-        )
-        ax.set_xticks(np.arange(1, 13))
-        ax.grid(True, alpha=0.25)
-        ax.set_title(
-            "AIS Monthly Climatology:\nIndependent Validation Period (2018-2020)",
-            fontsize=15,
-            fontweight="bold",
-        )
-        ax.legend(
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.16),
-            ncol=3,
-            frameon=False,
-            fontsize=9,
-        )
-        fig.subplots_adjust(bottom=0.25)
-        return fig, np.asarray([ax])
-
     n_panels = len(product_panels)
     fig, axes = plt.subplots(1, n_panels, figsize=figsize, dpi=150, sharey=True)
     axes = np.atleast_1d(axes)
 
     line_specs = {
-        "ERA5": {"linestyle": "-", "marker": "s"},
-        "original": {"linestyle": ":", "marker": "D"},
-        "single": {"linestyle": "--", "marker": "^"},
-        "seasonal": {"linestyle": "-", "marker": "o"},
+        "ERA5": {"color": "blue", "linestyle": "-", "marker": "s"},
+        "original": {"color": "0.45", "linestyle": ":", "marker": "D"},
+        "single": {"color": "tab:purple", "linestyle": "--", "marker": "^"},
+        "seasonal": {"color": "tab:red", "linestyle": "-", "marker": "o"},
     }
+
+    region_df = monthly_clim_df[monthly_clim_df["region"] == region]
 
     for ax, (panel_title, names) in zip(axes, product_panels.items()):
         plot_names = {
             "ERA5": era5_product,
             "original": names["original"],
             "single": names["single"],
+            "seasonal": names["seasonal"],
         }
-        if include_seasonal:
-            plot_names["seasonal"] = names["seasonal"]
         for role, product_name in plot_names.items():
             selected = (
                 region_df[region_df["product"] == product_name]
@@ -7581,8 +7149,7 @@ def plot_e2_single_vs_seasonal_monthly_climatology(
                     f"Expected 12 monthly climatology rows for {product_name!r}; "
                     f"found {len(selected)}"
                 )
-            spec = line_specs[role].copy()
-            spec["color"] = "blue" if role == "ERA5" else names["color"]
+            spec = line_specs[role]
             ax.plot(
                 selected["month"],
                 selected[value_col],
@@ -7795,84 +7362,6 @@ def plot_monthly_climatological_cf_comparison(
 # =============================================================================
 # E2 SINGLE-CF SCENARIO: CORRECTION-FACTOR BAR PLOT
 # =============================================================================
-
-
-def plot_seasonal_cf_comparison(
-    calibration_cf_df,
-    operational_cf_df,
-    product_order,
-    product_labels,
-    product_colors,
-    calibration_label="2013-2017 validation factors",
-    operational_label="2013-2020 operational factors",
-    region="Antarctica",
-    season_order=("DJF", "MAM", "JJA", "SON"),
-    figsize=(9.5, 5.8),
-    annotation_decimals=2,
-):
-    """Plot seasonal validation and operational CFs without other scenarios."""
-    fig, ax = plt.subplots(figsize=figsize, dpi=150)
-    x_positions = np.arange(len(season_order), dtype=float)
-
-    for product in product_order:
-        color = product_colors[product]
-        display_name = product_labels[product]
-
-        for frame, period_label, linestyle, marker, alpha in (
-            (calibration_cf_df, calibration_label, "--", "o", 0.65),
-            (operational_cf_df, operational_label, "-", "s", 1.00),
-        ):
-            selected = frame[
-                (frame["region"] == region)
-                & (frame["product"] == product)
-            ].set_index("season").reindex(season_order)
-
-            values = selected["correction_factor"].to_numpy(dtype=float)
-            if len(values) != len(season_order) or not np.all(np.isfinite(values)):
-                raise ValueError(
-                    f"Missing or invalid seasonal CFs for {product!r}, {period_label}"
-                )
-
-            ax.plot(
-                x_positions,
-                values,
-                color=color,
-                linestyle=linestyle,
-                marker=marker,
-                linewidth=2.3,
-                markersize=6,
-                alpha=alpha,
-                label=f"{display_name} — {period_label}",
-            )
-
-            if frame is operational_cf_df:
-                for x_value, y_value in zip(x_positions, values):
-                    ax.annotate(
-                        f"{y_value:.{annotation_decimals}f}",
-                        (x_value, y_value),
-                        xytext=(0, 7),
-                        textcoords="offset points",
-                        ha="center",
-                        fontsize=8,
-                        color=color,
-                    )
-
-    ax.axhline(1.0, color="0.35", linestyle=":", linewidth=1.4)
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(season_order, fontweight="bold")
-    ax.set_xlabel("Season", fontweight="bold")
-    ax.set_ylabel("PMB correction factor", fontweight="bold")
-    ax.set_title("AIS Seasonal Correction Factors", fontweight="bold")
-    ax.grid(True, axis="y", alpha=0.25)
-    ax.legend(
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.16),
-        ncol=2,
-        frameon=False,
-        fontsize=9,
-    )
-    fig.subplots_adjust(bottom=0.28)
-    return fig, ax
 
 
 def plot_single_cf_bar_comparison(

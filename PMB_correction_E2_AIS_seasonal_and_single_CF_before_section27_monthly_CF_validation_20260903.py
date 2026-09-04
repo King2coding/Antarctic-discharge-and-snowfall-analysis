@@ -113,16 +113,6 @@ PMW8_SINGLE_CORR_NAME = "GPM PMW V08 single-CF corrected"
 
 ERA5_NAME = "ERA5"
 
-# Project color system established in slides 91-99. Validation colors identify
-# the dataset; linestyle, marker, and opacity identify correction status.
-ERA5_COLOR = "blue"
-GPCP_COLOR = "orange"
-PMW_COLOR = "green"
-
-# CF-only figures follow the existing slide-93 convention.
-GPCP_CF_COLOR = "tab:blue"
-PMW_CF_COLOR = "tab:orange"
-
 #%%
 # =============================================================================
 # SECTION 5. LOAD RAW PRODUCT DATA
@@ -995,34 +985,34 @@ e2_product_dict_validation_common = {
 product_styles_e2 = {
 
     ERA5_NAME: {
-        "color": ERA5_COLOR,
+        "color": "blue",
         "marker": "s",
         "lw": 2.5,
     },
 
     GPCP_NAME: {
-        "color": GPCP_COLOR,
+        "color": "orange",
         "marker": "D",
         "lw": 2.2,
         "linestyle": "--",
     },
 
     GPCP_CORR_NAME: {
-        "color": GPCP_COLOR,
+        "color": "orange",
         "marker": "o",
         "lw": 3.0,
         "linestyle": "-",
     },
 
     PMW8_NAME: {
-        "color": PMW_COLOR,
+        "color": "green",
         "marker": "s",
         "lw": 2.2,
         "linestyle": "--",
     },
 
     PMW8_CORR_NAME: {
-        "color": PMW_COLOR,
+        "color": "green",
         "marker": "o",
         "lw": 3.0,
         "linestyle": "-",
@@ -1157,26 +1147,26 @@ product_colors_e2 = {
     },
 
     ERA5_NAME: {
-        "color": ERA5_COLOR,
+        "color": "blue",
     },
 
     GPCP_NAME: {
-        "color": GPCP_COLOR,
+        "color": "orange",
         "alpha": 0.50,
     },
 
     GPCP_CORR_NAME: {
-        "color": GPCP_COLOR,
+        "color": "orange",
         "alpha": 1.00,
     },
 
     PMW8_NAME: {
-        "color": PMW_COLOR,
+        "color": "green",
         "alpha": 0.50,
     },
 
     PMW8_CORR_NAME: {
-        "color": PMW_COLOR,
+        "color": "green",
         "alpha": 1.00,
     },
 }
@@ -1798,11 +1788,11 @@ ais_annual_df = ais_annual_df.sort_values("product")
 
 colors = [
     # "black",
-    ERA5_COLOR,
-    GPCP_COLOR,
-    GPCP_COLOR,
-    PMW_COLOR,
-    PMW_COLOR,
+    "blue",
+    "orange",
+    "orange",
+    "green",
+    "green",
 ]
 
 alphas = [
@@ -1955,35 +1945,22 @@ print("\nFinal 2013-2020 seasonal correction factors:")
 print_correction_factor_summary(e2_final_seasonal_correction_factors)
 print("Saved final factors:", final_seasonal_cf_file)
 
-#%%
-# =============================================================================
-# SECTION 21_B. SEASONAL-CF SCENARIO: DEDICATED CF PLOT
-# =============================================================================
-# The solid lines and printed values are the final 2013-2020 operational CFs.
-# Dashed lines show the 2013-2017 factors used for independent validation.
-# =============================================================================
+# fig, ax = plot_e2_seasonal_cf_period_comparison(
+#     calibration_cf_df=e2_correction_factors_labeled,
+#     final_cf_df=e2_final_seasonal_correction_factors,
+#     product_order=(GPCP_DEADJ_NAME, PMW8_NAME),
+#     product_colors={
+#         GPCP_DEADJ_NAME: "tab:orange",
+#         PMW8_NAME: "tab:green",
+#     },
+# )
 
-fig, ax = plot_seasonal_cf_comparison(
-    calibration_cf_df=e2_correction_factors_labeled,
-    operational_cf_df=e2_final_seasonal_correction_factors,
-    product_order=(GPCP_DEADJ_NAME, PMW8_NAME),
-    product_labels={
-        GPCP_DEADJ_NAME: "GPCP V3.3 / 1.4",
-        PMW8_NAME: "GPM PMW V08",
-    },
-    product_colors={
-        GPCP_DEADJ_NAME: GPCP_CF_COLOR,
-        PMW8_NAME: PMW_CF_COLOR,
-    },
-)
-
-seasonal_only_cf_plot = os.path.join(
-    path_to_plots,
-    f"E2_seasonal_CF_2013_2017_vs_2013_2020_{cde_run_dte}.png",
-)
-fig.savefig(seasonal_only_cf_plot, dpi=200, bbox_inches="tight")
-plt.show()
-print("Saved seasonal-CF scenario plot:", seasonal_only_cf_plot)
+# seasonal_cf_comparison_plot = os.path.join(
+#     path_to_plots,
+#     f"E2_seasonal_CF_2013_2017_vs_2013_2020_{cde_run_dte}.png",
+# )
+# fig.savefig(seasonal_cf_comparison_plot, dpi=200, bbox_inches="tight")
+# # plt.close(fig)
 
 #%%
 # =============================================================================
@@ -2062,7 +2039,7 @@ print("Saved single factors:", single_cf_file)
 
 #%%
 # =============================================================================
-# SECTION 22_A. COMBINED CF DIAGNOSTIC (NOT THE SCENARIO SLIDE FIGURE)
+# SECTION 22_A. PLOT ALL EIGHT CORRECTION-FACTOR SCENARIOS
 # =============================================================================
 # Seasonal curves:
 #   - 2013-2017 calibration factors used for seasonal-CF validation
@@ -2088,8 +2065,8 @@ fig, ax = plot_e2_seasonal_cf_period_comparison(
     ),
 
     product_colors={
-        GPCP_DEADJ_NAME: GPCP_CF_COLOR,
-        PMW8_NAME: PMW_CF_COLOR,
+        GPCP_DEADJ_NAME: "tab:orange",
+        PMW8_NAME: "tab:green",
     },
 
     calibration_label="2013-2017 calibration",
@@ -2115,40 +2092,6 @@ print(
     "Saved eight-scenario CF plot:",
     seasonal_cf_comparison_plot,
 )
-
-#%%
-# =============================================================================
-# SECTION 22_B. SINGLE YEAR-ROUND CF SCENARIO: BAR PLOT
-# =============================================================================
-# This is the dedicated CF figure for the single-CF scenario. Lighter bars are
-# the 2013-2017 factors used in independent validation; solid bars are the final
-# 2013-2020 operational factors intended for delivery.
-# =============================================================================
-
-fig, ax = plot_single_cf_bar_comparison(
-    calibration_cf_df=e2_single_correction_factors,
-    operational_cf_df=e2_final_single_correction_factors,
-    product_order=(GPCP_DEADJ_NAME, PMW8_NAME),
-    product_labels={
-        GPCP_DEADJ_NAME: "GPCP V3.3 / 1.4",
-        PMW8_NAME: "GPM PMW V08",
-    },
-    product_colors={
-        GPCP_DEADJ_NAME: GPCP_CF_COLOR,
-        PMW8_NAME: PMW_CF_COLOR,
-    },
-    calibration_label="2013-2017 validation factor",
-    operational_label="2013-2020 operational factor",
-)
-
-single_cf_bar_plot = os.path.join(
-    path_to_plots,
-    f"E2_single_AIS_CF_bar_2013_2017_vs_2013_2020_{cde_run_dte}.png",
-)
-fig.savefig(single_cf_bar_plot, dpi=200, bbox_inches="tight")
-plt.show()
-print("Saved single-CF scenario bar plot:", single_cf_bar_plot)
-
 #%%
 # =============================================================================
 # SECTION 23. APPLY SINGLE CF TO THE MONTHLY GRIDDED PRODUCTS
@@ -2175,27 +2118,29 @@ gpm_pmw_v08_mon_01_e2_single_corr = apply_e2_single_ais_correction(
 
 #%%
 # =============================================================================
-# SECTION 24. SINGLE-CF SCENARIO: MONTHLY VALIDATION
+# SECTION 24. MONTHLY EFFECT OF SINGLE-CF VERSUS SEASONAL-CF CORRECTION
 # =============================================================================
 # Validation uses 2018-2020 only. PMB is intentionally absent from this plot:
 # it supplied the calibration factors, while ERA5 is shown as the independent
-# comparison dataset. The seasonal-CF curves are deliberately excluded because
-# they belong to a separate scenario and have their own validation figures.
+# comparison dataset. Separate product panels prevent seven overlapping curves
+# from obscuring the change in monthly pattern.
 # =============================================================================
 
-e2_single_cf_monthly_products = {
+e2_cf_method_comparison_products = {
     ERA5_NAME: era5_mon_01,
     GPCP_NAME: gpcp_mon_01,
     GPCP_SINGLE_CORR_NAME: gpcp_mon_01_e2_single_corr,
+    GPCP_CORR_NAME: gpcp_mon_01_e2_corr,
     PMW8_NAME: gpm_pmw_v08_mon_01,
     PMW8_SINGLE_CORR_NAME: gpm_pmw_v08_mon_01_e2_single_corr,
+    PMW8_CORR_NAME: gpm_pmw_v08_mon_01_e2_corr,
 }
 
 (
-    e2_single_cf_validation_monthly_df,
-    e2_single_cf_validation_monthly_clim_df,
+    e2_cf_method_validation_monthly_df,
+    e2_cf_method_validation_monthly_clim_df,
 ) = validation_monthly_climatology_from_fields(
-    product_dict=e2_single_cf_monthly_products,
+    product_dict=e2_cf_method_comparison_products,
     region_masks=region_masks_01deg,
     validation_years=VALIDATION_YEARS,
     lat_name="lat",
@@ -2205,204 +2150,42 @@ e2_single_cf_monthly_products = {
 
 monthly_comparison_csv = os.path.join(
     path_to_dfs,
-    f"E2_single_CF_monthly_validation_2018_2020_{cde_run_dte}.csv",
+    f"E2_single_vs_seasonal_CF_monthly_validation_2018_2020_{cde_run_dte}.csv",
 )
-e2_single_cf_validation_monthly_clim_df.to_csv(
+e2_cf_method_validation_monthly_clim_df.to_csv(
     monthly_comparison_csv,
     index=False,
 )
 
 fig, axes = plot_e2_single_vs_seasonal_monthly_climatology(
-    monthly_clim_df=e2_single_cf_validation_monthly_clim_df,
+    monthly_clim_df=e2_cf_method_validation_monthly_clim_df,
     product_panels={
         "GPCP V3.3": {
             "original": GPCP_NAME,
             "single": GPCP_SINGLE_CORR_NAME,
-            "color": GPCP_COLOR,
+            "seasonal": GPCP_CORR_NAME,
         },
         "GPM PMW V08": {
             "original": PMW8_NAME,
             "single": PMW8_SINGLE_CORR_NAME,
-            "color": PMW_COLOR,
+            "seasonal": PMW8_CORR_NAME,
         },
     },
     era5_product=ERA5_NAME,
     region="Antarctica",
-    include_seasonal=False,
 )
 
 monthly_comparison_plot = os.path.join(
     path_to_plots,
-    f"E2_single_CF_monthly_validation_2018_2020_{cde_run_dte}.png",
+    f"E2_single_vs_seasonal_CF_monthly_validation_2018_2020_{cde_run_dte}.png",
 )
 fig.savefig(monthly_comparison_plot, dpi=200, bbox_inches="tight")
 # plt.close(fig)
 
-print("\nSaved single-CF monthly validation outputs:")
-print("  Monthly plot:", monthly_comparison_plot)
-print("  Monthly values:", monthly_comparison_csv)
-
-#%%
-# =============================================================================
-# SECTION 24_A. SINGLE-CF SCENARIO: SEASONAL AND ANNUAL VALIDATION
-# =============================================================================
-# Completes the single year-round CF experiment using only factors derived from
-# 2013-2017 and applied unchanged during independent validation in 2018-2020.
-# Section 24 already provides the monthly comparison.
-# =============================================================================
-
-e2_single_cf_validation_products = {
-    ERA5_NAME: era5_mon_01,
-    GPCP_NAME: gpcp_mon_01,
-    GPCP_SINGLE_CORR_NAME: gpcp_mon_01_e2_single_corr,
-    PMW8_NAME: gpm_pmw_v08_mon_01,
-    PMW8_SINGLE_CORR_NAME: gpm_pmw_v08_mon_01_e2_single_corr,
-}
-
-e2_single_cf_product_order = (
-    ERA5_NAME,
-    GPCP_NAME,
-    GPCP_SINGLE_CORR_NAME,
-    PMW8_NAME,
-    PMW8_SINGLE_CORR_NAME,
-)
-
-e2_single_cf_styles = {
-    ERA5_NAME: {
-        "color": ERA5_COLOR, "marker": "s", "lw": 2.5,
-        "linestyle": "-",
-    },
-    GPCP_NAME: {
-        "color": GPCP_COLOR, "marker": "D", "lw": 2.0,
-        "linestyle": "--", "alpha": 0.60,
-    },
-    GPCP_SINGLE_CORR_NAME: {
-        "color": GPCP_COLOR, "marker": "o", "lw": 3.0,
-        "linestyle": "-",
-    },
-    PMW8_NAME: {
-        "color": PMW_COLOR, "marker": "X", "lw": 2.0,
-        "linestyle": "--", "alpha": 0.60,
-    },
-    PMW8_SINGLE_CORR_NAME: {
-        "color": PMW_COLOR, "marker": "^", "lw": 3.0,
-        "linestyle": "-",
-    },
-}
-
-# Seasonal climatology
-e2_single_cf_regional_monthly_df = build_all_region_monthly_series_cosine(
-    product_dict=e2_single_cf_validation_products,
-    region_masks=region_masks_01deg,
-    lat_name="lat",
-    lon_name="lon",
-    time_name="time",
-)
-
-(
-    e2_single_cf_validation_seasonal_df,
-    e2_single_cf_validation_seasonal_clim_df,
-) = validation_seasonal_climatology_from_monthly_df(
-    full_monthly_region_df=e2_single_cf_regional_monthly_df,
-    validation_years=VALIDATION_YEARS,
-    require_complete_season=True,
-)
-
-single_cf_validation_seasonal_csv = os.path.join(
-    path_to_dfs,
-    f"E2_single_CF_validation_seasonal_climatology_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_single_cf_validation_seasonal_clim_df.to_csv(
-    single_cf_validation_seasonal_csv,
-    index=False,
-)
-
-fig, axes = plot_seasonal_climatology(
-    clim_df=e2_single_cf_validation_seasonal_clim_df,
-    region_order=("Antarctica",),
-    product_order=e2_single_cf_product_order,
-    product_styles=e2_single_cf_styles,
-    figsize=(10, 5.5),
-    ylabel="mm/season",
-    y_nbins=4,
-    legend_ncol=3,
-)
-
-single_cf_validation_seasonal_plot = os.path.join(
-    path_to_plots,
-    f"E2_single_CF_validation_seasonal_climatology_2018_2020_"
-    f"{cde_run_dte}.png",
-)
-fig.savefig(
-    single_cf_validation_seasonal_plot,
-    dpi=200,
-    bbox_inches="tight",
-)
-plt.show()
-
-# Mean annual precipitation
-e2_single_cf_validation_common_products = {
-    product_name: product_field.sel(time=common_time_validation)
-    for product_name, product_field in e2_single_cf_validation_products.items()
-}
-
-(
-    e2_single_cf_validation_annual_df,
-    e2_single_cf_validation_mean_annual_df,
-) = validation_regional_annual_dataframe(
-    product_dict=e2_single_cf_validation_common_products,
-    region_masks=region_masks_01deg,
-    validation_years=VALIDATION_YEARS,
-)
-
-single_cf_validation_annual_csv = os.path.join(
-    path_to_dfs,
-    f"E2_single_CF_validation_mean_annual_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_single_cf_validation_mean_annual_df.to_csv(
-    single_cf_validation_annual_csv,
-    index=False,
-)
-
-e2_single_cf_bar_colors = {
-    ERA5_NAME: {"color": ERA5_COLOR, "alpha": 1.00},
-    GPCP_NAME: {"color": GPCP_COLOR, "alpha": 0.50},
-    GPCP_SINGLE_CORR_NAME: {"color": GPCP_COLOR, "alpha": 1.00},
-    PMW8_NAME: {"color": PMW_COLOR, "alpha": 0.50},
-    PMW8_SINGLE_CORR_NAME: {"color": PMW_COLOR, "alpha": 1.00},
-}
-
-fig, ax = plot_regional_mean_annual_bars(
-    df_mean_regional=e2_single_cf_validation_mean_annual_df,
-    region_order=("Antarctica",),
-    product_order=e2_single_cf_product_order,
-    product_colors=e2_single_cf_bar_colors,
-    ylabel="[mm/year]",
-    title="Single-CF Independent Validation (2018-2020)",
-    annotate=True,
-    legend_ncol=2,
-)
-ax.set_ylim(0, 200)
-
-single_cf_validation_annual_plot = os.path.join(
-    path_to_plots,
-    f"E2_single_CF_validation_mean_annual_2018_2020_"
-    f"{cde_run_dte}.png",
-)
-fig.savefig(
-    single_cf_validation_annual_plot,
-    dpi=200,
-    bbox_inches="tight",
-)
-plt.show()
-
-print("\nSaved dedicated single-CF validation outputs:")
-print(" Seasonal plot:", single_cf_validation_seasonal_plot)
-print(" Annual plot  :", single_cf_validation_annual_plot)
-print(" Seasonal data:", single_cf_validation_seasonal_csv)
-print(" Annual data  :", single_cf_validation_annual_csv)
+print("\nSaved new E2 outputs:")
+print("  Seasonal-period comparison:", seasonal_cf_comparison_plot)
+print("  Single-vs-seasonal monthly comparison:", monthly_comparison_plot)
+print("  Monthly comparison values:", monthly_comparison_csv)
 
 #%%
 # =============================================================================
@@ -2542,8 +2325,8 @@ fig, axes = plot_monthly_climatological_cf_comparison(
         PMW8_NAME,
     ),
     product_colors={
-        GPCP_DEADJ_NAME: GPCP_CF_COLOR,
-        PMW8_NAME: PMW_CF_COLOR,
+        GPCP_DEADJ_NAME: "tab:orange",
+        PMW8_NAME: "tab:green",
     },
     calibration_label="2013-2017 validation factors",
     operational_label="2013-2020 operational factors",
@@ -2637,804 +2420,3 @@ print(" ", gpcp_mon_01_e2_monthly_corr.name)
 print(" ", gpm_pmw_v08_mon_01_e2_monthly_corr.name)
 print("Factor derivation period: 2013-2017")
 print("Validation period to evaluate: 2018-2020")
-
-#%%
-# =============================================================================
-# SECTION 27. MONTHLY-CF SCENARIO: INDEPENDENT VALIDATION, 2018-2020
-# =============================================================================
-# Compare ERA5, the original satellite products, and the versions corrected
-# with the frozen 2013-2017 monthly factors. PMB is absent from the validation
-# plots because it was used to estimate the correction parameters.
-#
-# Regional values are retained in the saved tables, while the figures show the
-# AIS-wide (Antarctica) result used in the E2 presentation.
-# =============================================================================
-
-e2_monthly_cf_validation_products = {
-    ERA5_NAME: era5_mon_01,
-    GPCP_NAME: gpcp_mon_01,
-    GPCP_MONTHLY_CORR_NAME: gpcp_mon_01_e2_monthly_corr,
-    PMW8_NAME: gpm_pmw_v08_mon_01,
-    PMW8_MONTHLY_CORR_NAME: gpm_pmw_v08_mon_01_e2_monthly_corr,
-}
-
-e2_monthly_cf_product_order = (
-    ERA5_NAME,
-    GPCP_NAME,
-    GPCP_MONTHLY_CORR_NAME,
-    PMW8_NAME,
-    PMW8_MONTHLY_CORR_NAME,
-)
-
-e2_monthly_cf_styles = {
-    ERA5_NAME: {
-        "color": ERA5_COLOR, "marker": "s", "lw": 2.5,
-        "linestyle": "-",
-    },
-    GPCP_NAME: {
-        "color": GPCP_COLOR, "marker": "D", "lw": 2.0,
-        "linestyle": "--", "alpha": 0.60,
-    },
-    GPCP_MONTHLY_CORR_NAME: {
-        "color": GPCP_COLOR, "marker": "o", "lw": 3.0,
-        "linestyle": "-",
-    },
-    PMW8_NAME: {
-        "color": PMW_COLOR, "marker": "X", "lw": 2.0,
-        "linestyle": "--", "alpha": 0.60,
-    },
-    PMW8_MONTHLY_CORR_NAME: {
-        "color": PMW_COLOR, "marker": "^", "lw": 3.0,
-        "linestyle": "-",
-    },
-}
-
-# -----------------------------------------------------------------------------
-# 27.1 Monthly climatology
-# -----------------------------------------------------------------------------
-
-(
-    e2_monthly_cf_validation_monthly_df,
-    e2_monthly_cf_validation_monthly_clim_df,
-) = validation_monthly_climatology_from_fields(
-    product_dict=e2_monthly_cf_validation_products,
-    region_masks=region_masks_01deg,
-    validation_years=VALIDATION_YEARS,
-    lat_name="lat",
-    lon_name="lon",
-    time_name="time",
-)
-
-monthly_cf_validation_csv = os.path.join(
-    path_to_dfs,
-    f"E2_monthly_CF_validation_monthly_climatology_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_monthly_cf_validation_monthly_clim_df.to_csv(
-    monthly_cf_validation_csv,
-    index=False,
-)
-
-fig, axes = plot_validation_monthly_climatology_numeric_months(
-    clim_df=e2_monthly_cf_validation_monthly_clim_df,
-    region_order=("Antarctica",),
-    product_order=e2_monthly_cf_product_order,
-    product_styles=e2_monthly_cf_styles,
-    figsize=(10, 5.5),
-    ylabel="mm/month",
-)
-
-monthly_cf_validation_plot = os.path.join(
-    path_to_plots,
-    f"E2_monthly_CF_validation_monthly_climatology_2018_2020_"
-    f"{cde_run_dte}.png",
-)
-fig.savefig(monthly_cf_validation_plot, dpi=200, bbox_inches="tight")
-plt.show()
-
-# -----------------------------------------------------------------------------
-# 27.2 Seasonal climatology
-# -----------------------------------------------------------------------------
-
-e2_monthly_cf_regional_monthly_df = (
-    build_all_region_monthly_series_cosine(
-        product_dict=e2_monthly_cf_validation_products,
-        region_masks=region_masks_01deg,
-        lat_name="lat",
-        lon_name="lon",
-        time_name="time",
-    )
-)
-
-(
-    e2_monthly_cf_validation_seasonal_df,
-    e2_monthly_cf_validation_seasonal_clim_df,
-) = validation_seasonal_climatology_from_monthly_df(
-    full_monthly_region_df=e2_monthly_cf_regional_monthly_df,
-    validation_years=VALIDATION_YEARS,
-    require_complete_season=True,
-)
-
-seasonal_cf_validation_csv = os.path.join(
-    path_to_dfs,
-    f"E2_monthly_CF_validation_seasonal_climatology_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_monthly_cf_validation_seasonal_clim_df.to_csv(
-    seasonal_cf_validation_csv,
-    index=False,
-)
-
-fig, axes = plot_seasonal_climatology(
-    clim_df=e2_monthly_cf_validation_seasonal_clim_df,
-    region_order=("Antarctica",),
-    product_order=e2_monthly_cf_product_order,
-    product_styles=e2_monthly_cf_styles,
-    figsize=(10, 5.5),
-    ylabel="mm/season",
-    y_nbins=4,
-    legend_ncol=3,
-)
-
-seasonal_cf_validation_plot = os.path.join(
-    path_to_plots,
-    f"E2_monthly_CF_validation_seasonal_climatology_2018_2020_"
-    f"{cde_run_dte}.png",
-)
-fig.savefig(seasonal_cf_validation_plot, dpi=200, bbox_inches="tight")
-plt.show()
-
-# -----------------------------------------------------------------------------
-# 27.3 Mean annual precipitation
-# -----------------------------------------------------------------------------
-
-e2_monthly_cf_validation_common_products = {
-    product_name: product_field.sel(time=common_time_validation)
-    for product_name, product_field
-    in e2_monthly_cf_validation_products.items()
-}
-
-(
-    e2_monthly_cf_validation_annual_df,
-    e2_monthly_cf_validation_mean_annual_df,
-) = validation_regional_annual_dataframe(
-    product_dict=e2_monthly_cf_validation_common_products,
-    region_masks=region_masks_01deg,
-    validation_years=VALIDATION_YEARS,
-)
-
-annual_cf_validation_csv = os.path.join(
-    path_to_dfs,
-    f"E2_monthly_CF_validation_mean_annual_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_monthly_cf_validation_mean_annual_df.to_csv(
-    annual_cf_validation_csv,
-    index=False,
-)
-
-e2_monthly_cf_bar_colors = {
-    ERA5_NAME: {"color": ERA5_COLOR, "alpha": 1.00},
-    GPCP_NAME: {"color": GPCP_COLOR, "alpha": 0.50},
-    GPCP_MONTHLY_CORR_NAME: {"color": GPCP_COLOR, "alpha": 1.00},
-    PMW8_NAME: {"color": PMW_COLOR, "alpha": 0.50},
-    PMW8_MONTHLY_CORR_NAME: {"color": PMW_COLOR, "alpha": 1.00},
-}
-
-fig, ax = plot_regional_mean_annual_bars(
-    df_mean_regional=e2_monthly_cf_validation_mean_annual_df,
-    region_order=("Antarctica",),
-    product_order=e2_monthly_cf_product_order,
-    product_colors=e2_monthly_cf_bar_colors,
-    ylabel="[mm/year]",
-    title="Monthly-CF Independent Validation (2018-2020)",
-    annotate=True,
-    legend_ncol=2,
-)
-
-# Use a common presentation scale across AIS annual scenario plots.
-ax.set_ylim(0, 200)
-
-annual_cf_validation_plot = os.path.join(
-    path_to_plots,
-    f"E2_monthly_CF_validation_mean_annual_2018_2020_"
-    f"{cde_run_dte}.png",
-)
-fig.savefig(annual_cf_validation_plot, dpi=200, bbox_inches="tight")
-plt.show()
-
-print("\nSaved monthly-CF validation outputs:")
-print(" Monthly plot :", monthly_cf_validation_plot)
-print(" Seasonal plot:", seasonal_cf_validation_plot)
-print(" Annual plot  :", annual_cf_validation_plot)
-print(" Monthly data :", monthly_cf_validation_csv)
-print(" Seasonal data:", seasonal_cf_validation_csv)
-print(" Annual data  :", annual_cf_validation_csv)
-
-#%%
-# =============================================================================
-# SECTION 28. BUILD THE TWO PMB-CORRECTED PMW GUIDE FIELDS
-# =============================================================================
-# Stage 1 of the PMW-guided GPCP scenario:
-#
-#   PMB-derived seasonal factors -> corrected GPM PMW V08
-#
-# Two guide fields are intentionally kept separate:
-#   1. 2013-2017 seasonal factors: used to derive transfer factors that are
-#      frozen before the independent 2018-2020 validation.
-#   2. 2013-2020 seasonal factors: used only to derive final operational
-#      transfer factors for science-team delivery.
-# =============================================================================
-
-PMW8_GUIDE_CAL_NAME = (
-    "GPM PMW V08 PMB-seasonal corrected (2013-2017 factors)"
-)
-PMW8_GUIDE_FINAL_NAME = (
-    "GPM PMW V08 PMB-seasonal corrected (2013-2020 factors)"
-)
-
-pmw8_guide_cal_2013_2017 = apply_e2_seasonal_ais_correction(
-    da_monthly=gpm_pmw_v08_mon_01,
-    correction_factor_df=e2_correction_factors_labeled,
-    product_name=PMW8_NAME,
-    ais_mask=AIS_MASK_01,
-    time_name="time",
-    lat_name="lat",
-    lon_name="lon",
-    corrected_name=PMW8_GUIDE_CAL_NAME,
-)
-
-pmw8_guide_final_2013_2020 = apply_e2_seasonal_ais_correction(
-    da_monthly=gpm_pmw_v08_mon_01,
-    correction_factor_df=e2_final_seasonal_correction_factors,
-    product_name=PMW8_NAME,
-    ais_mask=AIS_MASK_01,
-    time_name="time",
-    lat_name="lat",
-    lon_name="lon",
-    corrected_name=PMW8_GUIDE_FINAL_NAME,
-)
-
-# Add explicit provenance because the generic seasonal application function
-# predates the two-stage scenario and does not itself store derivation years.
-pmw8_guide_cal_2013_2017.attrs.update({
-    "correction_period_start_year": 2013,
-    "correction_period_end_year": 2017,
-    "guide_role": "derive frozen GPCP transfer factors for validation",
-    "intended_validation_years": "2018-2020",
-})
-pmw8_guide_final_2013_2020.attrs.update({
-    "correction_period_start_year": 2013,
-    "correction_period_end_year": 2020,
-    "guide_role": "derive final operational GPCP transfer factors",
-    "intended_validation_years": "not independently validated",
-})
-
-# Confirm that both factor tables contain one valid PMW factor per season and
-# that the guide fields retain their distinct derivation periods.
-for period_label, factor_table, guide_field, expected_end_year in (
-    (
-        "2013-2017 validation parameters",
-        e2_correction_factors_labeled,
-        pmw8_guide_cal_2013_2017,
-        2017,
-    ),
-    (
-        "2013-2020 operational parameters",
-        e2_final_seasonal_correction_factors,
-        pmw8_guide_final_2013_2020,
-        2020,
-    ),
-):
-    pmw_factors = factor_table[
-        (factor_table["region"] == "Antarctica")
-        & (factor_table["product"] == PMW8_NAME)
-    ]
-    valid_seasons = set(pmw_factors["season"]) == {
-        "DJF", "MAM", "JJA", "SON"
-    }
-    valid_values = (
-        len(pmw_factors) == 4
-        and np.isfinite(pmw_factors["correction_factor"]).all()
-        and (pmw_factors["correction_factor"] > 0).all()
-    )
-    correct_period = (
-        guide_field.attrs["correction_period_start_year"] == 2013
-        and guide_field.attrs["correction_period_end_year"]
-        == expected_end_year
-    )
-    if not (valid_seasons and valid_values and correct_period):
-        raise ValueError(
-            f"Invalid PMW guide construction for {period_label}"
-        )
-
-print("\nPMB-corrected PMW guide fields are ready:")
-print(" Validation guide :", pmw8_guide_cal_2013_2017.name)
-print(" Operational guide:", pmw8_guide_final_2013_2020.name)
-
-#%%
-# =============================================================================
-# SECTION 29. DERIVE CORRECTED-PMW-TO-GPCP MONTHLY TRANSFER FACTORS
-# =============================================================================
-# Stage 2 of the PMW-guided GPCP scenario:
-#
-#   transfer factor(month) = mean(PMB-corrected PMW for that month)
-#                            ----------------------------------------
-#                            mean(de-adjusted GPCP for that month)
-#
-# Exact corrected-PMW/GPCP timestamps are paired inside the reusable function.
-# The validation and operational pathways remain strictly separate.
-# =============================================================================
-
-# Build regional monthly inputs separately so the corrected-PMW guide label
-# stored in each transfer-factor table identifies its derivation pathway.
-pmw_guided_cal_regional_monthly_df = (
-    build_all_region_monthly_series_cosine(
-        product_dict={
-            PMW8_GUIDE_CAL_NAME: pmw8_guide_cal_2013_2017,
-            GPCP_DEADJ_NAME: gpcp_mon_01_deadjusted,
-        },
-        region_masks=region_masks_01deg,
-        lat_name="lat",
-        lon_name="lon",
-        time_name="time",
-    )
-)
-
-pmw_guided_final_regional_monthly_df = (
-    build_all_region_monthly_series_cosine(
-        product_dict={
-            PMW8_GUIDE_FINAL_NAME: pmw8_guide_final_2013_2020,
-            GPCP_DEADJ_NAME: gpcp_mon_01_deadjusted,
-        },
-        region_masks=region_masks_01deg,
-        lat_name="lat",
-        lon_name="lon",
-        time_name="time",
-    )
-)
-
-e2_pmw_guided_gpcp_transfer_factors = (
-    derive_pmw_guided_gpcp_transfer_factors(
-        monthly_region_df=pmw_guided_cal_regional_monthly_df,
-        period_years=CALIBRATION_YEARS,
-        corrected_pmw_product=PMW8_GUIDE_CAL_NAME,
-        gpcp_product=GPCP_DEADJ_NAME,
-        regions=("Antarctica",),
-        months=tuple(range(1, 13)),
-    )
-)
-
-e2_final_pmw_guided_gpcp_transfer_factors = (
-    derive_pmw_guided_gpcp_transfer_factors(
-        monthly_region_df=pmw_guided_final_regional_monthly_df,
-        period_years=FINAL_FACTOR_YEARS,
-        corrected_pmw_product=PMW8_GUIDE_FINAL_NAME,
-        gpcp_product=GPCP_DEADJ_NAME,
-        regions=("Antarctica",),
-        months=tuple(range(1, 13)),
-    )
-)
-
-# Require one finite, positive factor for each month and confirm that each table
-# points to the intended corrected-PMW guide and de-adjusted GPCP target.
-for period_label, factor_table, expected_guide, expected_end_year in (
-    (
-        "2013-2017 validation parameters",
-        e2_pmw_guided_gpcp_transfer_factors,
-        PMW8_GUIDE_CAL_NAME,
-        2017,
-    ),
-    (
-        "2013-2020 operational parameters",
-        e2_final_pmw_guided_gpcp_transfer_factors,
-        PMW8_GUIDE_FINAL_NAME,
-        2020,
-    ),
-):
-    available_months = set(factor_table["month"].astype(int))
-    valid_values = (
-        len(factor_table) == 12
-        and available_months == set(range(1, 13))
-        and np.isfinite(factor_table["transfer_factor"]).all()
-        and (factor_table["transfer_factor"] > 0).all()
-    )
-    correct_products = (
-        (factor_table["guide_product"] == expected_guide).all()
-        and (factor_table["target_product"] == GPCP_DEADJ_NAME).all()
-    )
-    correct_period = (
-        (factor_table["period_start_year"] == 2013).all()
-        and (factor_table["period_end_year"] == expected_end_year).all()
-    )
-    if not (valid_values and correct_products and correct_period):
-        raise ValueError(
-            f"Invalid PMW-guided GPCP transfer table for {period_label}"
-        )
-
-e2_pmw_guided_gpcp_transfer_factors = (
-    e2_pmw_guided_gpcp_transfer_factors.assign(
-        derivation_period="2013-2017 validation parameters",
-        intended_use="frozen for independent validation on 2018-2020",
-    )
-)
-e2_final_pmw_guided_gpcp_transfer_factors = (
-    e2_final_pmw_guided_gpcp_transfer_factors.assign(
-        derivation_period="2013-2020 final operational",
-        intended_use="science-team operational delivery",
-    )
-)
-
-pmw_guided_validation_cf_file = os.path.join(
-    path_to_dfs,
-    f"E2_PMW_guided_GPCP_monthly_transfer_factors_cal2013_2017_"
-    f"{cde_run_dte}.csv",
-)
-pmw_guided_operational_cf_file = os.path.join(
-    path_to_dfs,
-    f"E2_PMW_guided_GPCP_monthly_transfer_factors_2013_2020_FINAL_"
-    f"{cde_run_dte}.csv",
-)
-
-e2_pmw_guided_gpcp_transfer_factors.to_csv(
-    pmw_guided_validation_cf_file,
-    index=False,
-)
-e2_final_pmw_guided_gpcp_transfer_factors.to_csv(
-    pmw_guided_operational_cf_file,
-    index=False,
-)
-
-print("\nPMW-guided GPCP transfer factors derived successfully:")
-print(
-    e2_pmw_guided_gpcp_transfer_factors[
-        ["month", "transfer_factor", "n_common_months"]
-    ].to_string(index=False)
-)
-print("Saved validation factors :", pmw_guided_validation_cf_file)
-print("Saved operational factors:", pmw_guided_operational_cf_file)
-
-#%%
-# =============================================================================
-# SECTION 29_A. PLOT BOTH STAGES OF THE PMW-GUIDED CORRECTION
-# =============================================================================
-# Left panel : PMB-to-PMW seasonal correction factors.
-# Right panel: corrected-PMW-to-GPCP monthly transfer factors.
-#
-# The panels deliberately use independent y-axis scales because seasonal PMW
-# correction factors and monthly GPCP transfer factors represent different
-# temporal correction structures. Solid-line annotations are the final
-# 2013-2020 operational values intended for delivery.
-# =============================================================================
-
-fig, axes = plot_pmw_guided_cf_comparison(
-    calibration_pmw_seasonal_cf_df=e2_correction_factors_labeled,
-    operational_pmw_seasonal_cf_df=(
-        e2_final_seasonal_correction_factors
-    ),
-    calibration_gpcp_transfer_cf_df=(
-        e2_pmw_guided_gpcp_transfer_factors
-    ),
-    operational_gpcp_transfer_cf_df=(
-        e2_final_pmw_guided_gpcp_transfer_factors
-    ),
-    pmw_product=PMW8_NAME,
-    gpcp_product=GPCP_DEADJ_NAME,
-    region="Antarctica",
-    calibration_label="2013-2017 validation factors",
-    operational_label="2013-2020 operational factors",
-    pmw_color=PMW_CF_COLOR,
-    gpcp_color=GPCP_CF_COLOR,
-    annotation_decimals=2,
-)
-
-pmw_guided_cf_comparison_plot = os.path.join(
-    path_to_plots,
-    f"E2_PMW_guided_GPCP_correction_factor_stages_"
-    f"2013_2017_vs_2013_2020_{cde_run_dte}.png",
-)
-
-fig.savefig(
-    pmw_guided_cf_comparison_plot,
-    dpi=200,
-    bbox_inches="tight",
-)
-
-plt.show()
-
-print(
-    "Saved PMW-guided correction-factor figure:",
-    pmw_guided_cf_comparison_plot,
-)
-
-#%%
-# =============================================================================
-# SECTION 30. APPLY FROZEN PMW-GUIDED TRANSFER FACTORS TO GPCP
-# =============================================================================
-# Independent-validation application:
-#
-#   de-adjusted GPCP(month) * corrected-PMW-to-GPCP transfer factor(month)
-#
-# Only transfer factors derived during 2013-2017 are used. The resulting full
-# monthly field is retained for reuse, but downstream validation must select
-# only 2018-2020.
-# =============================================================================
-
-GPCP_PMW_GUIDED_CORR_NAME = "GPCP V3.3 PMW-guided corrected"
-
-gpcp_mon_01_e2_pmw_guided_corr = apply_pmw_guided_gpcp_correction(
-    da_gpcp_monthly=gpcp_mon_01_deadjusted,
-    transfer_factor_df=e2_pmw_guided_gpcp_transfer_factors,
-    gpcp_product=GPCP_DEADJ_NAME,
-    ais_mask=AIS_MASK_01,
-    region="Antarctica",
-    time_name="time",
-    lat_name="lat",
-    lon_name="lon",
-    corrected_name=GPCP_PMW_GUIDED_CORR_NAME,
-)
-
-# Stop immediately if an operational/full-period table was accidentally used
-# or if the expected two-stage provenance was not recorded.
-pmw_guided_start_year = gpcp_mon_01_e2_pmw_guided_corr.attrs.get(
-    "correction_period_start_year"
-)
-pmw_guided_end_year = gpcp_mon_01_e2_pmw_guided_corr.attrs.get(
-    "correction_period_end_year"
-)
-pmw_guided_chain = gpcp_mon_01_e2_pmw_guided_corr.attrs.get(
-    "correction_chain"
-)
-
-if (pmw_guided_start_year, pmw_guided_end_year) != (2013, 2017):
-    raise ValueError(
-        "PMW-guided independent validation requires transfer factors derived "
-        "only from 2013-2017; found "
-        f"{pmw_guided_start_year}-{pmw_guided_end_year}"
-    )
-
-if pmw_guided_chain != "PMB -> corrected PMW -> corrected GPCP":
-    raise ValueError(
-        "Unexpected PMW-guided correction provenance: "
-        f"{pmw_guided_chain!r}"
-    )
-
-print("\nPMW-guided GPCP field is ready:")
-print(" Product                  :", gpcp_mon_01_e2_pmw_guided_corr.name)
-print(" Transfer derivation period: 2013-2017")
-print(" Validation period         : 2018-2020")
-print(" Correction chain          :", pmw_guided_chain)
-
-#%%
-# =============================================================================
-# SECTION 31. PMW-GUIDED SCENARIO: INDEPENDENT VALIDATION, 2018-2020
-# =============================================================================
-# Compare:
-#   - ERA5;
-#   - original GPCP and PMW;
-#   - GPCP corrected with frozen 2013-2017 PMW-guided monthly factors;
-#   - PMW corrected with frozen 2013-2017 PMB-derived seasonal factors.
-#
-# PMB is excluded from these validation plots because it supplied the
-# correction parameters. Saved tables retain Antarctica, WAIS, and EAIS; the
-# figures show the AIS-wide result used in the E2 presentation.
-# =============================================================================
-
-PMW8_GUIDED_VALIDATION_CORR_NAME = "GPM PMW V08 seasonal-CF corrected"
-
-e2_pmw_guided_validation_products = {
-    ERA5_NAME: era5_mon_01,
-    GPCP_NAME: gpcp_mon_01,
-    GPCP_PMW_GUIDED_CORR_NAME: gpcp_mon_01_e2_pmw_guided_corr,
-    PMW8_NAME: gpm_pmw_v08_mon_01,
-    PMW8_GUIDED_VALIDATION_CORR_NAME: pmw8_guide_cal_2013_2017,
-}
-
-e2_pmw_guided_product_order = (
-    ERA5_NAME,
-    GPCP_NAME,
-    GPCP_PMW_GUIDED_CORR_NAME,
-    PMW8_NAME,
-    PMW8_GUIDED_VALIDATION_CORR_NAME,
-)
-
-e2_pmw_guided_styles = {
-    ERA5_NAME: {
-        "color": ERA5_COLOR, "marker": "s", "lw": 2.5,
-        "linestyle": "-",
-    },
-    GPCP_NAME: {
-        "color": GPCP_COLOR, "marker": "D", "lw": 2.0,
-        "linestyle": "--", "alpha": 0.60,
-    },
-    GPCP_PMW_GUIDED_CORR_NAME: {
-        "color": GPCP_COLOR, "marker": "o", "lw": 3.0,
-        "linestyle": "-",
-    },
-    PMW8_NAME: {
-        "color": PMW_COLOR, "marker": "X", "lw": 2.0,
-        "linestyle": "--", "alpha": 0.60,
-    },
-    PMW8_GUIDED_VALIDATION_CORR_NAME: {
-        "color": PMW_COLOR, "marker": "^", "lw": 3.0,
-        "linestyle": "-",
-    },
-}
-
-# -----------------------------------------------------------------------------
-# 31.1 Monthly climatology
-# -----------------------------------------------------------------------------
-
-(
-    e2_pmw_guided_validation_monthly_df,
-    e2_pmw_guided_validation_monthly_clim_df,
-) = validation_monthly_climatology_from_fields(
-    product_dict=e2_pmw_guided_validation_products,
-    region_masks=region_masks_01deg,
-    validation_years=VALIDATION_YEARS,
-    lat_name="lat",
-    lon_name="lon",
-    time_name="time",
-)
-
-pmw_guided_validation_monthly_csv = os.path.join(
-    path_to_dfs,
-    f"E2_PMW_guided_validation_monthly_climatology_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_pmw_guided_validation_monthly_clim_df.to_csv(
-    pmw_guided_validation_monthly_csv,
-    index=False,
-)
-
-fig, axes = plot_validation_monthly_climatology_numeric_months(
-    clim_df=e2_pmw_guided_validation_monthly_clim_df,
-    region_order=("Antarctica",),
-    product_order=e2_pmw_guided_product_order,
-    product_styles=e2_pmw_guided_styles,
-    figsize=(10, 5.5),
-    ylabel="mm/month",
-)
-
-pmw_guided_validation_monthly_plot = os.path.join(
-    path_to_plots,
-    f"E2_PMW_guided_validation_monthly_climatology_2018_2020_"
-    f"{cde_run_dte}.png",
-)
-fig.savefig(
-    pmw_guided_validation_monthly_plot,
-    dpi=200,
-    bbox_inches="tight",
-)
-plt.show()
-
-# -----------------------------------------------------------------------------
-# 31.2 Seasonal climatology
-# -----------------------------------------------------------------------------
-
-e2_pmw_guided_regional_monthly_df = (
-    build_all_region_monthly_series_cosine(
-        product_dict=e2_pmw_guided_validation_products,
-        region_masks=region_masks_01deg,
-        lat_name="lat",
-        lon_name="lon",
-        time_name="time",
-    )
-)
-
-(
-    e2_pmw_guided_validation_seasonal_df,
-    e2_pmw_guided_validation_seasonal_clim_df,
-) = validation_seasonal_climatology_from_monthly_df(
-    full_monthly_region_df=e2_pmw_guided_regional_monthly_df,
-    validation_years=VALIDATION_YEARS,
-    require_complete_season=True,
-)
-
-pmw_guided_validation_seasonal_csv = os.path.join(
-    path_to_dfs,
-    f"E2_PMW_guided_validation_seasonal_climatology_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_pmw_guided_validation_seasonal_clim_df.to_csv(
-    pmw_guided_validation_seasonal_csv,
-    index=False,
-)
-
-fig, axes = plot_seasonal_climatology(
-    clim_df=e2_pmw_guided_validation_seasonal_clim_df,
-    region_order=("Antarctica",),
-    product_order=e2_pmw_guided_product_order,
-    product_styles=e2_pmw_guided_styles,
-    figsize=(10, 5.5),
-    ylabel="mm/season",
-    y_nbins=4,
-    legend_ncol=3,
-)
-
-pmw_guided_validation_seasonal_plot = os.path.join(
-    path_to_plots,
-    f"E2_PMW_guided_validation_seasonal_climatology_2018_2020_"
-    f"{cde_run_dte}.png",
-)
-fig.savefig(
-    pmw_guided_validation_seasonal_plot,
-    dpi=200,
-    bbox_inches="tight",
-)
-plt.show()
-
-# -----------------------------------------------------------------------------
-# 31.3 Mean annual precipitation
-# -----------------------------------------------------------------------------
-
-e2_pmw_guided_validation_common_products = {
-    product_name: product_field.sel(time=common_time_validation)
-    for product_name, product_field
-    in e2_pmw_guided_validation_products.items()
-}
-
-(
-    e2_pmw_guided_validation_annual_df,
-    e2_pmw_guided_validation_mean_annual_df,
-) = validation_regional_annual_dataframe(
-    product_dict=e2_pmw_guided_validation_common_products,
-    region_masks=region_masks_01deg,
-    validation_years=VALIDATION_YEARS,
-)
-
-pmw_guided_validation_annual_csv = os.path.join(
-    path_to_dfs,
-    f"E2_PMW_guided_validation_mean_annual_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_pmw_guided_validation_mean_annual_df.to_csv(
-    pmw_guided_validation_annual_csv,
-    index=False,
-)
-
-e2_pmw_guided_bar_colors = {
-    ERA5_NAME: {"color": ERA5_COLOR, "alpha": 1.00},
-    GPCP_NAME: {"color": GPCP_COLOR, "alpha": 0.50},
-    GPCP_PMW_GUIDED_CORR_NAME: {
-        "color": GPCP_COLOR, "alpha": 1.00,
-    },
-    PMW8_NAME: {"color": PMW_COLOR, "alpha": 0.50},
-    PMW8_GUIDED_VALIDATION_CORR_NAME: {
-        "color": PMW_COLOR, "alpha": 1.00,
-    },
-}
-
-fig, ax = plot_regional_mean_annual_bars(
-    df_mean_regional=e2_pmw_guided_validation_mean_annual_df,
-    region_order=("Antarctica",),
-    product_order=e2_pmw_guided_product_order,
-    product_colors=e2_pmw_guided_bar_colors,
-    ylabel="[mm/year]",
-    title="PMW-Guided Independent Validation (2018-2020)",
-    annotate=True,
-    legend_ncol=2,
-)
-
-# Match the monthly-CF annual panel for direct scenario comparison.
-ax.set_ylim(0, 200)
-
-pmw_guided_validation_annual_plot = os.path.join(
-    path_to_plots,
-    f"E2_PMW_guided_validation_mean_annual_2018_2020_"
-    f"{cde_run_dte}.png",
-)
-fig.savefig(
-    pmw_guided_validation_annual_plot,
-    dpi=200,
-    bbox_inches="tight",
-)
-plt.show()
-
-print("\nSaved PMW-guided validation outputs:")
-print(" Monthly plot :", pmw_guided_validation_monthly_plot)
-print(" Seasonal plot:", pmw_guided_validation_seasonal_plot)
-print(" Annual plot  :", pmw_guided_validation_annual_plot)
-print(" Monthly data :", pmw_guided_validation_monthly_csv)
-print(" Seasonal data:", pmw_guided_validation_seasonal_csv)
-print(" Annual data  :", pmw_guided_validation_annual_csv)

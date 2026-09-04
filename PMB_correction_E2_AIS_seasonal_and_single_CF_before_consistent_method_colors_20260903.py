@@ -113,16 +113,6 @@ PMW8_SINGLE_CORR_NAME = "GPM PMW V08 single-CF corrected"
 
 ERA5_NAME = "ERA5"
 
-# Project color system established in slides 91-99. Validation colors identify
-# the dataset; linestyle, marker, and opacity identify correction status.
-ERA5_COLOR = "blue"
-GPCP_COLOR = "orange"
-PMW_COLOR = "green"
-
-# CF-only figures follow the existing slide-93 convention.
-GPCP_CF_COLOR = "tab:blue"
-PMW_CF_COLOR = "tab:orange"
-
 #%%
 # =============================================================================
 # SECTION 5. LOAD RAW PRODUCT DATA
@@ -995,34 +985,34 @@ e2_product_dict_validation_common = {
 product_styles_e2 = {
 
     ERA5_NAME: {
-        "color": ERA5_COLOR,
+        "color": "blue",
         "marker": "s",
         "lw": 2.5,
     },
 
     GPCP_NAME: {
-        "color": GPCP_COLOR,
+        "color": "orange",
         "marker": "D",
         "lw": 2.2,
         "linestyle": "--",
     },
 
     GPCP_CORR_NAME: {
-        "color": GPCP_COLOR,
+        "color": "orange",
         "marker": "o",
         "lw": 3.0,
         "linestyle": "-",
     },
 
     PMW8_NAME: {
-        "color": PMW_COLOR,
+        "color": "green",
         "marker": "s",
         "lw": 2.2,
         "linestyle": "--",
     },
 
     PMW8_CORR_NAME: {
-        "color": PMW_COLOR,
+        "color": "green",
         "marker": "o",
         "lw": 3.0,
         "linestyle": "-",
@@ -1157,26 +1147,26 @@ product_colors_e2 = {
     },
 
     ERA5_NAME: {
-        "color": ERA5_COLOR,
+        "color": "blue",
     },
 
     GPCP_NAME: {
-        "color": GPCP_COLOR,
+        "color": "orange",
         "alpha": 0.50,
     },
 
     GPCP_CORR_NAME: {
-        "color": GPCP_COLOR,
+        "color": "orange",
         "alpha": 1.00,
     },
 
     PMW8_NAME: {
-        "color": PMW_COLOR,
+        "color": "green",
         "alpha": 0.50,
     },
 
     PMW8_CORR_NAME: {
-        "color": PMW_COLOR,
+        "color": "green",
         "alpha": 1.00,
     },
 }
@@ -1798,11 +1788,11 @@ ais_annual_df = ais_annual_df.sort_values("product")
 
 colors = [
     # "black",
-    ERA5_COLOR,
-    GPCP_COLOR,
-    GPCP_COLOR,
-    PMW_COLOR,
-    PMW_COLOR,
+    "blue",
+    "orange",
+    "orange",
+    "green",
+    "green",
 ]
 
 alphas = [
@@ -1955,35 +1945,22 @@ print("\nFinal 2013-2020 seasonal correction factors:")
 print_correction_factor_summary(e2_final_seasonal_correction_factors)
 print("Saved final factors:", final_seasonal_cf_file)
 
-#%%
-# =============================================================================
-# SECTION 21_B. SEASONAL-CF SCENARIO: DEDICATED CF PLOT
-# =============================================================================
-# The solid lines and printed values are the final 2013-2020 operational CFs.
-# Dashed lines show the 2013-2017 factors used for independent validation.
-# =============================================================================
+# fig, ax = plot_e2_seasonal_cf_period_comparison(
+#     calibration_cf_df=e2_correction_factors_labeled,
+#     final_cf_df=e2_final_seasonal_correction_factors,
+#     product_order=(GPCP_DEADJ_NAME, PMW8_NAME),
+#     product_colors={
+#         GPCP_DEADJ_NAME: "tab:orange",
+#         PMW8_NAME: "tab:green",
+#     },
+# )
 
-fig, ax = plot_seasonal_cf_comparison(
-    calibration_cf_df=e2_correction_factors_labeled,
-    operational_cf_df=e2_final_seasonal_correction_factors,
-    product_order=(GPCP_DEADJ_NAME, PMW8_NAME),
-    product_labels={
-        GPCP_DEADJ_NAME: "GPCP V3.3 / 1.4",
-        PMW8_NAME: "GPM PMW V08",
-    },
-    product_colors={
-        GPCP_DEADJ_NAME: GPCP_CF_COLOR,
-        PMW8_NAME: PMW_CF_COLOR,
-    },
-)
-
-seasonal_only_cf_plot = os.path.join(
-    path_to_plots,
-    f"E2_seasonal_CF_2013_2017_vs_2013_2020_{cde_run_dte}.png",
-)
-fig.savefig(seasonal_only_cf_plot, dpi=200, bbox_inches="tight")
-plt.show()
-print("Saved seasonal-CF scenario plot:", seasonal_only_cf_plot)
+# seasonal_cf_comparison_plot = os.path.join(
+#     path_to_plots,
+#     f"E2_seasonal_CF_2013_2017_vs_2013_2020_{cde_run_dte}.png",
+# )
+# fig.savefig(seasonal_cf_comparison_plot, dpi=200, bbox_inches="tight")
+# # plt.close(fig)
 
 #%%
 # =============================================================================
@@ -2062,7 +2039,7 @@ print("Saved single factors:", single_cf_file)
 
 #%%
 # =============================================================================
-# SECTION 22_A. COMBINED CF DIAGNOSTIC (NOT THE SCENARIO SLIDE FIGURE)
+# SECTION 22_A. PLOT ALL EIGHT CORRECTION-FACTOR SCENARIOS
 # =============================================================================
 # Seasonal curves:
 #   - 2013-2017 calibration factors used for seasonal-CF validation
@@ -2088,8 +2065,8 @@ fig, ax = plot_e2_seasonal_cf_period_comparison(
     ),
 
     product_colors={
-        GPCP_DEADJ_NAME: GPCP_CF_COLOR,
-        PMW8_NAME: PMW_CF_COLOR,
+        GPCP_DEADJ_NAME: "tab:orange",
+        PMW8_NAME: "tab:green",
     },
 
     calibration_label="2013-2017 calibration",
@@ -2115,40 +2092,6 @@ print(
     "Saved eight-scenario CF plot:",
     seasonal_cf_comparison_plot,
 )
-
-#%%
-# =============================================================================
-# SECTION 22_B. SINGLE YEAR-ROUND CF SCENARIO: BAR PLOT
-# =============================================================================
-# This is the dedicated CF figure for the single-CF scenario. Lighter bars are
-# the 2013-2017 factors used in independent validation; solid bars are the final
-# 2013-2020 operational factors intended for delivery.
-# =============================================================================
-
-fig, ax = plot_single_cf_bar_comparison(
-    calibration_cf_df=e2_single_correction_factors,
-    operational_cf_df=e2_final_single_correction_factors,
-    product_order=(GPCP_DEADJ_NAME, PMW8_NAME),
-    product_labels={
-        GPCP_DEADJ_NAME: "GPCP V3.3 / 1.4",
-        PMW8_NAME: "GPM PMW V08",
-    },
-    product_colors={
-        GPCP_DEADJ_NAME: GPCP_CF_COLOR,
-        PMW8_NAME: PMW_CF_COLOR,
-    },
-    calibration_label="2013-2017 validation factor",
-    operational_label="2013-2020 operational factor",
-)
-
-single_cf_bar_plot = os.path.join(
-    path_to_plots,
-    f"E2_single_AIS_CF_bar_2013_2017_vs_2013_2020_{cde_run_dte}.png",
-)
-fig.savefig(single_cf_bar_plot, dpi=200, bbox_inches="tight")
-plt.show()
-print("Saved single-CF scenario bar plot:", single_cf_bar_plot)
-
 #%%
 # =============================================================================
 # SECTION 23. APPLY SINGLE CF TO THE MONTHLY GRIDDED PRODUCTS
@@ -2175,27 +2118,29 @@ gpm_pmw_v08_mon_01_e2_single_corr = apply_e2_single_ais_correction(
 
 #%%
 # =============================================================================
-# SECTION 24. SINGLE-CF SCENARIO: MONTHLY VALIDATION
+# SECTION 24. MONTHLY EFFECT OF SINGLE-CF VERSUS SEASONAL-CF CORRECTION
 # =============================================================================
 # Validation uses 2018-2020 only. PMB is intentionally absent from this plot:
 # it supplied the calibration factors, while ERA5 is shown as the independent
-# comparison dataset. The seasonal-CF curves are deliberately excluded because
-# they belong to a separate scenario and have their own validation figures.
+# comparison dataset. Separate product panels prevent seven overlapping curves
+# from obscuring the change in monthly pattern.
 # =============================================================================
 
-e2_single_cf_monthly_products = {
+e2_cf_method_comparison_products = {
     ERA5_NAME: era5_mon_01,
     GPCP_NAME: gpcp_mon_01,
     GPCP_SINGLE_CORR_NAME: gpcp_mon_01_e2_single_corr,
+    GPCP_CORR_NAME: gpcp_mon_01_e2_corr,
     PMW8_NAME: gpm_pmw_v08_mon_01,
     PMW8_SINGLE_CORR_NAME: gpm_pmw_v08_mon_01_e2_single_corr,
+    PMW8_CORR_NAME: gpm_pmw_v08_mon_01_e2_corr,
 }
 
 (
-    e2_single_cf_validation_monthly_df,
-    e2_single_cf_validation_monthly_clim_df,
+    e2_cf_method_validation_monthly_df,
+    e2_cf_method_validation_monthly_clim_df,
 ) = validation_monthly_climatology_from_fields(
-    product_dict=e2_single_cf_monthly_products,
+    product_dict=e2_cf_method_comparison_products,
     region_masks=region_masks_01deg,
     validation_years=VALIDATION_YEARS,
     lat_name="lat",
@@ -2205,42 +2150,42 @@ e2_single_cf_monthly_products = {
 
 monthly_comparison_csv = os.path.join(
     path_to_dfs,
-    f"E2_single_CF_monthly_validation_2018_2020_{cde_run_dte}.csv",
+    f"E2_single_vs_seasonal_CF_monthly_validation_2018_2020_{cde_run_dte}.csv",
 )
-e2_single_cf_validation_monthly_clim_df.to_csv(
+e2_cf_method_validation_monthly_clim_df.to_csv(
     monthly_comparison_csv,
     index=False,
 )
 
 fig, axes = plot_e2_single_vs_seasonal_monthly_climatology(
-    monthly_clim_df=e2_single_cf_validation_monthly_clim_df,
+    monthly_clim_df=e2_cf_method_validation_monthly_clim_df,
     product_panels={
         "GPCP V3.3": {
             "original": GPCP_NAME,
             "single": GPCP_SINGLE_CORR_NAME,
-            "color": GPCP_COLOR,
+            "seasonal": GPCP_CORR_NAME,
         },
         "GPM PMW V08": {
             "original": PMW8_NAME,
             "single": PMW8_SINGLE_CORR_NAME,
-            "color": PMW_COLOR,
+            "seasonal": PMW8_CORR_NAME,
         },
     },
     era5_product=ERA5_NAME,
     region="Antarctica",
-    include_seasonal=False,
 )
 
 monthly_comparison_plot = os.path.join(
     path_to_plots,
-    f"E2_single_CF_monthly_validation_2018_2020_{cde_run_dte}.png",
+    f"E2_single_vs_seasonal_CF_monthly_validation_2018_2020_{cde_run_dte}.png",
 )
 fig.savefig(monthly_comparison_plot, dpi=200, bbox_inches="tight")
 # plt.close(fig)
 
-print("\nSaved single-CF monthly validation outputs:")
-print("  Monthly plot:", monthly_comparison_plot)
-print("  Monthly values:", monthly_comparison_csv)
+print("\nSaved new E2 outputs:")
+print("  Seasonal-period comparison:", seasonal_cf_comparison_plot)
+print("  Single-vs-seasonal monthly comparison:", monthly_comparison_plot)
+print("  Monthly comparison values:", monthly_comparison_csv)
 
 #%%
 # =============================================================================
@@ -2269,23 +2214,23 @@ e2_single_cf_product_order = (
 
 e2_single_cf_styles = {
     ERA5_NAME: {
-        "color": ERA5_COLOR, "marker": "s", "lw": 2.5,
+        "color": "blue", "marker": "s", "lw": 2.5,
         "linestyle": "-",
     },
     GPCP_NAME: {
-        "color": GPCP_COLOR, "marker": "D", "lw": 2.0,
+        "color": "tab:orange", "marker": "D", "lw": 2.0,
         "linestyle": "--", "alpha": 0.60,
     },
     GPCP_SINGLE_CORR_NAME: {
-        "color": GPCP_COLOR, "marker": "o", "lw": 3.0,
+        "color": "tab:orange", "marker": "o", "lw": 3.0,
         "linestyle": "-",
     },
     PMW8_NAME: {
-        "color": PMW_COLOR, "marker": "X", "lw": 2.0,
+        "color": "tab:green", "marker": "D", "lw": 2.0,
         "linestyle": "--", "alpha": 0.60,
     },
     PMW8_SINGLE_CORR_NAME: {
-        "color": PMW_COLOR, "marker": "^", "lw": 3.0,
+        "color": "tab:green", "marker": "o", "lw": 3.0,
         "linestyle": "-",
     },
 }
@@ -2367,11 +2312,11 @@ e2_single_cf_validation_mean_annual_df.to_csv(
 )
 
 e2_single_cf_bar_colors = {
-    ERA5_NAME: {"color": ERA5_COLOR, "alpha": 1.00},
-    GPCP_NAME: {"color": GPCP_COLOR, "alpha": 0.50},
-    GPCP_SINGLE_CORR_NAME: {"color": GPCP_COLOR, "alpha": 1.00},
-    PMW8_NAME: {"color": PMW_COLOR, "alpha": 0.50},
-    PMW8_SINGLE_CORR_NAME: {"color": PMW_COLOR, "alpha": 1.00},
+    ERA5_NAME: {"color": "blue", "alpha": 1.00},
+    GPCP_NAME: {"color": "tab:orange", "alpha": 0.50},
+    GPCP_SINGLE_CORR_NAME: {"color": "tab:orange", "alpha": 1.00},
+    PMW8_NAME: {"color": "tab:green", "alpha": 0.50},
+    PMW8_SINGLE_CORR_NAME: {"color": "tab:green", "alpha": 1.00},
 }
 
 fig, ax = plot_regional_mean_annual_bars(
@@ -2542,8 +2487,8 @@ fig, axes = plot_monthly_climatological_cf_comparison(
         PMW8_NAME,
     ),
     product_colors={
-        GPCP_DEADJ_NAME: GPCP_CF_COLOR,
-        PMW8_NAME: PMW_CF_COLOR,
+        GPCP_DEADJ_NAME: "tab:orange",
+        PMW8_NAME: "tab:green",
     },
     calibration_label="2013-2017 validation factors",
     operational_label="2013-2020 operational factors",
@@ -2668,23 +2613,23 @@ e2_monthly_cf_product_order = (
 
 e2_monthly_cf_styles = {
     ERA5_NAME: {
-        "color": ERA5_COLOR, "marker": "s", "lw": 2.5,
+        "color": "blue", "marker": "s", "lw": 2.5,
         "linestyle": "-",
     },
     GPCP_NAME: {
-        "color": GPCP_COLOR, "marker": "D", "lw": 2.0,
+        "color": "tab:orange", "marker": "D", "lw": 2.0,
         "linestyle": "--", "alpha": 0.60,
     },
     GPCP_MONTHLY_CORR_NAME: {
-        "color": GPCP_COLOR, "marker": "o", "lw": 3.0,
+        "color": "tab:orange", "marker": "o", "lw": 3.0,
         "linestyle": "-",
     },
     PMW8_NAME: {
-        "color": PMW_COLOR, "marker": "X", "lw": 2.0,
+        "color": "tab:green", "marker": "D", "lw": 2.0,
         "linestyle": "--", "alpha": 0.60,
     },
     PMW8_MONTHLY_CORR_NAME: {
-        "color": PMW_COLOR, "marker": "^", "lw": 3.0,
+        "color": "tab:green", "marker": "o", "lw": 3.0,
         "linestyle": "-",
     },
 }
@@ -2814,11 +2759,11 @@ e2_monthly_cf_validation_mean_annual_df.to_csv(
 )
 
 e2_monthly_cf_bar_colors = {
-    ERA5_NAME: {"color": ERA5_COLOR, "alpha": 1.00},
-    GPCP_NAME: {"color": GPCP_COLOR, "alpha": 0.50},
-    GPCP_MONTHLY_CORR_NAME: {"color": GPCP_COLOR, "alpha": 1.00},
-    PMW8_NAME: {"color": PMW_COLOR, "alpha": 0.50},
-    PMW8_MONTHLY_CORR_NAME: {"color": PMW_COLOR, "alpha": 1.00},
+    ERA5_NAME: {"color": "blue", "alpha": 1.00},
+    GPCP_NAME: {"color": "tab:orange", "alpha": 0.50},
+    GPCP_MONTHLY_CORR_NAME: {"color": "tab:orange", "alpha": 1.00},
+    PMW8_NAME: {"color": "tab:green", "alpha": 0.50},
+    PMW8_MONTHLY_CORR_NAME: {"color": "tab:green", "alpha": 1.00},
 }
 
 fig, ax = plot_regional_mean_annual_bars(
@@ -3123,8 +3068,8 @@ fig, axes = plot_pmw_guided_cf_comparison(
     region="Antarctica",
     calibration_label="2013-2017 validation factors",
     operational_label="2013-2020 operational factors",
-    pmw_color=PMW_CF_COLOR,
-    gpcp_color=GPCP_CF_COLOR,
+    pmw_color="tab:green",
+    gpcp_color="tab:orange",
     annotation_decimals=2,
 )
 
@@ -3240,23 +3185,23 @@ e2_pmw_guided_product_order = (
 
 e2_pmw_guided_styles = {
     ERA5_NAME: {
-        "color": ERA5_COLOR, "marker": "s", "lw": 2.5,
+        "color": "blue", "marker": "s", "lw": 2.5,
         "linestyle": "-",
     },
     GPCP_NAME: {
-        "color": GPCP_COLOR, "marker": "D", "lw": 2.0,
+        "color": "tab:orange", "marker": "D", "lw": 2.0,
         "linestyle": "--", "alpha": 0.60,
     },
     GPCP_PMW_GUIDED_CORR_NAME: {
-        "color": GPCP_COLOR, "marker": "o", "lw": 3.0,
+        "color": "tab:orange", "marker": "o", "lw": 3.0,
         "linestyle": "-",
     },
     PMW8_NAME: {
-        "color": PMW_COLOR, "marker": "X", "lw": 2.0,
+        "color": "tab:green", "marker": "D", "lw": 2.0,
         "linestyle": "--", "alpha": 0.60,
     },
     PMW8_GUIDED_VALIDATION_CORR_NAME: {
-        "color": PMW_COLOR, "marker": "^", "lw": 3.0,
+        "color": "tab:green", "marker": "o", "lw": 3.0,
         "linestyle": "-",
     },
 }
@@ -3394,14 +3339,14 @@ e2_pmw_guided_validation_mean_annual_df.to_csv(
 )
 
 e2_pmw_guided_bar_colors = {
-    ERA5_NAME: {"color": ERA5_COLOR, "alpha": 1.00},
-    GPCP_NAME: {"color": GPCP_COLOR, "alpha": 0.50},
+    ERA5_NAME: {"color": "blue", "alpha": 1.00},
+    GPCP_NAME: {"color": "tab:orange", "alpha": 0.50},
     GPCP_PMW_GUIDED_CORR_NAME: {
-        "color": GPCP_COLOR, "alpha": 1.00,
+        "color": "tab:orange", "alpha": 1.00,
     },
-    PMW8_NAME: {"color": PMW_COLOR, "alpha": 0.50},
+    PMW8_NAME: {"color": "tab:green", "alpha": 0.50},
     PMW8_GUIDED_VALIDATION_CORR_NAME: {
-        "color": PMW_COLOR, "alpha": 1.00,
+        "color": "tab:green", "alpha": 1.00,
     },
 }
 

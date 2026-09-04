@@ -7476,82 +7476,6 @@ def plot_e2_single_vs_seasonal_monthly_climatology(
     The color remains fixed by product while line and marker styles distinguish
     correction methods. ERA5 is shown in both panels as a comparison dataset.
     """
-    region_df = monthly_clim_df[monthly_clim_df["region"] == region]
-
-    # Standalone single-CF scenario: use one common axis so GPCP and PMW can be
-    # compared directly, matching the monthly, seasonal, and guided scenarios.
-    if not include_seasonal:
-        fig, ax = plt.subplots(figsize=(9.5, 5.8), dpi=150)
-
-        era5_selected = (
-            region_df[region_df["product"] == era5_product]
-            .sort_values("month")
-        )
-        if len(era5_selected) != 12:
-            raise ValueError(
-                f"Expected 12 monthly climatology rows for {era5_product!r}; "
-                f"found {len(era5_selected)}"
-            )
-        ax.plot(
-            era5_selected["month"],
-            era5_selected[value_col],
-            color="blue",
-            linestyle="-",
-            marker="s",
-            linewidth=2.4,
-            markersize=5,
-            label="ERA5",
-        )
-
-        for panel_title, names in product_panels.items():
-            for role, linestyle, marker, suffix in (
-                ("original", "--", "D", ""),
-                ("single", "-", "o", " corrected"),
-            ):
-                product_name = names[role]
-                selected = (
-                    region_df[region_df["product"] == product_name]
-                    .sort_values("month")
-                )
-                if len(selected) != 12:
-                    raise ValueError(
-                        f"Expected 12 monthly climatology rows for "
-                        f"{product_name!r}; found {len(selected)}"
-                    )
-                ax.plot(
-                    selected["month"],
-                    selected[value_col],
-                    color=names["color"],
-                    linestyle=linestyle,
-                    marker=marker,
-                    linewidth=2.4,
-                    markersize=5,
-                    label=f"{panel_title}{suffix}",
-                )
-
-        ax.set_xlabel("Month", fontsize=12, fontweight="bold")
-        ax.set_ylabel(
-            "Precipitation [mm month$^{-1}$]",
-            fontsize=12,
-            fontweight="bold",
-        )
-        ax.set_xticks(np.arange(1, 13))
-        ax.grid(True, alpha=0.25)
-        ax.set_title(
-            "AIS Monthly Climatology:\nIndependent Validation Period (2018-2020)",
-            fontsize=15,
-            fontweight="bold",
-        )
-        ax.legend(
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.16),
-            ncol=3,
-            frameon=False,
-            fontsize=9,
-        )
-        fig.subplots_adjust(bottom=0.25)
-        return fig, np.asarray([ax])
-
     n_panels = len(product_panels)
     fig, axes = plt.subplots(1, n_panels, figsize=figsize, dpi=150, sharey=True)
     axes = np.atleast_1d(axes)
@@ -7562,6 +7486,8 @@ def plot_e2_single_vs_seasonal_monthly_climatology(
         "single": {"linestyle": "--", "marker": "^"},
         "seasonal": {"linestyle": "-", "marker": "o"},
     }
+
+    region_df = monthly_clim_df[monthly_clim_df["region"] == region]
 
     for ax, (panel_title, names) in zip(axes, product_panels.items()):
         plot_names = {

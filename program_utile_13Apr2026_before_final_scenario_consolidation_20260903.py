@@ -7465,93 +7465,14 @@ def plot_e2_single_vs_seasonal_monthly_climatology(
     region="Antarctica",
     value_col="precipitation",
     figsize=(12, 5),
-    include_seasonal=True,
 ):
     """Compare original, single-CF, and seasonal-CF monthly climatologies.
 
     ``product_panels`` is a mapping whose keys are panel titles and whose values
-    contain ``original``, ``single``, the product ``color``, and optionally
-    ``seasonal``. Set ``include_seasonal=False`` for the standalone single-CF
-    scenario so that results from the seasonal-CF scenario are not mixed in.
+    contain ``original``, ``single``, ``seasonal``, and the product ``color``.
     The color remains fixed by product while line and marker styles distinguish
     correction methods. ERA5 is shown in both panels as a comparison dataset.
     """
-    region_df = monthly_clim_df[monthly_clim_df["region"] == region]
-
-    # Standalone single-CF scenario: use one common axis so GPCP and PMW can be
-    # compared directly, matching the monthly, seasonal, and guided scenarios.
-    if not include_seasonal:
-        fig, ax = plt.subplots(figsize=(9.5, 5.8), dpi=150)
-
-        era5_selected = (
-            region_df[region_df["product"] == era5_product]
-            .sort_values("month")
-        )
-        if len(era5_selected) != 12:
-            raise ValueError(
-                f"Expected 12 monthly climatology rows for {era5_product!r}; "
-                f"found {len(era5_selected)}"
-            )
-        ax.plot(
-            era5_selected["month"],
-            era5_selected[value_col],
-            color="blue",
-            linestyle="-",
-            marker="s",
-            linewidth=2.4,
-            markersize=5,
-            label="ERA5",
-        )
-
-        for panel_title, names in product_panels.items():
-            for role, linestyle, marker, suffix in (
-                ("original", "--", "D", ""),
-                ("single", "-", "o", " corrected"),
-            ):
-                product_name = names[role]
-                selected = (
-                    region_df[region_df["product"] == product_name]
-                    .sort_values("month")
-                )
-                if len(selected) != 12:
-                    raise ValueError(
-                        f"Expected 12 monthly climatology rows for "
-                        f"{product_name!r}; found {len(selected)}"
-                    )
-                ax.plot(
-                    selected["month"],
-                    selected[value_col],
-                    color=names["color"],
-                    linestyle=linestyle,
-                    marker=marker,
-                    linewidth=2.4,
-                    markersize=5,
-                    label=f"{panel_title}{suffix}",
-                )
-
-        ax.set_xlabel("Month", fontsize=12, fontweight="bold")
-        ax.set_ylabel(
-            "Precipitation [mm month$^{-1}$]",
-            fontsize=12,
-            fontweight="bold",
-        )
-        ax.set_xticks(np.arange(1, 13))
-        ax.grid(True, alpha=0.25)
-        ax.set_title(
-            "AIS Monthly Climatology:\nIndependent Validation Period (2018-2020)",
-            fontsize=15,
-            fontweight="bold",
-        )
-        ax.legend(
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.16),
-            ncol=3,
-            frameon=False,
-            fontsize=9,
-        )
-        fig.subplots_adjust(bottom=0.25)
-        return fig, np.asarray([ax])
-
     n_panels = len(product_panels)
     fig, axes = plt.subplots(1, n_panels, figsize=figsize, dpi=150, sharey=True)
     axes = np.atleast_1d(axes)
@@ -7563,14 +7484,15 @@ def plot_e2_single_vs_seasonal_monthly_climatology(
         "seasonal": {"linestyle": "-", "marker": "o"},
     }
 
+    region_df = monthly_clim_df[monthly_clim_df["region"] == region]
+
     for ax, (panel_title, names) in zip(axes, product_panels.items()):
         plot_names = {
             "ERA5": era5_product,
             "original": names["original"],
             "single": names["single"],
+            "seasonal": names["seasonal"],
         }
-        if include_seasonal:
-            plot_names["seasonal"] = names["seasonal"]
         for role, product_name in plot_names.items():
             selected = (
                 region_df[region_df["product"] == product_name]
@@ -7795,84 +7717,6 @@ def plot_monthly_climatological_cf_comparison(
 # =============================================================================
 # E2 SINGLE-CF SCENARIO: CORRECTION-FACTOR BAR PLOT
 # =============================================================================
-
-
-def plot_seasonal_cf_comparison(
-    calibration_cf_df,
-    operational_cf_df,
-    product_order,
-    product_labels,
-    product_colors,
-    calibration_label="2013-2017 validation factors",
-    operational_label="2013-2020 operational factors",
-    region="Antarctica",
-    season_order=("DJF", "MAM", "JJA", "SON"),
-    figsize=(9.5, 5.8),
-    annotation_decimals=2,
-):
-    """Plot seasonal validation and operational CFs without other scenarios."""
-    fig, ax = plt.subplots(figsize=figsize, dpi=150)
-    x_positions = np.arange(len(season_order), dtype=float)
-
-    for product in product_order:
-        color = product_colors[product]
-        display_name = product_labels[product]
-
-        for frame, period_label, linestyle, marker, alpha in (
-            (calibration_cf_df, calibration_label, "--", "o", 0.65),
-            (operational_cf_df, operational_label, "-", "s", 1.00),
-        ):
-            selected = frame[
-                (frame["region"] == region)
-                & (frame["product"] == product)
-            ].set_index("season").reindex(season_order)
-
-            values = selected["correction_factor"].to_numpy(dtype=float)
-            if len(values) != len(season_order) or not np.all(np.isfinite(values)):
-                raise ValueError(
-                    f"Missing or invalid seasonal CFs for {product!r}, {period_label}"
-                )
-
-            ax.plot(
-                x_positions,
-                values,
-                color=color,
-                linestyle=linestyle,
-                marker=marker,
-                linewidth=2.3,
-                markersize=6,
-                alpha=alpha,
-                label=f"{display_name} — {period_label}",
-            )
-
-            if frame is operational_cf_df:
-                for x_value, y_value in zip(x_positions, values):
-                    ax.annotate(
-                        f"{y_value:.{annotation_decimals}f}",
-                        (x_value, y_value),
-                        xytext=(0, 7),
-                        textcoords="offset points",
-                        ha="center",
-                        fontsize=8,
-                        color=color,
-                    )
-
-    ax.axhline(1.0, color="0.35", linestyle=":", linewidth=1.4)
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(season_order, fontweight="bold")
-    ax.set_xlabel("Season", fontweight="bold")
-    ax.set_ylabel("PMB correction factor", fontweight="bold")
-    ax.set_title("AIS Seasonal Correction Factors", fontweight="bold")
-    ax.grid(True, axis="y", alpha=0.25)
-    ax.legend(
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.16),
-        ncol=2,
-        frameon=False,
-        fontsize=9,
-    )
-    fig.subplots_adjust(bottom=0.28)
-    return fig, ax
 
 
 def plot_single_cf_bar_comparison(
