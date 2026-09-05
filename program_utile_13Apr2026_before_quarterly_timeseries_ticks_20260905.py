@@ -6684,56 +6684,6 @@ def derive_monthly_climatological_correction_factors(
 
 # =============================================================================
 
-def derive_guide_gpcp_transfer_factors(
-    monthly_region_df,
-    period_years,
-    corrected_guide_product,
-    gpcp_product,
-    guide_type,
-    regions=("Antarctica",),
-    months=tuple(range(1, 13)),
-    time_col="time",
-    value_col="precipitation",
-):
-    """Derive monthly factors that transfer a corrected guide to GPCP.
-
-    This generic implementation supports both the multi-family PMW guide and
-    the SSMIS F17 operational-candidate guide while preserving exact timestamp
-    pairing and explicit provenance.
-    """
-    if corrected_guide_product == gpcp_product:
-        raise ValueError(
-            "corrected_guide_product and gpcp_product must be different"
-        )
-    if not str(guide_type).strip():
-        raise ValueError("guide_type must be a non-empty descriptive label")
-
-    transfer_df = derive_monthly_climatological_correction_factors(
-        monthly_region_df=monthly_region_df,
-        period_years=period_years,
-        reference_product=corrected_guide_product,
-        target_products=(gpcp_product,),
-        regions=regions,
-        months=months,
-        time_col=time_col,
-        value_col=value_col,
-    ).copy()
-
-    transfer_df["guide_type"] = str(guide_type)
-    transfer_df["guide_product"] = corrected_guide_product
-    transfer_df["target_product"] = gpcp_product
-    transfer_df["correction_method"] = (
-        f"monthly {guide_type} to de-adjusted-GPCP transfer"
-    )
-    transfer_df["corrected_guide_mean"] = transfer_df["reference_mean"]
-    transfer_df["gpcp_mean"] = transfer_df["product_mean"]
-    transfer_df["transfer_factor"] = transfer_df["correction_factor"]
-    return transfer_df
-
-
-# =============================================================================
-
-
 def derive_pmw_guided_gpcp_transfer_factors(
     monthly_region_df,
     period_years,
@@ -6975,88 +6925,6 @@ def apply_monthly_climatological_correction(
 
 # =============================================================================
 
-def apply_guide_gpcp_correction(
-    da_gpcp_monthly,
-    transfer_factor_df,
-    gpcp_product,
-    ais_mask,
-    guide_type,
-    region="Antarctica",
-    time_name="time",
-    lat_name="lat",
-    lon_name="lon",
-    corrected_name=None,
-):
-    """Apply frozen monthly transfer factors from a corrected guide to GPCP."""
-    required_columns = {
-        "product", "guide_product", "target_product",
-        "correction_factor", "transfer_factor",
-    }
-    missing_columns = required_columns.difference(transfer_factor_df.columns)
-    if missing_columns:
-        raise ValueError(
-            "transfer_factor_df is missing guided-correction columns: "
-            f"{sorted(missing_columns)}"
-        )
-
-    selected = transfer_factor_df[
-        (transfer_factor_df["region"] == region)
-        & (transfer_factor_df["product"] == gpcp_product)
-    ]
-    if selected.empty:
-        raise ValueError(
-            f"No guided transfer factors found for {gpcp_product!r}, {region!r}"
-        )
-    if not (selected["target_product"] == gpcp_product).all():
-        raise ValueError("Transfer-factor target does not match gpcp_product")
-    if not np.allclose(
-        selected["correction_factor"].astype(float),
-        selected["transfer_factor"].astype(float),
-        equal_nan=True,
-    ):
-        raise ValueError(
-            "correction_factor and transfer_factor columns are inconsistent"
-        )
-
-    guide_products = selected["guide_product"].dropna().unique()
-    if len(guide_products) != 1:
-        raise ValueError(
-            "Expected exactly one corrected guide product; found "
-            f"{guide_products.tolist()}"
-        )
-
-    corrected = apply_monthly_climatological_correction(
-        da_monthly=da_gpcp_monthly,
-        correction_factor_df=transfer_factor_df,
-        product_name=gpcp_product,
-        ais_mask=ais_mask,
-        region=region,
-        time_name=time_name,
-        lat_name=lat_name,
-        lon_name=lon_name,
-        corrected_name=(
-            corrected_name or f"{gpcp_product}_{guide_type}_guided_corrected"
-        ),
-    )
-    corrected.attrs.update({
-        "correction_experiment": f"E2 {guide_type}-guided GPCP monthly CF",
-        "correction_reference": str(guide_products[0]),
-        "correction_method": (
-            f"12 calendar-month transfer factors from PMB-corrected "
-            f"{guide_type} to de-adjusted GPCP"
-        ),
-        "correction_target_product": gpcp_product,
-        "correction_chain": (
-            f"PMB -> corrected {guide_type} -> corrected GPCP"
-        ),
-        "correction_region": region,
-    })
-    return corrected
-
-
-# =============================================================================
-
-
 def apply_pmw_guided_gpcp_correction(
     da_gpcp_monthly,
     transfer_factor_df,
@@ -7186,8 +7054,6 @@ def plot_pmw_guided_cf_comparison(
     gpcp_color="tab:orange",
     figsize=(13, 5.8),
     annotation_decimals=2,
-    guide_short_name="PMW",
-    figure_title="AIS PMB-Corrected-PMW-Guided GPCP Correction Factors",
 ):
     """Plot both stages of the PMB-corrected-PMW-guided GPCP scenario.
 
@@ -7269,14 +7135,14 @@ def plot_pmw_guided_cf_comparison(
             axes[0], np.arange(4), season_order, seasonal_calibration,
             seasonal_operational, pmw_color,
             f"PMB to {pmw_product}\nSeasonal correction factors", "Season",
-            f"PMB-to-{guide_short_name} seasonal correction factor",
+            "PMB-to-PMW seasonal correction factor",
         ),
         (
             axes[1], month_order, month_order, transfer_calibration,
             transfer_operational, gpcp_color,
             f"Corrected {pmw_product} to {gpcp_product}\nMonthly transfer factors",
             "Month",
-            f"Corrected-{guide_short_name}-to-GPCP monthly transfer factor",
+            "Corrected-PMW-to-GPCP monthly transfer factor",
         ),
     )
 
@@ -7315,7 +7181,10 @@ def plot_pmw_guided_cf_comparison(
         ax.grid(True, alpha=0.25)
         ax.legend(frameon=False, fontsize=8.2, loc="best")
 
-    fig.suptitle(figure_title, fontsize=15, fontweight="bold")
+    fig.suptitle(
+        "AIS PMB-Corrected-PMW-Guided GPCP Correction Factors",
+        fontsize=15, fontweight="bold",
+    )
     fig.tight_layout()
     return fig, axes
 
@@ -8900,8 +8769,6 @@ def plot_monthly_validation_timeseries(
     legend_ncol=3,
 ):
     """Plot chronological monthly validation estimates on one common axis."""
-    import matplotlib.dates as mdates
-
     selected_region = monthly_region_df[
         monthly_region_df["region"] == region
     ].copy()
@@ -8930,19 +8797,6 @@ def plot_monthly_validation_timeseries(
     ax.set_xlabel("Month", fontsize=12, fontweight="bold")
     ax.set_ylabel(ylabel, fontsize=12, fontweight="bold")
     ax.set_title(title, fontsize=15, fontweight="bold")
-    # Quarterly ticks retain seasonal orientation without crowding the
-    # 36-month validation record. Restrict limits to observed months so an
-    # automatic January 2021 tick is not added beyond the validation period.
-    time_min = selected_region[time_col].min()
-    time_max = selected_region[time_col].max()
-    ax.set_xlim(time_min, time_max)
-    ax.xaxis.set_major_locator(
-        mdates.MonthLocator(bymonth=(1, 4, 7, 10))
-    )
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%Y"))
-    ax.tick_params(axis="x", labelrotation=35)
-    for tick_label in ax.get_xticklabels():
-        tick_label.set_horizontalalignment("right")
     ax.grid(True, alpha=0.25)
     ax.legend(
         loc="upper center",
@@ -8951,6 +8805,7 @@ def plot_monthly_validation_timeseries(
         frameon=False,
         fontsize=9,
     )
+    fig.autofmt_xdate(rotation=0)
     fig.subplots_adjust(bottom=0.26)
     return fig, ax
 
