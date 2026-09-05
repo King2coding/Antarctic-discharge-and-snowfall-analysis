@@ -3560,16 +3560,15 @@ e2_pmw_guided_validation_metrics.to_csv(
 
 print("\nScenario 4 monthly metrics against ERA5 (2018-2020):")
 print(
-    e2_pmw_guided_validation_metrics[
+    round(e2_pmw_guided_validation_metrics[
         [
-            "product",
-            "n_common_months",
+            "product",           
             "CC",
             "RMSE_mm_per_month",
             "MAE_mm_per_month",
             "RB_percent",
         ]
-    ].to_string(index=False)
+    ], 2).to_string(index=False)
 )
 
 print("\nSaved PMW-guided validation outputs:")
@@ -4132,7 +4131,7 @@ fig, ax = plot_monthly_validation_timeseries(
     figsize=(12, 5.5),
     ylabel="Precipitation [mm month$^{-1}$]",
     title=(
-        "Scenario 5 Monthly Time Series: "
+        "Monthly Time Series: "
         "Independent Validation (2018-2020)"
     ),
     legend_ncol=3,
@@ -4173,12 +4172,12 @@ e2_f17_guided_validation_metrics.to_csv(
 
 print("\nScenario 5 monthly metrics against ERA5 (2018-2020):")
 print(
-    e2_f17_guided_validation_metrics[
+    round(e2_f17_guided_validation_metrics[
         [
-            "product", "n_common_months", "CC", "RMSE_mm_per_month",
+            "product", "CC", "RMSE_mm_per_month",
             "MAE_mm_per_month", "RB_percent",
         ]
-    ].to_string(index=False)
+    ],2).to_string(index=False)
 )
 print("\nSaved Scenario 5 outputs:")
 print(" CF figure    :", f17_guided_cf_comparison_plot)

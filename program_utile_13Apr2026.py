@@ -8927,7 +8927,7 @@ def plot_monthly_validation_timeseries(
             **style,
         )
 
-    ax.set_xlabel("Month", fontsize=12, fontweight="bold")
+    # ax.set_xlabel("Month", fontsize=12, fontweight="bold")
     ax.set_ylabel(ylabel, fontsize=12, fontweight="bold")
     ax.set_title(title, fontsize=15, fontweight="bold")
     # Quarterly ticks retain seasonal orientation without crowding the
@@ -8940,7 +8940,7 @@ def plot_monthly_validation_timeseries(
         mdates.MonthLocator(bymonth=(1, 4, 7, 10))
     )
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%Y"))
-    ax.tick_params(axis="x", labelrotation=35)
+    ax.tick_params(axis="x", labelrotation=35, labelsize=10)
     for tick_label in ax.get_xticklabels():
         tick_label.set_horizontalalignment("right")
     ax.grid(True, alpha=0.25)
