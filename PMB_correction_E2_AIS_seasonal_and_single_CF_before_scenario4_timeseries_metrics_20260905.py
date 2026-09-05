@@ -3431,101 +3431,10 @@ fig.savefig(
 )
 plt.show()
 
-# -----------------------------------------------------------------------------
-# 31.4 Chronological monthly time series and paired validation metrics
-# -----------------------------------------------------------------------------
-# Unlike the 12-point climatology in Section 31.1, this retains all 36 monthly
-# estimates from January 2018 through December 2020. ERA5 is the independent
-# comparison dataset; PMB remains restricted to correction-factor derivation.
-# -----------------------------------------------------------------------------
-
-pmw_guided_validation_timeseries_csv = os.path.join(
-    path_to_dfs,
-    f"E2_PMW_guided_validation_monthly_timeseries_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_pmw_guided_validation_monthly_df.to_csv(
-    pmw_guided_validation_timeseries_csv,
-    index=False,
-)
-
-fig, ax = plot_monthly_validation_timeseries(
-    monthly_region_df=e2_pmw_guided_validation_monthly_df,
-    region="Antarctica",
-    product_order=e2_pmw_guided_product_order,
-    product_styles=e2_pmw_guided_styles,
-    figsize=(12, 5.5),
-    ylabel="Precipitation [mm month$^{-1}$]",
-    title=(
-        "Scenario 4 Monthly Time Series: "
-        "Independent Validation (2018-2020)"
-    ),
-    legend_ncol=3,
-)
-
-pmw_guided_validation_timeseries_plot = os.path.join(
-    path_to_plots,
-    f"E2_PMW_guided_validation_monthly_timeseries_2018_2020_"
-    f"{cde_run_dte}.png",
-)
-fig.savefig(
-    pmw_guided_validation_timeseries_plot,
-    dpi=200,
-    bbox_inches="tight",
-)
-plt.show()
-
-e2_pmw_guided_validation_metrics = compute_monthly_validation_metrics(
-    monthly_region_df=e2_pmw_guided_validation_monthly_df,
-    reference_product=ERA5_NAME,
-    target_products=(
-        GPCP_NAME,
-        GPCP_PMW_GUIDED_CORR_NAME,
-        PMW8_NAME,
-        PMW8_GUIDED_VALIDATION_CORR_NAME,
-    ),
-    regions=("Antarctica",),
-)
-
-if not (
-    e2_pmw_guided_validation_metrics["n_common_months"] == 36
-).all():
-    raise ValueError(
-        "Scenario 4 metrics require 36 common monthly values per product "
-        "for January 2018 through December 2020."
-    )
-
-pmw_guided_validation_metrics_csv = os.path.join(
-    path_to_dfs,
-    f"E2_PMW_guided_validation_monthly_metrics_vs_ERA5_2018_2020_"
-    f"{cde_run_dte}.csv",
-)
-e2_pmw_guided_validation_metrics.to_csv(
-    pmw_guided_validation_metrics_csv,
-    index=False,
-)
-
-print("\nScenario 4 monthly metrics against ERA5 (2018-2020):")
-print(
-    e2_pmw_guided_validation_metrics[
-        [
-            "product",
-            "n_common_months",
-            "CC",
-            "RMSE_mm_per_month",
-            "MAE_mm_per_month",
-            "RB_percent",
-        ]
-    ].to_string(index=False)
-)
-
 print("\nSaved PMW-guided validation outputs:")
 print(" Monthly plot :", pmw_guided_validation_monthly_plot)
-print(" Time series  :", pmw_guided_validation_timeseries_plot)
 print(" Seasonal plot:", pmw_guided_validation_seasonal_plot)
 print(" Annual plot  :", pmw_guided_validation_annual_plot)
 print(" Monthly data :", pmw_guided_validation_monthly_csv)
-print(" Time data    :", pmw_guided_validation_timeseries_csv)
-print(" Metrics      :", pmw_guided_validation_metrics_csv)
 print(" Seasonal data:", pmw_guided_validation_seasonal_csv)
 print(" Annual data  :", pmw_guided_validation_annual_csv)
