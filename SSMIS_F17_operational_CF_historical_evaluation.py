@@ -144,15 +144,34 @@ GPCP_SEASONAL_CORR_NAME = "GPCP V3.3 seasonal-CF corrected"
 ERA5_COLOR = "blue"
 AIRS_COLOR = "purple"
 GPCP_COLOR = "orange"
+GPCP_MONTHLY_CORR_COLOR = "tab:red"
+GPCP_SEASONAL_CORR_COLOR = "tab:green"
 
 PRODUCT_STYLES = {
-    ERA5_NAME: dict(color=ERA5_COLOR, marker="s", lw=2.4, ls="-"),
-    AIRS_NAME: dict(color=AIRS_COLOR, marker="x", lw=1.8, ls="-."),
-    GPCP_NAME: dict(color=GPCP_COLOR, marker="D", lw=1.6, ls="--", alpha=0.60),
-    GPCP_MONTHLY_CORR_NAME: dict(color=GPCP_COLOR, marker="o", lw=2.6, ls="-"),
-    # Both corrected GPCP series retain the GPCP product color.  Marker and
-    # linestyle distinguish the correction method without changing identity.
-    GPCP_SEASONAL_CORR_NAME: dict(color=GPCP_COLOR, marker="^", lw=2.4, ls="-."),
+    ERA5_NAME: dict(color=ERA5_COLOR, marker="s", lw=2.3, ls="-"),
+    AIRS_NAME: dict(color=AIRS_COLOR, marker="x", lw=1.8, ls="--"),
+    # Preserve orange for the published/original GPCP record.  Distinct colors
+    # for the two corrected scenarios make their temporal behaviour traceable
+    # across a dense 120-month figure without relying on linestyle alone.
+    GPCP_NAME: dict(
+        color=GPCP_COLOR,
+        marker="D",
+        lw=1.7,
+        ls="--",
+        alpha=0.65,
+    ),
+    GPCP_MONTHLY_CORR_NAME: dict(
+        color=GPCP_MONTHLY_CORR_COLOR,
+        marker="o",
+        lw=2.4,
+        ls="-",
+    ),
+    GPCP_SEASONAL_CORR_NAME: dict(
+        color=GPCP_SEASONAL_CORR_COLOR,
+        marker="^",
+        lw=2.3,
+        ls="-",
+    ),
 }
 
 # Keep all generated material below the existing project results directory.
@@ -615,36 +634,69 @@ def plot_historical_monthly_timeseries(
     product_order,
     title,
     region="Antarctica",
-    tick_interval_months=6,
+    year_tick_interval=1,
 ):
-    """Plot a decade-long monthly series with readable semiannual ticks."""
+    """Plot a decade-long monthly series with a clean stakeholder-ready layout.
+
+    The data remain monthly, but only one January tick per year is labelled.
+    This retains chronological context without allowing x-axis text to compete
+    with the lines or legend.
+    """
     selected = dataframe[dataframe.region == region].copy()
-    fig, ax = plt.subplots(figsize=(15, 6), dpi=150)
+    selected["time"] = pd.to_datetime(selected["time"])
+    selected = selected.sort_values("time")
+
+    fig, ax = plt.subplots(figsize=(15, 6.5), dpi=150)
     for product in product_order:
         values = selected[selected["product"] == product].sort_values("time")
         if values.empty:
             raise ValueError(f"No data found for {product!r} in {region!r}.")
         style = PRODUCT_STYLES[product].copy()
-        # Markers are retained for product identity but shown sparsely enough
-        # that the 120-month record remains legible.
-        style["markevery"] = 3
+        # Markers are shown only twice per year.  Monthly information remains in
+        # the connected line while the plot avoids 120 markers per product.
+        style["markevery"] = 6
+        style["markersize"] = 5
         ax.plot(values.time, values.precipitation, label=product, **style)
 
-    ax.set_title(title, fontsize=15, fontweight="bold")
-    ax.set_ylabel("Precipitation [mm month$^{-1}$]", fontweight="bold")
-    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=tick_interval_months))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%Y"))
-    ax.tick_params(axis="x", rotation=35)
-    for label in ax.get_xticklabels():
-        label.set_horizontalalignment("right")
-    ax.grid(True, alpha=0.25)
-    ax.legend(
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.18),
-        ncol=3,
-        frameon=False,
+    ax.set_title(title, fontsize=16, fontweight="bold", pad=12)
+    ax.set_ylabel(
+        "Precipitation [mm month$^{-1}$]",
+        fontsize=12,
+        fontweight="bold",
     )
-    fig.subplots_adjust(bottom=0.25)
+
+    # Lock limits to the actual experiment.  This prevents Matplotlib from
+    # adding ticks in the preceding or following year, as happened previously.
+    time_min = selected["time"].min()
+    time_max = selected["time"].max()
+    ax.set_xlim(time_min, time_max)
+
+    # One labelled January tick per year is sufficient for a decade-long plot.
+    ax.xaxis.set_major_locator(mdates.YearLocator(base=year_tick_interval))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax.tick_params(axis="x", labelrotation=0, labelsize=10)
+    ax.tick_params(axis="y", labelsize=10)
+
+    # Emphasize quantitative reading along y while keeping annual guides faint.
+    ax.grid(axis="y", alpha=0.25, linewidth=0.8)
+    ax.grid(axis="x", alpha=0.10, linewidth=0.7)
+
+    # A figure-level legend occupies dedicated whitespace below the axes.  It
+    # cannot collide with x-axis labels and stays centered for both four- and
+    # five-product comparisons.
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=min(3, len(labels)),
+        frameon=False,
+        fontsize=10,
+        columnspacing=1.8,
+        handlelength=3.0,
+    )
+    fig.subplots_adjust(left=0.08, right=0.985, top=0.90, bottom=0.20)
     return fig, ax
 
 
