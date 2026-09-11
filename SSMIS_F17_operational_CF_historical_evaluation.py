@@ -1875,10 +1875,438 @@ print("All-period 3-by-3 monthly scatter figure:", all_period_scatter_plot)
 
 #%%
 # =============================================================================
-# SECTION 19. EAST ANTARCTIC SPRING 2022 PRECIPITATION TOTAL
+# SECTION 19. AIS 1992-2024 LONG-TERM TREND ASSESSMENT
+# =============================================================================
+# Required run sequence after a fresh kernel: Sections 1, 2, 3, 4, 5, and 19.
+# The historical and post-2020 regional CSVs must already exist from an earlier
+# complete run of Sections 6-9 and 15, respectively. Reusing those compact
+# regional files avoids reopening three decades of gridded data at once.
+#
+# Scientific purpose
+# ------------------
+# This section tests the visual impression of a negative GPCP trend over the
+# complete 1992-2024 record, including the 2013-2020 CF-derivation period.
+# Annual-mean daily precipitation is used, matching the earlier
+# Analysis_for_Ali workflow. Annual aggregation removes the repeating
+# calendar-month cycle and avoids treating 396 monthly values as independent.
+#
+# For each product, ordinary least-squares slope, two-sided p-value, and a 95%
+# confidence interval are reported. These quantify linear change only; they do
+# not establish physical causation, and ERA5 remains a comparison product rather
+# than observational truth over Antarctica.
+
+from scipy import stats
+
+TREND_START_YEAR = 1992
+TREND_END_YEAR = 2024
+TREND_REGION = "Antarctica"
+TREND_PRODUCTS = (
+    ERA5_NAME,
+    GPCP_NAME,
+    GPCP_MONTHLY_CORR_NAME,
+    GPCP_SEASONAL_CORR_NAME,
+)
+TREND_DISPLAY_NAMES = {
+    ERA5_NAME: "ERA5",
+    GPCP_NAME: "Original GPCP V3.3",
+    GPCP_MONTHLY_CORR_NAME: "Monthly-CF corrected GPCP",
+    GPCP_SEASONAL_CORR_NAME: "Seasonal-CF corrected GPCP",
+}
+
+historical_trend_file = os.path.join(
+    PATH_TO_DFS,
+    "historical_monthly_and_seasonal_CF_regional_series_1992_2012.csv",
+)
+post_2020_trend_file = os.path.join(
+    PATH_TO_DFS,
+    "post_2020_monthly_and_seasonal_CF_regional_series_2021_2024.csv",
+)
+for required_file in (historical_trend_file, post_2020_trend_file):
+    if not os.path.exists(required_file):
+        raise FileNotFoundError(
+            f"Required regional file is missing: {required_file}. "
+            "Run Sections 6-9 for the historical file and Section 15 for the "
+            "post-2020 file once before running this trend assessment."
+        )
+
+historical_trend_monthly = pd.read_csv(
+    historical_trend_file,
+    parse_dates=["time"],
+)
+post_2020_trend_monthly = pd.read_csv(
+    post_2020_trend_file,
+    parse_dates=["time"],
+)
+
+# Build the missing middle segment (2013-2020) one year at a time. Processing
+# 12 months per iteration sharply limits peak memory while retaining the exact
+# readers, remapping, mask, and cosine-area weighting used elsewhere.
+derivation_period_frames = []
+for year in range(2013, 2021):
+    print(f"Preparing AIS trend data for {year} ...")
+    year_start = f"{year}-01-01"
+    year_end = f"{year}-12-31"
+
+    gpcp_year = load_gpcp_monthly(year_start, year_end, gpcp_dir=GPCP_DIR)
+    era5_year = load_era5_monthly(year_start, year_end)
+    gpcp_year_01 = reproject_monthly_to_common_grid(
+        gpcp_year,
+        target_template_01deg,
+        basin_mask_01deg,
+    )
+    era5_year_01 = reproject_monthly_to_common_grid(
+        era5_year,
+        target_template_01deg,
+        basin_mask_01deg,
+    )
+    original_year_regional = build_all_region_monthly_series_cosine(
+        product_dict={ERA5_NAME: era5_year_01, GPCP_NAME: gpcp_year_01},
+        region_masks={TREND_REGION: region_masks_01deg[TREND_REGION]},
+        lat_name="lat",
+        lon_name="lon",
+        time_name="time",
+    )
+    corrected_year_regional = apply_operational_factors_to_regional_gpcp(
+        regional_df=original_year_regional,
+        monthly_factor_table=final_monthly_f17_gpcp_cf,
+        seasonal_factor_table=final_seasonal_f17_gpcp_cf,
+    )
+    derivation_period_frames.append(corrected_year_regional)
+
+    # Release each year's gridded arrays before opening the next year.
+    del (
+        gpcp_year,
+        era5_year,
+        gpcp_year_01,
+        era5_year_01,
+        original_year_regional,
+        corrected_year_regional,
+    )
+
+derivation_trend_monthly = pd.concat(
+    derivation_period_frames,
+    ignore_index=True,
+)
+del derivation_period_frames
+
+# Join the three non-overlapping periods and retain only the AIS products used
+# in this test. Corrected values use the same fixed 2013-2020 factors throughout.
+trend_monthly_1992_2024 = pd.concat(
+    [
+        historical_trend_monthly,
+        derivation_trend_monthly,
+        post_2020_trend_monthly,
+    ],
+    ignore_index=True,
+)
+trend_monthly_1992_2024["time"] = (
+    pd.to_datetime(trend_monthly_1992_2024["time"])
+    .dt.to_period("M")
+    .dt.to_timestamp()
+)
+trend_monthly_1992_2024 = trend_monthly_1992_2024[
+    (trend_monthly_1992_2024["region"] == TREND_REGION)
+    & (trend_monthly_1992_2024["product"].isin(TREND_PRODUCTS))
+    & (trend_monthly_1992_2024["time"].dt.year.between(
+        TREND_START_YEAR,
+        TREND_END_YEAR,
+    ))
+].copy()
+
+# Confirm an uninterrupted 396-month record for every product before fitting.
+expected_trend_months = pd.date_range(
+    f"{TREND_START_YEAR}-01-01",
+    f"{TREND_END_YEAR}-12-01",
+    freq="MS",
+)
+for product in TREND_PRODUCTS:
+    product_rows = trend_monthly_1992_2024[
+        trend_monthly_1992_2024["product"] == product
+    ].sort_values("time")
+    actual_months = pd.DatetimeIndex(product_rows["time"])
+    if (
+        len(product_rows) != len(expected_trend_months)
+        or actual_months.nunique() != len(expected_trend_months)
+        or not actual_months.equals(expected_trend_months)
+        or not np.isfinite(product_rows["precipitation"]).all()
+    ):
+        missing = expected_trend_months.difference(actual_months)
+        duplicated = actual_months[actual_months.duplicated()].unique()
+        raise ValueError(
+            f"Incomplete trend input for {product}. Missing={missing.tolist()}, "
+            f"duplicated={duplicated.tolist()}."
+        )
+
+# Monthly values are already accumulations in mm/month. Summing the 12 monthly
+# values gives annual accumulation. Dividing that sum by the exact number of
+# days in each calendar year gives annual-mean precipitation in mm/day. This is
+# the response variable used in the established Analysis_for_Ali trend code.
+trend_monthly_1992_2024["year"] = trend_monthly_1992_2024["time"].dt.year
+trend_annual_1992_2024 = (
+    trend_monthly_1992_2024.groupby(
+        ["region", "product", "year"],
+        as_index=False,
+    )["precipitation"]
+    .agg(annual_total_mm="sum", n_months="count")
+)
+if not (trend_annual_1992_2024["n_months"] == 12).all():
+    raise ValueError("Every annual trend value must contain exactly 12 months.")
+trend_annual_1992_2024["days_in_year"] = trend_annual_1992_2024["year"].map(
+    lambda year: 366 if calendar.isleap(int(year)) else 365
+)
+trend_annual_1992_2024["annual_mean_mm_per_day"] = (
+    trend_annual_1992_2024["annual_total_mm"]
+    / trend_annual_1992_2024["days_in_year"]
+)
+
+# Match the previous projects exactly: scipy.stats.linregress is applied to an
+# annual series using calendar year as x; its slope is multiplied by 10 and a
+# two-sided p < 0.05 is treated as statistically significant. The second window
+# tests whether the full-record result is primarily caused by the pre-2000 era.
+TREND_WINDOWS = {
+    "1992-2024": (1992, 2024),
+    "2000-2024": (2000, 2024),
+}
+trend_stat_rows = []
+for window_label, (window_start, window_end) in TREND_WINDOWS.items():
+    for product in TREND_PRODUCTS:
+        product_annual = trend_annual_1992_2024[
+            (trend_annual_1992_2024["product"] == product)
+            & trend_annual_1992_2024["year"].between(window_start, window_end)
+        ].sort_values("year")
+        x_year = product_annual["year"].to_numpy(dtype=float)
+        y_rate = product_annual["annual_mean_mm_per_day"].to_numpy(dtype=float)
+        fit = stats.linregress(x_year, y_rate)
+        degrees_freedom = len(x_year) - 2
+        t_critical = stats.t.ppf(0.975, degrees_freedom)
+        slope_decade = fit.slope * 10.0
+        ci_half_width_decade = t_critical * fit.stderr * 10.0
+        mean_rate = y_rate.mean()
+        trend_stat_rows.append({
+            "test_period": window_label,
+            "period_start_year": window_start,
+            "period_end_year": window_end,
+            "product": product,
+            "display_name": TREND_DISPLAY_NAMES[product],
+            "n_years": len(x_year),
+            "mean_mm_per_day": mean_rate,
+            "std_mm_per_day": np.std(y_rate),
+            "trend_mm_per_day_per_decade": slope_decade,
+            "trend_percent_of_mean_per_decade": 100.0 * slope_decade / mean_rate,
+            "ci95_low_mm_per_day_per_decade": slope_decade - ci_half_width_decade,
+            "ci95_high_mm_per_day_per_decade": slope_decade + ci_half_width_decade,
+            "p_value": fit.pvalue,
+            "significant_p_lt_0.05": "Yes" if fit.pvalue < 0.05 else "No",
+            "r_value": fit.rvalue,
+            "r_squared": fit.rvalue ** 2,
+            "intercept": fit.intercept,
+        })
+
+trend_statistics_1992_2024 = pd.DataFrame(trend_stat_rows)
+trend_monthly_file = os.path.join(
+    PATH_TO_DFS,
+    "AIS_monthly_series_for_trend_1992_2024.csv",
+)
+trend_annual_file = os.path.join(
+    PATH_TO_DFS,
+    "AIS_annual_accumulation_1992_2024.csv",
+)
+trend_statistics_file = os.path.join(
+    PATH_TO_DFS,
+    "AIS_linear_trend_statistics_1992_2024_and_2000_2024.csv",
+)
+trend_monthly_1992_2024.to_csv(trend_monthly_file, index=False)
+trend_annual_1992_2024.to_csv(trend_annual_file, index=False)
+trend_statistics_1992_2024.drop(columns="intercept").to_csv(
+    trend_statistics_file,
+    index=False,
+)
+
+# Each row repeats the same analysis for one time window: annual-mean daily
+# series with OLS lines on the left and slopes with 95% CIs on the right.
+fig, axes = plt.subplots(
+    2,
+    2,
+    figsize=(18.0, 12.5),
+    gridspec_kw={"width_ratios": [1.65, 1.0]},
+)
+colors = [PRODUCT_STYLES[product]["color"] for product in TREND_PRODUCTS]
+for row_index, (window_label, (window_start, window_end)) in enumerate(
+    TREND_WINDOWS.items()
+):
+    ax_series, ax_slope = axes[row_index]
+    window_stats = trend_statistics_1992_2024[
+        trend_statistics_1992_2024["test_period"] == window_label
+    ]
+    for product in TREND_PRODUCTS:
+        product_annual = trend_annual_1992_2024[
+            (trend_annual_1992_2024["product"] == product)
+            & trend_annual_1992_2024["year"].between(window_start, window_end)
+        ].sort_values("year")
+        product_stats = window_stats[window_stats["product"] == product].iloc[0]
+        years = product_annual["year"].to_numpy(dtype=float)
+        rates = product_annual["annual_mean_mm_per_day"].to_numpy(dtype=float)
+        color = PRODUCT_STYLES[product]["color"]
+        ax_series.plot(
+            years,
+            rates,
+            color=color,
+            linewidth=1.8,
+            marker=PRODUCT_STYLES[product].get("marker", "o"),
+            markersize=4.0,
+            alpha=0.82,
+            label=TREND_DISPLAY_NAMES[product],
+        )
+        fitted = product_stats["intercept"] + (
+            product_stats["trend_mm_per_day_per_decade"] / 10.0
+        ) * years
+        ax_series.plot(years, fitted, color=color, linewidth=3.0)
+
+    ax_series.axvspan(2013, 2020, color="0.75", alpha=0.20, zorder=0)
+    ax_series.text(
+        2016.5,
+        0.985,
+        "CF derivation period",
+        transform=ax_series.get_xaxis_transform(),
+        ha="center",
+        va="top",
+        fontsize=10.5,
+        color="0.30",
+    )
+    ax_series.set_xlim(window_start - 0.5, window_end + 0.5)
+    ax_series.set_xlabel("Year", fontsize=12.5, fontweight="bold")
+    ax_series.set_ylabel(
+        "Annual-mean precipitation [mm day$^{-1}$]",
+        fontsize=12.5,
+        fontweight="bold",
+    )
+    ax_series.set_title(
+        f"Annual AIS Series and Linear Trends: {window_label}",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax_series.tick_params(axis="both", labelsize=10.5)
+    ax_series.grid(alpha=0.25)
+
+    slope_plot = window_stats.set_index("product").reindex(TREND_PRODUCTS)
+    y_position = np.arange(len(TREND_PRODUCTS))
+    slope_values = slope_plot["trend_mm_per_day_per_decade"].to_numpy()
+    lower_error = (
+        slope_values - slope_plot["ci95_low_mm_per_day_per_decade"].to_numpy()
+    )
+    upper_error = (
+        slope_plot["ci95_high_mm_per_day_per_decade"].to_numpy() - slope_values
+    )
+    ax_slope.barh(
+        y_position,
+        slope_values,
+        xerr=np.vstack([lower_error, upper_error]),
+        color=colors,
+        edgecolor="0.20",
+        linewidth=0.6,
+        capsize=5,
+    )
+    ax_slope.axvline(0, color="0.20", linestyle="--", linewidth=1.2)
+    ax_slope.set_yticks(
+        y_position,
+        [TREND_DISPLAY_NAMES[product] for product in TREND_PRODUCTS],
+    )
+    ax_slope.invert_yaxis()
+    ax_slope.set_xlabel(
+        "Linear trend [mm day$^{-1}$ decade$^{-1}$]",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax_slope.set_title(
+        f"Trend Estimate and 95% CI: {window_label}",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax_slope.tick_params(axis="both", labelsize=10)
+    ax_slope.grid(axis="x", alpha=0.25)
+    ax_slope.set_axisbelow(True)
+    for y_index, (_, row) in enumerate(slope_plot.iterrows()):
+        ax_slope.text(
+            0.98,
+            y_index,
+            f"{row['trend_mm_per_day_per_decade']:+.3f}; p={row['p_value']:.3f}",
+            transform=ax_slope.get_yaxis_transform(),
+            ha="right",
+            va="center",
+            fontsize=9,
+            fontweight="bold",
+        )
+
+fig.suptitle(
+    "AIS Precipitation Trends: Full Record and Post-1999 Sensitivity",
+    fontsize=18,
+    fontweight="bold",
+    y=0.995,
+)
+
+# Use one figure-level legend so no data or fitted trend is obscured inside
+# either time-series panel. Four columns keep the product mapping on one line.
+legend_handles, legend_labels = axes[0, 0].get_legend_handles_labels()
+fig.legend(
+    legend_handles,
+    legend_labels,
+    loc="upper center",
+    bbox_to_anchor=(0.5, 0.962),
+    ncol=4,
+    frameon=False,
+    fontsize=11,
+    handlelength=2.8,
+    columnspacing=1.6,
+)
+fig.text(
+    0.5,
+    0.025,
+    "Method matches the earlier Analysis_for_Ali workflow: scipy linregress "
+    "on annual-mean precipitation, slope per decade, two-sided p-values. Fixed "
+    "2013-2020 factors are applied unchanged.",
+    ha="center",
+    fontsize=10.5,
+    color="0.30",
+)
+fig.tight_layout(rect=(0, 0.055, 1, 0.905))
+
+trend_figure_file = os.path.join(
+    PATH_TO_PLOTS,
+    "AIS_precipitation_trends_1992_2024_and_2000_2024.png",
+)
+fig.savefig(trend_figure_file, dpi=200, bbox_inches="tight")
+plt.show()
+
+print("AIS linear trend statistics using the established annual-mean method:")
+print(
+    trend_statistics_1992_2024[
+        [
+            "test_period",
+            "display_name",
+            "mean_mm_per_day",
+            "std_mm_per_day",
+            "trend_mm_per_day_per_decade",
+            "trend_percent_of_mean_per_decade",
+            "ci95_low_mm_per_day_per_decade",
+            "ci95_high_mm_per_day_per_decade",
+            "p_value",
+            "significant_p_lt_0.05",
+            "r_squared",
+        ]
+    ].round(3).to_string(index=False)
+)
+print("Saved monthly trend input:", trend_monthly_file)
+print("Saved annual trend input:", trend_annual_file)
+print("Saved trend statistics:", trend_statistics_file)
+print("Saved trend figure:", trend_figure_file)
+
+
+#%%
+# =============================================================================
+# SECTION 20. EAST ANTARCTIC SPRING 2022 PRECIPITATION TOTAL
 # =============================================================================
 # Required run sequence after a fresh kernel: Sections 1, 2, 3, 4, 5, 15,
-# and then this section (19).  Sections 6-14 and 16-18 are not required.
+# and then this section (20). Sections 6-14 and 16-19 are not required.
 #
 # Purpose
 # -------
@@ -2091,10 +2519,10 @@ print("EAIS SON 2022 comparison figure:", eais_son_2022_plot)
 
 #%%
 # =============================================================================
-# SECTION 20. EXPLORATORY EAIS-BASIN LOCALIZATION OF THE SON 2022 SIGNAL
+# SECTION 21. EXPLORATORY EAIS-BASIN LOCALIZATION OF THE SON 2022 SIGNAL
 # =============================================================================
 # Required run sequence after a fresh kernel: Sections 1, 2, 3, 4, 5, 15,
-# and then this section (20). Section 19 is optional and is not a dependency.
+# and then this section (21). Section 20 is optional and is not a dependency.
 #
 # Context and interpretation guardrail
 # ------------------------------------
@@ -2348,10 +2776,10 @@ print("Saved exploratory basin figure:", eais_basin_son_2022_plot)
 
 #%%
 # =============================================================================
-# SECTION 21. EXPLORATORY COMPOSITE-BASIN SEASONAL COMPARISON FOR 2022
+# SECTION 22. EXPLORATORY COMPOSITE-BASIN SEASONAL COMPARISON FOR 2022
 # =============================================================================
 # Required run sequence after a fresh kernel: Sections 1, 2, 3, 4, 5, 15,
-# and then this section (21). Sections 19 and 20 are optional: all variables
+# and then this section (22). Sections 20 and 21 are optional: all variables
 # needed here are recreated below so that this add-on can run independently.
 #
 # Purpose and confidentiality guardrail
