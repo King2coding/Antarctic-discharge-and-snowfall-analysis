@@ -79,10 +79,11 @@ RESULT_DIR = os.path.join(PROJECT_DIR, "antarctica_coef_work_results")
 PATH_TO_PLOTS = os.path.join(RESULT_DIR, "plots", "historical_F17_evaluation")
 PATH_TO_DFS = os.path.join(RESULT_DIR, "dfs", "historical_F17_evaluation")
 
-GPCP_DIR = (
-    "/ra1/pubdat/Satellite_eval_over_Oceans/data/GPCP/"
-    "GPCP_v3_pnt_3_monthly_1983_2024"
-)
+# Use the actively maintained V3.3 archive.  The older project copy stops at
+# September 2024, whereas this archive contains the complete calendar year.
+# Representative files from 1992, 2003, and 2020 were checksum-verified as
+# byte-for-byte identical between the two locations before this path change.
+GPCP_DIR = "/ra1/pubdat/GPM/GPCP/V33"
 ERA5_FILE = (
     "/ra1/pubdat/GPCP/GPCP_Reproduce_GJ/"
     "era5_tp_198001202412_monthly.nc"
@@ -230,13 +231,18 @@ def choose_airs_worker_count(max_workers, reserved_cores=8):
     return selected
 
 
-def load_gpcp_monthly(start_date, end_date, gpcp_dir=GPCP_DIR):
+def load_gpcp_monthly(start_date, end_date, gpcp_dir=None):
     """Load GPCP V3.3 and convert monthly mean mm/day to mm/month.
 
     Filename dates are used as the authoritative chronology, matching the
     established project driver and avoiding previously observed time-coordinate
     duplication in ``open_mfdataset``.
     """
+    # Resolve the configured archive at call time. This avoids retaining an old
+    # path when Section 2 is rerun in an already-active interactive kernel.
+    if gpcp_dir is None:
+        gpcp_dir = GPCP_DIR
+
     start_month = _month_start(start_date)
     end_month = _month_start(end_date)
     selected = []
@@ -700,6 +706,568 @@ def plot_historical_monthly_timeseries(
     return fig, ax
 
 
+def calculate_relative_difference_from_reference(
+    dataframe,
+    reference_product,
+    target_products,
+    region="Antarctica",
+):
+    """Calculate paired monthly percentage differences from a reference.
+
+    Relative difference = 100 * (target - reference) / reference.
+    Positive values mean that the target exceeds ERA5; negative values mean
+    that it is below ERA5. Missing or zero reference values produce NaN.
+    """
+    selected = dataframe[dataframe["region"] == region].copy()
+    selected["time"] = pd.to_datetime(selected["time"])
+    reference = (
+        selected[selected["product"] == reference_product]
+        [["time", "precipitation"]]
+        .rename(columns={"precipitation": "reference_precipitation"})
+    )
+
+    rows = []
+    for product in target_products:
+        target = (
+            selected[selected["product"] == product]
+            [["time", "precipitation"]]
+            .rename(columns={"precipitation": "product_precipitation"})
+        )
+        paired = reference.merge(target, on="time", how="inner")
+        valid = (
+            np.isfinite(paired["reference_precipitation"])
+            & (paired["reference_precipitation"] != 0)
+            & np.isfinite(paired["product_precipitation"])
+        )
+        paired["relative_difference_percent"] = np.nan
+        paired.loc[valid, "relative_difference_percent"] = (
+            100.0
+            * (
+                paired.loc[valid, "product_precipitation"]
+                - paired.loc[valid, "reference_precipitation"]
+            )
+            / paired.loc[valid, "reference_precipitation"]
+        )
+        paired["product"] = product
+        paired["reference_product"] = reference_product
+        paired["region"] = region
+        rows.append(paired)
+
+    return pd.concat(rows, ignore_index=True)
+
+
+def plot_relative_difference_from_era5(
+    relative_difference_df,
+    product_order,
+    title,
+):
+    """Plot monthly relative differences from ERA5 on one common axis."""
+    data = relative_difference_df.copy()
+    data["time"] = pd.to_datetime(data["time"])
+    data = data.sort_values("time")
+
+    fig, ax = plt.subplots(figsize=(15, 6.5), dpi=150)
+    for product in product_order:
+        values = data[data["product"] == product]
+        if values.empty:
+            raise ValueError(f"No relative-difference data for {product!r}.")
+        style = PRODUCT_STYLES[product].copy()
+        style["markevery"] = 6
+        style["markersize"] = 5
+        ax.plot(
+            values["time"],
+            values["relative_difference_percent"],
+            label=product,
+            **style,
+        )
+
+    # Zero represents exact agreement with ERA5 for an individual month.
+    ax.axhline(0, color="0.25", lw=1.2, ls=":", zorder=0)
+    ax.set_title(title, fontsize=16, fontweight="bold", pad=12)
+    ax.set_ylabel("Difference from ERA5 [%]", fontsize=12, fontweight="bold")
+    ax.set_xlim(data["time"].min(), data["time"].max())
+    ax.xaxis.set_major_locator(mdates.YearLocator(base=1))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax.tick_params(axis="both", labelsize=10)
+    ax.grid(axis="y", alpha=0.25, linewidth=0.8)
+    ax.grid(axis="x", alpha=0.10, linewidth=0.7)
+
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.02),
+        ncol=3,
+        frameon=False,
+        fontsize=10,
+        columnspacing=1.8,
+        handlelength=3.0,
+    )
+    fig.subplots_adjust(left=0.08, right=0.985, top=0.90, bottom=0.19)
+    return fig, ax
+
+
+def plot_combined_period_diagnostics(
+    period_dataframes,
+    absolute_product_order,
+    difference_product_order,
+    region="Antarctica",
+):
+    """Plot absolute monthly series and ERA5-relative differences by period.
+
+    Each row is one independent out-of-period test.  The left column shows the
+    monthly precipitation estimates; the right column shows the corresponding
+    percentage differences from ERA5.  Axis scales are shared by column so the
+    magnitude and variability can be compared directly among periods.
+    """
+    period_items = list(period_dataframes.items())
+    if len(period_items) != 3:
+        raise ValueError("The consolidated diagnostic expects exactly three periods.")
+
+    prepared = []
+    for period_label, dataframe in period_items:
+        monthly = dataframe[dataframe["region"] == region].copy()
+        monthly["time"] = pd.to_datetime(monthly["time"])
+        monthly = monthly.sort_values("time")
+        relative = calculate_relative_difference_from_reference(
+            dataframe=dataframe,
+            reference_product=ERA5_NAME,
+            target_products=difference_product_order,
+            region=region,
+        ).sort_values("time")
+        prepared.append((period_label, monthly, relative))
+
+    fig, axes = plt.subplots(
+        3,
+        2,
+        # Extra horizontal space separates the dense monthly traces and gives
+        # both quantitative columns enough width for presentation use.
+        figsize=(22, 13),
+        dpi=150,
+        sharey="col",
+        squeeze=False,
+    )
+
+    for row_index, (period_label, monthly, relative) in enumerate(prepared):
+        absolute_ax, difference_ax = axes[row_index]
+
+        for product in absolute_product_order:
+            values = monthly[monthly["product"] == product]
+            # AIRS exists only during the 2003-2012 test.  Optional products
+            # are therefore drawn where available instead of being removed
+            # from every row to satisfy a common product list.
+            if values.empty:
+                continue
+            style = PRODUCT_STYLES[product].copy()
+            style.update(
+                markevery=6,
+                markersize=5.0,
+                lw=max(2.2, style.get("lw", 2.0) + 0.35),
+            )
+            absolute_ax.plot(
+                values["time"], values["precipitation"], label=product, **style
+            )
+
+        for product in difference_product_order:
+            values = relative[relative["product"] == product]
+            style = PRODUCT_STYLES[product].copy()
+            style.update(
+                markevery=6,
+                markersize=5.0,
+                lw=max(2.2, style.get("lw", 2.0) + 0.35),
+            )
+            difference_ax.plot(
+                values["time"],
+                values["relative_difference_percent"],
+                label=product,
+                **style,
+            )
+
+        difference_ax.axhline(0, color="0.25", lw=1.0, ls=":", zorder=0)
+        for ax, data in ((absolute_ax, monthly), (difference_ax, relative)):
+            ax.set_xlim(data["time"].min(), data["time"].max())
+            # Two-year labels for decade tests and annual labels for 2021-2024.
+            span_years = data["time"].max().year - data["time"].min().year + 1
+            ax.xaxis.set_major_locator(mdates.YearLocator(base=2 if span_years > 5 else 1))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+            ax.tick_params(axis="both", labelsize=11)
+            ax.grid(axis="y", alpha=0.24, linewidth=0.7)
+            ax.grid(axis="x", alpha=0.10, linewidth=0.6)
+
+        absolute_ax.set_ylabel(
+            "Precipitation [mm month$^{-1}$]",
+            fontsize=12,
+            fontweight="bold",
+        )
+        absolute_ax.text(
+            0.015,
+            0.95,
+            period_label.replace("\n", " — "),
+            transform=absolute_ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=13,
+            fontweight="bold",
+            bbox={
+                "boxstyle": "round,pad=0.25",
+                "facecolor": "white",
+                "edgecolor": "0.70",
+                "alpha": 0.82,
+            },
+            zorder=10,
+        )
+        difference_ax.set_ylabel(
+            "Difference from ERA5 [%]", fontsize=12, fontweight="bold"
+        )
+
+    axes[0, 0].set_title("Monthly time series", fontsize=16, fontweight="bold")
+    axes[0, 1].set_title(
+        "Monthly relative difference from ERA5", fontsize=16, fontweight="bold"
+    )
+    axes[-1, 0].set_xlabel("Year", fontsize=13, fontweight="bold")
+    axes[-1, 1].set_xlabel("Year", fontsize=13, fontweight="bold")
+
+    fig.suptitle(
+        "AIS Monthly Stability of Fixed 2013-2020 SSMIS F17-Guided Corrections",
+        fontsize=19,
+        fontweight="bold",
+        y=0.985,
+    )
+    # Collect across all panels because AIRS appears only in the middle-left
+    # panel.  Preserve the requested product order and avoid duplicate entries.
+    handle_by_label = {}
+    for ax in axes.flat:
+        panel_handles, panel_labels = ax.get_legend_handles_labels()
+        for handle, label in zip(panel_handles, panel_labels):
+            handle_by_label.setdefault(label, handle)
+    labels = [
+        product for product in absolute_product_order if product in handle_by_label
+    ]
+    handles = [handle_by_label[label] for label in labels]
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.012),
+        ncol=len(labels),
+        frameon=False,
+        fontsize=12,
+        columnspacing=1.5,
+        handlelength=2.8,
+    )
+    fig.subplots_adjust(
+        left=0.11, right=0.985, top=0.93, bottom=0.085, hspace=0.28, wspace=0.20
+    )
+    return fig, axes
+
+
+def plot_era5_metric_comparison(
+    metrics_df,
+    product_order,
+    period_order=("2003-2012", "1992-2001"),
+):
+    """Plot ERA5-referenced CC, RMSE, MAE and relative bias as grouped bars."""
+    data = metrics_df[metrics_df["reference_product"] == ERA5_NAME].copy()
+    metric_specs = (
+        ("CC", "Correlation coefficient", "CC — higher is better"),
+        ("RMSE_mm_per_month", "RMSE [mm month$^{-1}$]", "RMSE — lower is better"),
+        ("MAE_mm_per_month", "MAE [mm month$^{-1}$]", "MAE — lower is better"),
+        ("RB_percent", "Relative bias [%]", "Relative bias — closer to zero is better"),
+    )
+
+    fig, axes = plt.subplots(2, 2, figsize=(15.5, 9), dpi=150)
+    x = np.arange(len(period_order), dtype=float)
+    width = 0.24
+    offsets = (
+        np.arange(len(product_order)) - (len(product_order) - 1) / 2
+    ) * width
+
+    for ax, (metric, ylabel, panel_title) in zip(axes.flat, metric_specs):
+        plotted_values = []
+        for offset, product in zip(offsets, product_order):
+            rows = data[data["product"] == product].set_index("test_period")
+            values = np.array(
+                [rows.loc[period, metric] for period in period_order],
+                dtype=float,
+            )
+            plotted_values.extend(values[np.isfinite(values)])
+            bars = ax.bar(
+                x + offset,
+                values,
+                width=width,
+                color=PRODUCT_STYLES[product]["color"],
+                alpha=0.90,
+                label=product,
+            )
+            ax.bar_label(
+                bars,
+                labels=[
+                    f"{value:.2f}" if np.isfinite(value) else ""
+                    for value in values
+                ],
+                padding=3,
+                fontsize=10,
+                fontweight="bold",
+            )
+
+        ax.set_xticks(x)
+        period_labels = {
+            "1992-2001": "1992-2001\nFar before",
+            "2003-2012": "2003-2012\nImmediately before",
+            "2021-2024": "2021-2024\nImmediately after",
+        }
+        ax.set_xticklabels(
+            [period_labels.get(period, period) for period in period_order],
+            fontsize=11,
+            fontweight="bold",
+            linespacing=1.15,
+        )
+        ax.set_ylabel(ylabel, fontsize=12, fontweight="bold")
+        ax.set_title(panel_title, fontsize=13, fontweight="bold")
+        ax.tick_params(axis="y", labelsize=11)
+        ax.grid(axis="y", alpha=0.22, linewidth=0.7)
+        ax.set_axisbelow(True)
+
+        if metric == "CC":
+            ax.set_ylim(0, 1.0)
+        elif metric == "RB_percent":
+            ax.axhline(0, color="0.25", lw=1.0, ls=":")
+            maximum = max(abs(np.nanmin(plotted_values)), abs(np.nanmax(plotted_values)))
+            ax.set_ylim(-1.35 * maximum, 1.35 * maximum)
+        else:
+            ax.set_ylim(0, 1.30 * np.nanmax(plotted_values))
+
+    fig.suptitle(
+        "AIS Monthly Agreement with ERA5: Out-of-Period Stability Tests.",
+        fontsize=18,
+        fontweight="bold",
+        y=0.98,
+    )
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=3,
+        frameon=False,
+        fontsize=11,
+    )
+    fig.subplots_adjust(top=0.88, bottom=0.15, hspace=0.40, wspace=0.22)
+    return fig, axes
+
+
+def plot_monthly_scatter_against_era5(
+    period_dataframes,
+    product_order,
+    product_display_names=None,
+    region="Antarctica",
+):
+    """Compare monthly GPCP estimates with ERA5 using paired scatterplots.
+
+    Rows represent historical test periods and columns represent the original,
+    monthly-CF-corrected, and seasonal-CF-corrected GPCP estimates.  All panels
+    share identical x and y limits so apparent scatter and displacement from
+    the 1:1 line can be compared visually without scale-induced distortion.
+
+    The regression line is an ordinary least-squares fit of product (y) on
+    ERA5 (x).  Statistics are calculated from the same finite, exactly matched
+    monthly pairs displayed in each panel.
+    """
+    if product_display_names is None:
+        product_display_names = {product: product for product in product_order}
+
+    period_items = list(period_dataframes.items())
+    paired_by_panel = {}
+    all_finite_values = []
+
+    # Prepare every panel first so one common axis range can be calculated from
+    # all values before any subplot is drawn.
+    for period_label, dataframe in period_items:
+        selected = dataframe[dataframe["region"] == region].copy()
+        selected["time"] = pd.to_datetime(selected["time"])
+        reference = (
+            selected[selected["product"] == ERA5_NAME]
+            [["time", "precipitation"]]
+            .rename(columns={"precipitation": "ERA5"})
+        )
+
+        for product in product_order:
+            target = (
+                selected[selected["product"] == product]
+                [["time", "precipitation"]]
+                .rename(columns={"precipitation": "product_value"})
+            )
+            paired = (
+                reference.merge(target, on="time", how="inner")
+                .dropna(subset=["ERA5", "product_value"])
+                .sort_values("time")
+            )
+            if len(paired) < 2:
+                raise ValueError(
+                    f"Too few paired months for {period_label}, {product}."
+                )
+            paired_by_panel[(period_label, product)] = paired
+            all_finite_values.extend(paired["ERA5"].to_numpy(dtype=float))
+            all_finite_values.extend(
+                paired["product_value"].to_numpy(dtype=float)
+            )
+
+    finite_values = np.asarray(all_finite_values, dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    value_min = float(np.nanmin(finite_values))
+    value_max = float(np.nanmax(finite_values))
+    padding = 0.05 * (value_max - value_min)
+    common_limits = (max(0.0, value_min - padding), value_max + padding)
+
+    fig, axes = plt.subplots(
+        len(period_items),
+        len(product_order),
+        # Scale figure height with row count so the one-period post-2020
+        # version does not inherit unnecessary whitespace from the two-period
+        # historical figure.
+        figsize=(15.5, 4.0 * len(period_items) + 1.8),
+        dpi=150,
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+
+    for row_index, (period_label, _) in enumerate(period_items):
+        for column_index, product in enumerate(product_order):
+            ax = axes[row_index, column_index]
+            paired = paired_by_panel[(period_label, product)]
+            reference_values = paired["ERA5"].to_numpy(dtype=float)
+            product_values = paired["product_value"].to_numpy(dtype=float)
+            product_color = PRODUCT_STYLES[product]["color"]
+
+            # Monthly paired observations.
+            ax.scatter(
+                reference_values,
+                product_values,
+                s=32,
+                color=product_color,
+                alpha=0.70,
+                edgecolor="white",
+                linewidth=0.45,
+                zorder=3,
+            )
+
+            # Reference line: a point on this line agrees exactly with ERA5.
+            ax.plot(
+                common_limits,
+                common_limits,
+                color="0.20",
+                lw=1.3,
+                ls="--",
+                label="1:1",
+                zorder=1,
+            )
+
+            # Ordinary least-squares regression of the plotted product on ERA5.
+            slope, intercept = np.polyfit(reference_values, product_values, 1)
+            regression_x = np.array(common_limits)
+            regression_y = slope * regression_x + intercept
+            ax.plot(
+                regression_x,
+                regression_y,
+                color=product_color,
+                lw=2.0,
+                label="Regression",
+                zorder=2,
+            )
+
+            cc = float(np.corrcoef(reference_values, product_values)[0, 1])
+            relative_bias = (
+                100.0
+                * np.mean(product_values - reference_values)
+                / np.mean(reference_values)
+            )
+            statistics_text = (
+                f"CC = {cc:.2f}\n"
+                f"RB = {relative_bias:+.1f}%\n"
+                f"n = {len(paired)}"
+            )
+            ax.text(
+                0.04,
+                0.96,
+                statistics_text,
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=10.5,
+                fontweight="bold",
+                bbox={
+                    "boxstyle": "round,pad=0.35",
+                    "facecolor": "white",
+                    "edgecolor": "0.65",
+                    "alpha": 0.88,
+                },
+                zorder=5,
+            )
+
+            ax.set_xlim(common_limits)
+            ax.set_ylim(common_limits)
+            ax.set_aspect("equal", adjustable="box")
+            ax.grid(True, alpha=0.18, linewidth=0.7)
+            ax.tick_params(axis="both", labelsize=10.5)
+
+            if row_index == 0:
+                ax.set_title(
+                    product_display_names.get(product, product),
+                    fontsize=13,
+                    fontweight="bold",
+                )
+            if column_index == 0:
+                ax.text(
+                    -0.23,
+                    0.5,
+                    period_label,
+                    transform=ax.transAxes,
+                    rotation=90,
+                    va="center",
+                    ha="center",
+                    fontsize=12.5,
+                    fontweight="bold",
+                )
+
+    fig.suptitle(
+        "AIS Monthly Precipitation versus ERA5: Out-of-Period Stability Tests",
+        fontsize=18,
+        fontweight="bold",
+        y=0.98,
+    )
+    fig.supxlabel(
+        "ERA5 precipitation [mm month$^{-1}$]", fontsize=13, fontweight="bold"
+    )
+    fig.supylabel(
+        "GPCP precipitation [mm month$^{-1}$]", fontsize=13, fontweight="bold"
+    )
+
+    # One compact line-style key applies to every panel; product identity is
+    # already communicated by the column title and point/regression color.
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=2,
+        frameon=False,
+        fontsize=11,
+    )
+    fig.subplots_adjust(
+        left=0.09,
+        right=0.98,
+        top=0.90,
+        bottom=0.11,
+        hspace=0.18,
+        wspace=0.10,
+    )
+    return fig, axes
+
+
 #%%
 # =============================================================================
 # SECTION 4. BUILD THE ESTABLISHED COMMON AIS GRID AND REGION MASKS
@@ -897,10 +1465,11 @@ print("Saved:", corrected_regional_file)
 
 #%%
 # =============================================================================
-# SECTION 10. INITIAL CHRONOLOGICAL COMPARISON PLOTS
+# SECTION 10. PREPARE THE TWO HISTORICAL TEST-PERIOD TABLES
 # =============================================================================
 # Required first: Section 9.
-# AIRS NaN months appear as gaps; GPCP and ERA5 remain visible at those dates.
+# Plotting is deferred until Section 16, where these periods are combined with
+# 2021-2024 in one compact 3-by-2 diagnostic figure.
 
 airs_era_df = subset_period(
     historical_corrected_regional_monthly,
@@ -913,43 +1482,7 @@ pre_airs_df = subset_period(
     PRE_AIRS_TEST_END,
 )
 
-fig, ax = plot_historical_monthly_timeseries(
-    dataframe=airs_era_df,
-    product_order=(
-        ERA5_NAME,
-        AIRS_NAME,
-        GPCP_NAME,
-        GPCP_MONTHLY_CORR_NAME,
-        GPCP_SEASONAL_CORR_NAME,
-    ),
-    title="AIS Monthly Time Series: AIRS-Era Out-of-Period Test (2003-2012)",
-)
-airs_era_plot = os.path.join(
-    PATH_TO_PLOTS,
-    "AIS_AIRS_era_monthly_vs_seasonal_operational_CF_2003_2012.png",
-)
-fig.savefig(airs_era_plot, dpi=200, bbox_inches="tight")
-plt.show()
-
-fig, ax = plot_historical_monthly_timeseries(
-    dataframe=pre_airs_df,
-    product_order=(
-        ERA5_NAME,
-        GPCP_NAME,
-        GPCP_MONTHLY_CORR_NAME,
-        GPCP_SEASONAL_CORR_NAME,
-    ),
-    title="AIS Monthly Time Series: Pre-AIRS Historical Test (1992-2001)",
-)
-pre_airs_plot = os.path.join(
-    PATH_TO_PLOTS,
-    "AIS_pre_AIRS_monthly_vs_seasonal_operational_CF_1992_2001.png",
-)
-fig.savefig(pre_airs_plot, dpi=200, bbox_inches="tight")
-plt.show()
-
-print("AIRS-era figure:", airs_era_plot)
-print("Pre-AIRS figure:", pre_airs_plot)
+print("Historical test-period tables prepared for 1992-2001 and 2003-2012.")
 
 
 #%%
@@ -1013,3 +1546,328 @@ display_columns = [
 ]
 print(historical_metrics[display_columns].round(2).to_string(index=False))
 print("Saved metrics:", historical_metrics_file)
+
+
+#%%
+# =============================================================================
+# SECTION 12. MONTHLY RELATIVE DIFFERENCE FROM ERA5 FOR EACH TEST PERIOD
+# =============================================================================
+# Required first: Section 10.
+# These values answer a different question from the absolute time series:
+# how far above or below ERA5 was each GPCP estimate in each individual month?
+# Original GPCP provides the baseline; the red and green curves show what the
+# monthly and seasonal operational corrections changed, respectively.
+
+relative_difference_products = (
+    GPCP_NAME,
+    GPCP_MONTHLY_CORR_NAME,
+    GPCP_SEASONAL_CORR_NAME,
+)
+
+airs_era_relative_to_era5 = calculate_relative_difference_from_reference(
+    dataframe=airs_era_df,
+    reference_product=ERA5_NAME,
+    target_products=relative_difference_products,
+    region="Antarctica",
+)
+pre_airs_relative_to_era5 = calculate_relative_difference_from_reference(
+    dataframe=pre_airs_df,
+    reference_product=ERA5_NAME,
+    target_products=relative_difference_products,
+    region="Antarctica",
+)
+
+relative_difference_csv = os.path.join(
+    PATH_TO_DFS,
+    "AIS_GPCP_relative_differences_from_ERA5_historical_tests.csv",
+)
+pd.concat(
+    [
+        airs_era_relative_to_era5.assign(test_period="2003-2012"),
+        pre_airs_relative_to_era5.assign(test_period="1992-2001"),
+    ],
+    ignore_index=True,
+).to_csv(relative_difference_csv, index=False)
+
+print("Relative-difference data:", relative_difference_csv)
+
+
+#%%
+# =============================================================================
+# SECTION 13. VISUAL SUMMARY OF ERA5-REFERENCED PERFORMANCE METRICS
+# =============================================================================
+# Required first: Section 11.
+# AIRS-referenced rows are deliberately excluded here.  Each panel compares the
+# original GPCP baseline with both operational correction strategies across the
+# two completely independent historical periods.
+
+fig, axes = plot_era5_metric_comparison(
+    metrics_df=historical_metrics,
+    product_order=(
+        GPCP_NAME,
+        GPCP_MONTHLY_CORR_NAME,
+        GPCP_SEASONAL_CORR_NAME,
+    ),
+    period_order=("2003-2012", "1992-2001"),
+)
+era5_metrics_plot = os.path.join(
+    PATH_TO_PLOTS,
+    "AIS_ERA5_referenced_metric_comparison_historical_tests.png",
+)
+fig.savefig(era5_metrics_plot, dpi=200, bbox_inches="tight")
+plt.show()
+
+print("ERA5-referenced metric figure:", era5_metrics_plot)
+
+
+#%%
+# =============================================================================
+# SECTION 14. SCATTERPLOT INPUT CHECK
+# =============================================================================
+# Required first: Section 10.
+# The final 3-by-3 scatter comparison is generated in Section 18 after the
+# post-derivation period is prepared. This check prevents partial datasets from
+# silently reaching that figure with missing product series.
+for period_label, period_df in {
+    "1992-2001": pre_airs_df,
+    "2003-2012": airs_era_df,
+}.items():
+    available = set(period_df["product"].unique())
+    required = {ERA5_NAME, *gpcp_comparison_products}
+    missing = required.difference(available)
+    if missing:
+        raise ValueError(f"{period_label} is missing products: {sorted(missing)}")
+print("Historical scatter inputs passed the product-availability check.")
+
+
+#%%
+# =============================================================================
+# SECTION 15. LOAD AND CORRECT THE POST-2020 INDEPENDENT PERIOD, 2021-2024
+# =============================================================================
+# Required first: Sections 1-5.
+# This period begins immediately after the final factor-derivation record ends.
+# SSMIS F17 is not reopened because the experiment applies the already-fixed
+# 2013-2020 operational factors; only GPCP and ERA5 are needed for evaluation.
+
+POST_2020_TEST_START = "2021-01-01"
+POST_2020_TEST_END = "2024-12-31"
+
+gpcp_post_2020 = load_gpcp_monthly(
+    POST_2020_TEST_START,
+    POST_2020_TEST_END,
+    gpcp_dir=GPCP_DIR,
+)
+era5_post_2020 = load_era5_monthly(
+    POST_2020_TEST_START,
+    POST_2020_TEST_END,
+)
+
+gpcp_post_2020_01 = reproject_monthly_to_common_grid(
+    gpcp_post_2020,
+    target_template_01deg,
+    basin_mask_01deg,
+)
+era5_post_2020_01 = reproject_monthly_to_common_grid(
+    era5_post_2020,
+    target_template_01deg,
+    basin_mask_01deg,
+)
+
+post_2020_original_regional = build_all_region_monthly_series_cosine(
+    product_dict={
+        ERA5_NAME: era5_post_2020_01,
+        GPCP_NAME: gpcp_post_2020_01,
+    },
+    region_masks=region_masks_01deg,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+post_2020_df = apply_operational_factors_to_regional_gpcp(
+    regional_df=post_2020_original_regional,
+    monthly_factor_table=final_monthly_f17_gpcp_cf,
+    seasonal_factor_table=final_seasonal_f17_gpcp_cf,
+)
+
+post_2020_data_file = os.path.join(
+    PATH_TO_DFS,
+    "post_2020_monthly_and_seasonal_CF_regional_series_2021_2024.csv",
+)
+post_2020_df.to_csv(post_2020_data_file, index=False)
+
+print("Post-2020 test data prepared with fixed 2013-2020 factors.")
+print("Coverage:", post_2020_df.time.min(), "to", post_2020_df.time.max())
+print("Saved:", post_2020_data_file)
+
+
+#%%
+# =============================================================================
+# SECTION 16. CONSOLIDATED ABSOLUTE AND RELATIVE-DIFFERENCE DIAGNOSTICS
+# =============================================================================
+# Required first: Sections 10, 12, and 15.
+# Rows move outward from the 2013-2020 factor-derivation period: immediately
+# after, immediately before, and then far before.
+
+post_2020_relative_to_era5 = calculate_relative_difference_from_reference(
+    dataframe=post_2020_df,
+    reference_product=ERA5_NAME,
+    target_products=(
+        GPCP_NAME,
+        GPCP_MONTHLY_CORR_NAME,
+        GPCP_SEASONAL_CORR_NAME,
+    ),
+    region="Antarctica",
+)
+post_2020_relative_file = os.path.join(
+    PATH_TO_DFS,
+    "AIS_GPCP_relative_differences_from_ERA5_2021_2024.csv",
+)
+post_2020_relative_to_era5.to_csv(post_2020_relative_file, index=False)
+
+fig, axes = plot_combined_period_diagnostics(
+    period_dataframes={
+        "Immediately after\n2021-2024": post_2020_df,
+        "Immediately before\n2003-2012": airs_era_df,
+        "Far before\n1992-2001": pre_airs_df,
+    },
+    absolute_product_order=(
+        ERA5_NAME,
+        AIRS_NAME,
+        GPCP_NAME,
+        GPCP_MONTHLY_CORR_NAME,
+        GPCP_SEASONAL_CORR_NAME,
+    ),
+    difference_product_order=(
+        GPCP_NAME,
+        GPCP_MONTHLY_CORR_NAME,
+        GPCP_SEASONAL_CORR_NAME,
+    ),
+    region="Antarctica",
+)
+combined_period_diagnostics_plot = os.path.join(
+    PATH_TO_PLOTS,
+    "AIS_operational_CF_all_period_monthly_and_difference_3x2.png",
+)
+fig.savefig(combined_period_diagnostics_plot, dpi=200, bbox_inches="tight")
+plt.show()
+
+print("Post-2020 relative-difference data:", post_2020_relative_file)
+print("Combined 3-by-2 diagnostic figure:", combined_period_diagnostics_plot)
+
+
+#%%
+# =============================================================================
+# SECTION 17. POST-2020 METRICS AND THREE-PERIOD ERA5 COMPARISON
+# =============================================================================
+# Required first: Sections 11 and 15.
+# Placing the post-derivation test beside both historical periods helps reveal
+# whether stability degrades systematically with distance from 2013-2020.
+
+metrics_era5_post_2020 = compute_monthly_validation_metrics(
+    monthly_region_df=post_2020_df,
+    reference_product=ERA5_NAME,
+    target_products=(
+        GPCP_NAME,
+        GPCP_MONTHLY_CORR_NAME,
+        GPCP_SEASONAL_CORR_NAME,
+    ),
+    regions=("Antarctica",),
+)
+metrics_era5_post_2020["test_period"] = "2021-2024"
+
+# Reuse Section 11's in-memory table when available.  If the kernel was
+# restarted, load the already-saved historical metrics instead of forcing the
+# user to repeat AIRS or historical processing merely to update this figure.
+if "historical_metrics" in globals():
+    historical_metrics_for_comparison = historical_metrics.copy()
+else:
+    historical_metrics_for_comparison = pd.read_csv(
+        os.path.join(
+            PATH_TO_DFS,
+            "historical_operational_CF_monthly_metrics.csv",
+        )
+    )
+
+all_period_era5_metrics = pd.concat(
+    [
+        historical_metrics_for_comparison[
+            historical_metrics_for_comparison["reference_product"] == ERA5_NAME
+        ],
+        metrics_era5_post_2020,
+    ],
+    ignore_index=True,
+)
+all_period_metrics_file = os.path.join(
+    PATH_TO_DFS,
+    "ERA5_referenced_operational_CF_metrics_all_test_periods.csv",
+)
+all_period_era5_metrics.to_csv(all_period_metrics_file, index=False)
+
+fig, axes = plot_era5_metric_comparison(
+    metrics_df=all_period_era5_metrics,
+    product_order=(
+        GPCP_NAME,
+        GPCP_MONTHLY_CORR_NAME,
+        GPCP_SEASONAL_CORR_NAME,
+    ),
+    period_order=("2021-2024", "2003-2012", "1992-2001"),
+)
+all_period_metrics_plot = os.path.join(
+    PATH_TO_PLOTS,
+    "AIS_ERA5_referenced_metric_comparison_all_test_periods.png",
+)
+fig.savefig(all_period_metrics_plot, dpi=200, bbox_inches="tight")
+plt.show()
+
+print(
+    all_period_era5_metrics[
+        [
+            "test_period",
+            "product",
+            "n_common_months",
+            "CC",
+            "RMSE_mm_per_month",
+            "MAE_mm_per_month",
+            "RB_percent",
+        ]
+    ].round(2).to_string(index=False)
+)
+print("All-period metrics:", all_period_metrics_file)
+print("All-period metric figure:", all_period_metrics_plot)
+
+
+#%%
+# =============================================================================
+# SECTION 18. THREE-PERIOD MONTHLY SCATTERPLOTS AGAINST ERA5
+# =============================================================================
+# Required first: Section 15.
+# Rows use the same immediately-after, immediately-before, and far-before order
+# as Section 16. Columns retain the original/monthly/seasonal method order.
+
+fig, axes = plot_monthly_scatter_against_era5(
+    period_dataframes={
+        "Immediately after\n2021-2024": post_2020_df,
+        "Immediately before\n2003-2012": airs_era_df,
+        "Far before\n1992-2001": pre_airs_df,
+    },
+    product_order=(
+        GPCP_NAME,
+        GPCP_MONTHLY_CORR_NAME,
+        GPCP_SEASONAL_CORR_NAME,
+    ),
+    product_display_names={
+        GPCP_NAME: "Original GPCP V3.3",
+        GPCP_MONTHLY_CORR_NAME: "Monthly-CF corrected GPCP",
+        GPCP_SEASONAL_CORR_NAME: "Seasonal-CF corrected GPCP",
+    },
+    region="Antarctica",
+)
+all_period_scatter_plot = os.path.join(
+    PATH_TO_PLOTS,
+    "AIS_monthly_scatter_GPCP_corrections_vs_ERA5_all_periods_3x3.png",
+)
+fig.savefig(all_period_scatter_plot, dpi=200, bbox_inches="tight")
+plt.show()
+
+print("All-period 3-by-3 monthly scatter figure:", all_period_scatter_plot)
