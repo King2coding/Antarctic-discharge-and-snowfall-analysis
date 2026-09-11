@@ -1871,3 +1871,712 @@ fig.savefig(all_period_scatter_plot, dpi=200, bbox_inches="tight")
 plt.show()
 
 print("All-period 3-by-3 monthly scatter figure:", all_period_scatter_plot)
+
+
+#%%
+# =============================================================================
+# SECTION 19. EAST ANTARCTIC SPRING 2022 PRECIPITATION TOTAL
+# =============================================================================
+# Required run sequence after a fresh kernel: Sections 1, 2, 3, 4, 5, 15,
+# and then this section (19).  Sections 6-14 and 16-18 are not required.
+#
+# Purpose
+# -------
+# This is a deliberately narrow comparison for the East Antarctic spring 2022
+# period discussed in the supplied abstract.  The left panel compares the SON
+# 2022 total among products; the right panel places SON beside the other 2022
+# seasons so its within-year magnitude can be seen without a separate figure.
+# It is not intended to reproduce the 195-mm snowfall value reported elsewhere,
+# because that value may use a different spatial boundary, snowfall variable,
+# or aggregation method.
+#
+# The input table `post_2020_df` already contains area-weighted regional monthly
+# precipitation for ERA5, original GPCP V3.3, and the two fixed-2013-2020-CF
+# corrections.  Consequently, this section does not reopen or remap any files.
+
+SEASON_2022_MONTHS = {
+    # Use the conventional season-year definition: DJF 2022 begins in Dec 2021.
+    "DJF": pd.to_datetime(["2021-12-01", "2022-01-01", "2022-02-01"]),
+    "MAM": pd.to_datetime(["2022-03-01", "2022-04-01", "2022-05-01"]),
+    "JJA": pd.to_datetime(["2022-06-01", "2022-07-01", "2022-08-01"]),
+    "SON": pd.to_datetime(["2022-09-01", "2022-10-01", "2022-11-01"]),
+}
+SEASON_2022_PRODUCTS = (
+    ERA5_NAME,
+    GPCP_NAME,
+    GPCP_MONTHLY_CORR_NAME,
+    GPCP_SEASONAL_CORR_NAME,
+)
+
+# Isolate East Antarctica. Normalizing timestamps to month starts protects the
+# selections from harmless differences in day-of-month conventions.
+eais_monthly = post_2020_df.copy()
+eais_monthly["time"] = (
+    pd.to_datetime(eais_monthly["time"]).dt.to_period("M").dt.to_timestamp()
+)
+eais_monthly = eais_monthly[
+    (eais_monthly["region"] == "East Antarctica")
+    & (eais_monthly["product"].isin(SEASON_2022_PRODUCTS))
+].copy()
+
+# Build each season from an explicit three-month list and reject missing,
+# duplicated, or non-finite inputs before summing. This prevents an incomplete
+# season from appearing as a valid accumulation.
+seasonal_rows = []
+for season, required_months in SEASON_2022_MONTHS.items():
+    selected = eais_monthly[eais_monthly["time"].isin(required_months)].copy()
+    for product in SEASON_2022_PRODUCTS:
+        product_rows = selected[selected["product"] == product]
+        valid = (
+            len(product_rows) == 3
+            and product_rows["time"].nunique() == 3
+            and set(product_rows["time"]) == set(required_months)
+            and np.isfinite(product_rows["precipitation"]).all()
+        )
+        if not valid:
+            raise ValueError(
+                f"{season} 2022 EAIS total requires exactly one finite value "
+                f"for each required month; invalid product: {product}"
+            )
+        seasonal_rows.append({
+            "season": season,
+            "product": product,
+            "seasonal_total_mm": product_rows["precipitation"].sum(),
+        })
+
+eais_2022_seasonal_totals = pd.DataFrame(seasonal_rows)
+son_2022_totals = eais_2022_seasonal_totals[
+    eais_2022_seasonal_totals["season"] == "SON"
+].set_index("product").reindex(SEASON_2022_PRODUCTS).reset_index()
+
+# Short display labels keep the SON panel readable without a legend.
+display_labels = {
+    ERA5_NAME: "ERA5",
+    GPCP_NAME: "Original\nGPCP V3.3",
+    GPCP_MONTHLY_CORR_NAME: "Monthly-CF\ncorrected GPCP",
+    GPCP_SEASONAL_CORR_NAME: "Seasonal-CF\ncorrected GPCP",
+}
+bar_colors = [PRODUCT_STYLES[p]["color"] for p in SEASON_2022_PRODUCTS]
+
+# Left: direct comparison of the reported-event season among products.
+# Right: the same SON values in the context of all four 2022 seasons.
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(17.0, 6.8),
+    gridspec_kw={"width_ratios": [1.0, 1.35]},
+)
+ax_son, ax_all = axes
+
+bars = ax_son.bar(
+    [display_labels[p] for p in son_2022_totals["product"]],
+    son_2022_totals["seasonal_total_mm"],
+    color=bar_colors,
+    width=0.68,
+    edgecolor="0.20",
+    linewidth=0.8,
+)
+
+# Direct labels make the exact three-month totals immediately available.
+ax_son.bar_label(bars, fmt="%.1f", padding=4, fontsize=11, fontweight="bold")
+ax_son.set_title(
+    "SON 2022 Product Comparison",
+    fontsize=15,
+    fontweight="bold",
+    pad=10,
+)
+ax_son.set_ylabel("Accumulated precipitation [mm]", fontsize=13, fontweight="bold")
+ax_son.tick_params(axis="x", labelsize=10.5)
+ax_son.tick_params(axis="y", labelsize=11)
+ax_son.grid(axis="y", alpha=0.25)
+ax_son.set_axisbelow(True)
+ax_son.set_ylim(0, son_2022_totals["seasonal_total_mm"].max() * 1.20)
+ax_son.text(
+    0.01,
+    0.98,
+    "September-November 2022",
+    transform=ax_son.transAxes,
+    ha="left",
+    va="top",
+    fontsize=10,
+    color="0.30",
+)
+
+# Grouped seasonal bars preserve the same product colors as the left panel.
+season_order = ["DJF", "MAM", "JJA", "SON"]
+x = np.arange(len(season_order), dtype=float)
+width = 0.19
+offsets = (np.arange(len(SEASON_2022_PRODUCTS)) - 1.5) * width
+for offset, product in zip(offsets, SEASON_2022_PRODUCTS):
+    values = (
+        eais_2022_seasonal_totals[
+            eais_2022_seasonal_totals["product"] == product
+        ]
+        .set_index("season")
+        .reindex(season_order)["seasonal_total_mm"]
+        .to_numpy()
+    )
+    product_bars = ax_all.bar(
+        x + offset,
+        values,
+        width=width,
+        color=PRODUCT_STYLES[product]["color"],
+        edgecolor="0.20",
+        linewidth=0.6,
+        label=display_labels[product].replace("\n", " "),
+    )
+    ax_all.bar_label(product_bars, fmt="%.1f", padding=2, fontsize=8.5)
+
+ax_all.set_title(
+    "Seasonal Context Within 2022",
+    fontsize=15,
+    fontweight="bold",
+    pad=10,
+)
+ax_all.set_xticks(x, season_order)
+ax_all.set_ylabel("Accumulated precipitation [mm]", fontsize=13, fontweight="bold")
+ax_all.tick_params(axis="both", labelsize=11)
+ax_all.grid(axis="y", alpha=0.25)
+ax_all.set_axisbelow(True)
+ax_all.set_ylim(
+    0,
+    eais_2022_seasonal_totals["seasonal_total_mm"].max() * 1.22,
+)
+ax_all.legend(
+    loc="upper center",
+    bbox_to_anchor=(0.5, -0.12),
+    ncol=2,
+    frameon=False,
+    fontsize=9.5,
+)
+
+fig.suptitle(
+    "EAIS 2022 Seasonal Precipitation Across Products",
+    fontsize=18,
+    fontweight="bold",
+    y=1.01,
+)
+fig.text(
+    0.5,
+    -0.035,
+    "EAIS area-weighted mean; each season is the sum of three monthly accumulations. "
+    "DJF 2022 = December 2021-February 2022.",
+    ha="center",
+    fontsize=10.5,
+    color="0.30",
+)
+fig.tight_layout()
+
+eais_son_2022_plot = os.path.join(
+    PATH_TO_PLOTS,
+    "EAIS_SON_2022_accumulated_precipitation_product_comparison.png",
+)
+fig.savefig(eais_son_2022_plot, dpi=200, bbox_inches="tight")
+plt.show()
+
+print(son_2022_totals.round(2).to_string(index=False))
+print("\nEAIS 2022 seasonal context:")
+print(
+    eais_2022_seasonal_totals.pivot(
+        index="season",
+        columns="product",
+        values="seasonal_total_mm",
+    )
+    .reindex(["DJF", "MAM", "JJA", "SON"])
+    .round(2)
+    .to_string()
+)
+print("EAIS SON 2022 comparison figure:", eais_son_2022_plot)
+
+
+#%%
+# =============================================================================
+# SECTION 20. EXPLORATORY EAIS-BASIN LOCALIZATION OF THE SON 2022 SIGNAL
+# =============================================================================
+# Required run sequence after a fresh kernel: Sections 1, 2, 3, 4, 5, 15,
+# and then this section (20). Section 19 is optional and is not a dependency.
+#
+# Context and interpretation guardrail
+# ------------------------------------
+# This is a focused add-on requested after an internally shared, confidential
+# review abstract described unusually large East Antarctic snowfall in spring
+# 2022. No unpublished text, locations, or conclusions from that material are
+# reproduced here. The purpose is only to ask where our existing products place
+# the largest SON 2022 precipitation accumulation across the EAIS basins.
+#
+# All ten EAIS basins are shown before highlighting the basin with the largest
+# ERA5 accumulation. This ordering is exploratory and ERA5-referenced; it must
+# not be described as reproducing the reviewed study's spatial domain or its
+# reported snowfall amount. Our fields are total precipitation and the precise
+# external event boundary is unavailable.
+
+EAIS_BASIN_LABELS = {
+    2: "A-Ap",
+    3: "Ap-B",
+    4: "B-C",
+    5: "C-Cp",
+    6: "Cp-D",
+    7: "D-Dp",
+    8: "Dp-E",
+    9: "E-Ep",
+    18: "Jpp-K",
+    19: "K-A",
+}
+EAIS_BASIN_PRODUCTS = (
+    ERA5_NAME,
+    GPCP_NAME,
+    GPCP_MONTHLY_CORR_NAME,
+    GPCP_SEASONAL_CORR_NAME,
+)
+EAIS_BASIN_DISPLAY_NAMES = {
+    ERA5_NAME: "ERA5",
+    GPCP_NAME: "Original GPCP V3.3",
+    GPCP_MONTHLY_CORR_NAME: "Monthly-CF corrected GPCP",
+    GPCP_SEASONAL_CORR_NAME: "Seasonal-CF corrected GPCP",
+}
+
+# Build one mask per constituent EAIS drainage basin on the same common grid
+# used throughout the study. Basin means are cosine-latitude weighted, exactly
+# like the full-EAIS calculation, but no averaging occurs across basin IDs.
+eais_single_basin_masks = {
+    f"Basin {basin_id} ({EAIS_BASIN_LABELS[basin_id]})": (
+        basin_mask_01deg == basin_id
+    )
+    for basin_id in EAIS_BASINS
+}
+
+eais_basin_original_monthly = build_all_region_monthly_series_cosine(
+    product_dict={
+        ERA5_NAME: era5_post_2020_01,
+        GPCP_NAME: gpcp_post_2020_01,
+    },
+    region_masks=eais_single_basin_masks,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+# The operational factors are spatially uniform, so applying them to each
+# basin's monthly GPCP mean is equivalent to applying them to every basin pixel
+# before taking the same linear area-weighted mean.
+eais_basin_monthly = apply_operational_factors_to_regional_gpcp(
+    regional_df=eais_basin_original_monthly,
+    monthly_factor_table=final_monthly_f17_gpcp_cf,
+    seasonal_factor_table=final_seasonal_f17_gpcp_cf,
+)
+eais_basin_monthly["time"] = (
+    pd.to_datetime(eais_basin_monthly["time"])
+    .dt.to_period("M")
+    .dt.to_timestamp()
+)
+
+# Explicit season-year month lists remove ambiguity about DJF. For example,
+# DJF 2022 comprises December 2021 plus January-February 2022.
+EAIS_BASIN_SEASON_2022_MONTHS = {
+    "DJF": pd.to_datetime(["2021-12-01", "2022-01-01", "2022-02-01"]),
+    "MAM": pd.to_datetime(["2022-03-01", "2022-04-01", "2022-05-01"]),
+    "JJA": pd.to_datetime(["2022-06-01", "2022-07-01", "2022-08-01"]),
+    "SON": pd.to_datetime(["2022-09-01", "2022-10-01", "2022-11-01"]),
+}
+
+# Validate and sum exactly three finite monthly accumulations for every
+# basin-product-season combination. This catches missing or duplicated records
+# before either the basin ranking or the highlighted-basin panel is produced.
+eais_basin_seasonal_rows = []
+for basin_name in eais_single_basin_masks:
+    for season, required_months in EAIS_BASIN_SEASON_2022_MONTHS.items():
+        for product in EAIS_BASIN_PRODUCTS:
+            selected = eais_basin_monthly[
+                (eais_basin_monthly["region"] == basin_name)
+                & (eais_basin_monthly["product"] == product)
+                & (eais_basin_monthly["time"].isin(required_months))
+            ]
+            valid = (
+                len(selected) == 3
+                and selected["time"].nunique() == 3
+                and set(selected["time"]) == set(required_months)
+                and np.isfinite(selected["precipitation"]).all()
+            )
+            if not valid:
+                raise ValueError(
+                    "Basin-level seasonal total requires one finite value for "
+                    f"each required month: {basin_name}, {product}, {season}."
+                )
+            eais_basin_seasonal_rows.append({
+                "basin": basin_name,
+                "season": season,
+                "product": product,
+                "seasonal_total_mm": selected["precipitation"].sum(),
+            })
+
+eais_basin_seasonal_2022 = pd.DataFrame(eais_basin_seasonal_rows)
+eais_basin_seasonal_file = os.path.join(
+    PATH_TO_DFS,
+    "EAIS_basin_seasonal_accumulations_2022.csv",
+)
+eais_basin_seasonal_2022.to_csv(eais_basin_seasonal_file, index=False)
+
+# Rank every EAIS basin by ERA5 SON accumulation. Selecting the highlighted
+# basin only after displaying the complete ranking keeps the exploratory choice
+# visible and avoids silently choosing a favorable GPCP result.
+son_basin = eais_basin_seasonal_2022[
+    eais_basin_seasonal_2022["season"] == "SON"
+].copy()
+era5_son_order = (
+    son_basin[son_basin["product"] == ERA5_NAME]
+    .sort_values("seasonal_total_mm", ascending=True)["basin"]
+    .tolist()
+)
+highest_era5_son_basin = era5_son_order[-1]
+
+# Panel A: all constituent EAIS basins, ordered from low to high ERA5 SON total.
+# Panel B: all four 2022 seasons for the ERA5-highest SON basin.
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(18.0, 8.5),
+    gridspec_kw={"width_ratios": [1.35, 1.0]},
+)
+ax_basin, ax_focus = axes
+
+y = np.arange(len(era5_son_order), dtype=float)
+bar_height = 0.19
+offsets = (np.arange(len(EAIS_BASIN_PRODUCTS)) - 1.5) * bar_height
+for offset, product in zip(offsets, EAIS_BASIN_PRODUCTS):
+    values = (
+        son_basin[son_basin["product"] == product]
+        .set_index("basin")
+        .reindex(era5_son_order)["seasonal_total_mm"]
+        .to_numpy()
+    )
+    ax_basin.barh(
+        y + offset,
+        values,
+        height=bar_height,
+        color=PRODUCT_STYLES[product]["color"],
+        edgecolor="0.20",
+        linewidth=0.5,
+        label=EAIS_BASIN_DISPLAY_NAMES[product],
+    )
+
+ax_basin.set_yticks(y, era5_son_order)
+ax_basin.set_xlabel("SON accumulated precipitation [mm]", fontsize=13, fontweight="bold")
+ax_basin.set_title(
+    "All EAIS Basins: SON 2022",
+    fontsize=15,
+    fontweight="bold",
+    pad=10,
+)
+ax_basin.tick_params(axis="both", labelsize=11)
+ax_basin.grid(axis="x", alpha=0.25)
+ax_basin.set_axisbelow(True)
+
+focus = eais_basin_seasonal_2022[
+    eais_basin_seasonal_2022["basin"] == highest_era5_son_basin
+]
+season_order = ["DJF", "MAM", "JJA", "SON"]
+x = np.arange(len(season_order), dtype=float)
+bar_width = 0.19
+for offset, product in zip(offsets, EAIS_BASIN_PRODUCTS):
+    values = (
+        focus[focus["product"] == product]
+        .set_index("season")
+        .reindex(season_order)["seasonal_total_mm"]
+        .to_numpy()
+    )
+    bars = ax_focus.bar(
+        x + offset,
+        values,
+        width=bar_width,
+        color=PRODUCT_STYLES[product]["color"],
+        edgecolor="0.20",
+        linewidth=0.5,
+    )
+    ax_focus.bar_label(bars, fmt="%.1f", padding=2, fontsize=8.5)
+
+ax_focus.set_xticks(x, season_order)
+ax_focus.set_ylabel("Accumulated precipitation [mm]", fontsize=13, fontweight="bold")
+ax_focus.set_title(
+    f"Seasonal Context: {highest_era5_son_basin}",
+    fontsize=15,
+    fontweight="bold",
+    pad=10,
+)
+ax_focus.tick_params(axis="both", labelsize=11)
+ax_focus.grid(axis="y", alpha=0.25)
+ax_focus.set_axisbelow(True)
+ax_focus.set_ylim(0, focus["seasonal_total_mm"].max() * 1.22)
+
+handles, labels = ax_basin.get_legend_handles_labels()
+fig.legend(
+    handles,
+    labels,
+    loc="lower center",
+    bbox_to_anchor=(0.5, 0.015),
+    ncol=2,
+    frameon=False,
+    fontsize=10.5,
+)
+fig.suptitle(
+    "Exploratory Localization of EAIS Spring 2022 Precipitation",
+    fontsize=18,
+    fontweight="bold",
+    y=0.99,
+)
+fig.text(
+    0.5,
+    0.075,
+    "Basins are ranked by ERA5 SON accumulation; the right panel highlights "
+    "the ERA5-highest basin. Total precipitation, not snowfall.",
+    ha="center",
+    fontsize=10.5,
+    color="0.30",
+)
+fig.tight_layout(rect=(0, 0.10, 1, 0.96))
+
+eais_basin_son_2022_plot = os.path.join(
+    PATH_TO_PLOTS,
+    "EAIS_basin_SON_2022_localization_and_seasonal_context.png",
+)
+fig.savefig(eais_basin_son_2022_plot, dpi=200, bbox_inches="tight")
+plt.show()
+
+print("ERA5-highest EAIS basin in SON 2022:", highest_era5_son_basin)
+print("Saved basin-level seasonal values:", eais_basin_seasonal_file)
+print("Saved exploratory basin figure:", eais_basin_son_2022_plot)
+
+
+#%%
+# =============================================================================
+# SECTION 21. EXPLORATORY COMPOSITE-BASIN SEASONAL COMPARISON FOR 2022
+# =============================================================================
+# Required run sequence after a fresh kernel: Sections 1, 2, 3, 4, 5, 15,
+# and then this section (21). Sections 19 and 20 are optional: all variables
+# needed here are recreated below so that this add-on can run independently.
+#
+# Purpose and confidentiality guardrail
+# -------------------------------------
+# This focused sensitivity test follows the internally requested SON 2022
+# investigation. It does not reproduce or identify any confidential review
+# material. It only tests whether the spring signal seen in the basin-by-basin
+# analysis remains visible after adjacent EAIS drainage basins are combined.
+#
+# Two transparent, map-based definitions are evaluated:
+#   1. Core eastern sector:    basins 5, 6, and 7 (C-Cp through D-Dp)
+#   2. Broader eastern sector: basins 5, 6, 7, and 8 (C-Cp through Dp-E)
+#
+# IMPORTANT: constituent grid cells are merged first, and one cosine-latitude
+# area-weighted regional mean is then calculated. Basin means are not averaged,
+# because the basins have different areas and latitude distributions.
+# Results remain exploratory total-precipitation comparisons and should not be
+# described as reproducing an external study domain or a snowfall estimate.
+
+EAIS_COMPOSITE_BASIN_IDS = {
+    "Core eastern sector (Basins 5-7)": (5, 6, 7),
+    "Broader eastern sector (Basins 5-8)": (5, 6, 7, 8),
+}
+EAIS_COMPOSITE_PRODUCTS = (
+    ERA5_NAME,
+    GPCP_NAME,
+    GPCP_MONTHLY_CORR_NAME,
+    GPCP_SEASONAL_CORR_NAME,
+)
+EAIS_COMPOSITE_DISPLAY_NAMES = {
+    ERA5_NAME: "ERA5",
+    GPCP_NAME: "Original GPCP V3.3",
+    GPCP_MONTHLY_CORR_NAME: "Monthly-CF corrected GPCP",
+    GPCP_SEASONAL_CORR_NAME: "Seasonal-CF corrected GPCP",
+}
+
+# `np.isin` produces the union of all selected basin grid cells. Converting the
+# result back to an xarray object preserves the coordinates expected by the
+# regional averaging helper.
+eais_composite_masks = {
+    region_name: xr.DataArray(
+        np.isin(basin_mask_01deg.values, basin_ids),
+        coords=basin_mask_01deg.coords,
+        dims=basin_mask_01deg.dims,
+    )
+    for region_name, basin_ids in EAIS_COMPOSITE_BASIN_IDS.items()
+}
+
+# Use the already loaded and reprojected 2021-2024 fields from Section 15.
+eais_composite_original_monthly = build_all_region_monthly_series_cosine(
+    product_dict={
+        ERA5_NAME: era5_post_2020_01,
+        GPCP_NAME: gpcp_post_2020_01,
+    },
+    region_masks=eais_composite_masks,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+)
+
+# Apply the fixed 2013-2020 operational-candidate factors to the composite
+# regional GPCP series. Since the factors are spatially uniform, applying them
+# after the linear area average is equivalent to applying them pixel by pixel.
+eais_composite_monthly = apply_operational_factors_to_regional_gpcp(
+    regional_df=eais_composite_original_monthly,
+    monthly_factor_table=final_monthly_f17_gpcp_cf,
+    seasonal_factor_table=final_seasonal_f17_gpcp_cf,
+)
+eais_composite_monthly["time"] = (
+    pd.to_datetime(eais_composite_monthly["time"])
+    .dt.to_period("M")
+    .dt.to_timestamp()
+)
+
+# DJF 2022 follows the meteorological season-year convention: December 2021
+# plus January-February 2022. The remaining seasons use three months in 2022.
+EAIS_COMPOSITE_SEASON_2022_MONTHS = {
+    "DJF": pd.to_datetime(["2021-12-01", "2022-01-01", "2022-02-01"]),
+    "MAM": pd.to_datetime(["2022-03-01", "2022-04-01", "2022-05-01"]),
+    "JJA": pd.to_datetime(["2022-06-01", "2022-07-01", "2022-08-01"]),
+    "SON": pd.to_datetime(["2022-09-01", "2022-10-01", "2022-11-01"]),
+}
+
+# Require exactly three unique, finite monthly accumulations before summing a
+# seasonal total. This prevents incomplete seasons from entering the figure.
+eais_composite_seasonal_rows = []
+for region_name in EAIS_COMPOSITE_BASIN_IDS:
+    for season, required_months in EAIS_COMPOSITE_SEASON_2022_MONTHS.items():
+        for product in EAIS_COMPOSITE_PRODUCTS:
+            selected = eais_composite_monthly[
+                (eais_composite_monthly["region"] == region_name)
+                & (eais_composite_monthly["product"] == product)
+                & (eais_composite_monthly["time"].isin(required_months))
+            ]
+            valid = (
+                len(selected) == 3
+                and selected["time"].nunique() == 3
+                and set(selected["time"]) == set(required_months)
+                and np.isfinite(selected["precipitation"]).all()
+            )
+            if not valid:
+                raise ValueError(
+                    "Composite seasonal total requires one finite value for "
+                    f"each required month: {region_name}, {product}, {season}."
+                )
+            eais_composite_seasonal_rows.append({
+                "region": region_name,
+                "basin_ids": ",".join(
+                    str(value) for value in EAIS_COMPOSITE_BASIN_IDS[region_name]
+                ),
+                "season": season,
+                "product": product,
+                "seasonal_total_mm": selected["precipitation"].sum(),
+            })
+
+eais_composite_seasonal_2022 = pd.DataFrame(eais_composite_seasonal_rows)
+eais_composite_seasonal_file = os.path.join(
+    PATH_TO_DFS,
+    "EAIS_composite_basin_seasonal_accumulations_2022.csv",
+)
+eais_composite_seasonal_2022.to_csv(
+    eais_composite_seasonal_file,
+    index=False,
+)
+
+# Repeat the four-season product comparison for both spatial definitions.
+# Shared y limits make the two panels directly comparable.
+fig, axes = plt.subplots(1, 2, figsize=(17.5, 7.2), sharey=True)
+season_order = ["DJF", "MAM", "JJA", "SON"]
+x = np.arange(len(season_order), dtype=float)
+bar_width = 0.19
+offsets = (np.arange(len(EAIS_COMPOSITE_PRODUCTS)) - 1.5) * bar_width
+
+for ax, region_name in zip(axes, EAIS_COMPOSITE_BASIN_IDS):
+    region_values = eais_composite_seasonal_2022[
+        eais_composite_seasonal_2022["region"] == region_name
+    ]
+    for offset, product in zip(offsets, EAIS_COMPOSITE_PRODUCTS):
+        values = (
+            region_values[region_values["product"] == product]
+            .set_index("season")
+            .reindex(season_order)["seasonal_total_mm"]
+            .to_numpy()
+        )
+        bars = ax.bar(
+            x + offset,
+            values,
+            width=bar_width,
+            color=PRODUCT_STYLES[product]["color"],
+            edgecolor="0.20",
+            linewidth=0.5,
+            label=EAIS_COMPOSITE_DISPLAY_NAMES[product],
+        )
+        ax.bar_label(bars, fmt="%.1f", padding=2, fontsize=9)
+
+    basin_ids_text = ", ".join(
+        str(value) for value in EAIS_COMPOSITE_BASIN_IDS[region_name]
+    )
+    ax.set_xticks(x, season_order)
+    ax.set_title(region_name, fontsize=15, fontweight="bold", pad=10)
+    ax.text(
+        0.02,
+        0.97,
+        f"Merged basin IDs: {basin_ids_text}",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=10.5,
+        color="0.30",
+    )
+    ax.tick_params(axis="both", labelsize=12)
+    ax.grid(axis="y", alpha=0.25)
+    ax.set_axisbelow(True)
+
+axes[0].set_ylabel(
+    "Accumulated precipitation [mm]",
+    fontsize=13,
+    fontweight="bold",
+)
+figure_maximum = eais_composite_seasonal_2022["seasonal_total_mm"].max()
+axes[0].set_ylim(0, figure_maximum * 1.23)
+
+handles, labels = axes[0].get_legend_handles_labels()
+fig.legend(
+    handles,
+    labels,
+    loc="lower center",
+    bbox_to_anchor=(0.5, 0.015),
+    ncol=2,
+    frameon=False,
+    fontsize=11,
+)
+fig.suptitle(
+    "EAIS Eastern-Sector Seasonal Precipitation in 2022",
+    fontsize=18,
+    fontweight="bold",
+    y=0.985,
+)
+fig.text(
+    0.5,
+    0.075,
+    "Each composite is formed by merging basin grid cells before cosine-area "
+    "averaging. DJF 2022 = December 2021-February 2022. Total precipitation.",
+    ha="center",
+    fontsize=10.5,
+    color="0.30",
+)
+fig.tight_layout(rect=(0, 0.11, 1, 0.94))
+
+eais_composite_seasonal_plot = os.path.join(
+    PATH_TO_PLOTS,
+    "EAIS_basins_5_7_and_5_8_seasonal_comparison_2022.png",
+)
+fig.savefig(eais_composite_seasonal_plot, dpi=200, bbox_inches="tight")
+plt.show()
+
+print("Composite-basin 2022 seasonal totals:")
+print(
+    eais_composite_seasonal_2022.pivot_table(
+        index=["region", "season"],
+        columns="product",
+        values="seasonal_total_mm",
+    )
+    .round(2)
+    .to_string()
+)
+print("Saved composite seasonal values:", eais_composite_seasonal_file)
+print("Saved composite seasonal figure:", eais_composite_seasonal_plot)
