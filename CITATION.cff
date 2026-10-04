@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "Please cite this code archive and the associated publication when one is specified in the repository."
+title: "Antarctic discharge and snowfall analysis"
+type: software
+authors:
+  - family-names: "Kumah"
+    given-names: "Kwabena Kingsley"
+    orcid: "https://orcid.org/0000-0001-6865-0665"
+repository-code: "https://github.com/King2coding/Antarctic-discharge-and-snowfall-analysis"
