@@ -43,17 +43,17 @@ packages such as `numpy`, `pandas`, `xarray`, `scipy`, `matplotlib`, `seaborn`,
 versions were not consistently recorded across the analysis history. Reproduction
 should therefore begin with the imports and configuration in the selected script.
 
-## Associated manuscript
+## Associated preprint
 
 Kumah, K. K., Behrangi, A., Zandi, O., Gardner, A. S., Wiese, D. N., and
 Greene, C. A. (2026). *Quantifying Antarctic Snowfall Accumulation Using the
 Latest Ice Discharge and Spaceborne Gravity Observations: Comparison with
-Reanalysis and Satellite Precipitation Products.* Manuscript submitted.
+Reanalysis and Satellite Precipitation Products.* ESS Open Archive.
+[https://doi.org/10.22541/essoar.15010201/v1](https://doi.org/10.22541/essoar.15010201/v1)
 
-This citation and status match the author's public research website as of
-October 2026. The manuscript working files are maintained outside this
-repository and are not redistributed here. Until formal publication, cite the
-submitted manuscript only with its status stated explicitly.
+The preprint was published on 10 October 2026. It is identified here as a
+preprint, rather than as a peer-reviewed journal article. Manuscript working
+files are maintained outside this repository and are not redistributed here.
 
 ## License
 

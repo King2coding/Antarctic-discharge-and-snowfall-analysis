@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "Please cite the associated submitted manuscript and state its status explicitly."
+message: "Please cite the associated ESS Open Archive preprint."
 title: "Antarctic discharge and snowfall analysis"
 type: software
 authors:
@@ -12,15 +12,19 @@ preferred-citation:
   title: "Quantifying Antarctic Snowfall Accumulation Using the Latest Ice Discharge and Spaceborne Gravity Observations: Comparison with Reanalysis and Satellite Precipitation Products"
   authors:
     - family-names: "Kumah"
-      given-names: "Kwabena Kingsley"
+      given-names: "Kingsley K."
+      orcid: "https://orcid.org/0000-0001-6865-0665"
     - family-names: "Behrangi"
-      given-names: "A."
+      given-names: "Ali"
     - family-names: "Zandi"
-      given-names: "O."
+      given-names: "Omid"
     - family-names: "Gardner"
-      given-names: "A. S."
+      given-names: "Alex S."
     - family-names: "Wiese"
-      given-names: "D. N."
+      given-names: "David N."
     - family-names: "Greene"
-      given-names: "C. A."
+      given-names: "Chad A."
   year: 2026
+  date-published: "2026-10-10"
+  doi: "10.22541/essoar.15010201/v1"
+  url: "https://doi.org/10.22541/essoar.15010201/v1"
