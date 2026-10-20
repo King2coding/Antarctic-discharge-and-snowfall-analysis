@@ -1879,16 +1879,36 @@ def compute_seasonal_climatology_from_regional_series(df, drop_incomplete=True):
 
 # =============================================================================
 
+# def compute_annual_totals_from_regional_series(df):
+#     """
+#     Annual totals [mm/year] from monthly regional series.
+#     """
+#     out = df.copy()
+#     out["year"] = pd.to_datetime(out["time"]).dt.year
+
+#     annual = (
+#         out.groupby(["region", "product", "year"], as_index=False)["precipitation"]
+#         .sum()
+#         .sort_values(["region", "product", "year"])
+#     )
+#     return annual
+
 def compute_annual_totals_from_regional_series(df):
     """
-    Annual totals [mm/year] from monthly regional series.
+    Annual totals [mm/year], requiring 12 valid monthly values.
+
+    Incomplete years remain NaN and are excluded from multiyear means,
+    consistent with the annual gridded calculation.
     """
     out = df.copy()
     out["year"] = pd.to_datetime(out["time"]).dt.year
 
     annual = (
-        out.groupby(["region", "product", "year"], as_index=False)["precipitation"]
-        .sum()
+        out.groupby(
+            ["region", "product", "year"],
+            as_index=False,
+        )["precipitation"]
+        .sum(min_count=12)
         .sort_values(["region", "product", "year"])
     )
     return annual

@@ -2335,24 +2335,31 @@ svnme = os.path.join(
 )
 fig, ax = plot_regional_mean_annual_bars(
     df_regional_mean_annual,
-    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=(r"$P_{\mathrm{MB}}$", 
-                   "ERA5", 
-                   "GPCP V3.3", 
-                   "GPM PMW V08",
-                   "GPM PMW V07", 
-                  ),
+    region_order=(
+        "Antarctica",
+        "West Antarctica",
+        "East Antarctica",
+    ),
+    product_order=(
+        r"$P_{\mathrm{MB}}$",
+        "ERA5",
+        "GPCP V3.3",
+        "GPM PMW V08",
+        "GPM PMW V07",
+    ),
     product_colors=product_styles_corr,
     figsize=(9, 6),
     ylabel="[mm/year]",
     title="",
     annotate=True,
+    legend_loc="upper right",
+    legend_bbox_to_anchor=(1, 1),
 )
-# f"{ANNUAL_YEAR_START}–{ANNUAL_YEAR_END} mean annual precipitation"
+
+# Remove the space previously reserved for the external legend.
+fig.tight_layout(rect=[0, 0, 1, 1])
 
 fig.savefig(svnme, dpi=150)
-
-plt.show()
 gc.collect()
 
 #%%
