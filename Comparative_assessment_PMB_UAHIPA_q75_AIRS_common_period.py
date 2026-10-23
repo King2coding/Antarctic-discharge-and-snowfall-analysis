@@ -34,6 +34,24 @@ from comparative_uahipa_airs_common_period_utils import (
     prepare_all_product_common_period,
 )
 
+# Fail early rather than silently falling back to Matplotlib's blue/orange
+# color cycle when an interactive kernel still holds an older utility module.
+_required_extended_colors = {
+    "UA-HIPA q75": "magenta",
+    "AIRS": "#d62728",
+}
+_stale_or_missing_styles = {
+    product: product_styles_corr.get(product, {}).get("color")
+    for product, expected_color in _required_extended_colors.items()
+    if product_styles_corr.get(product, {}).get("color") != expected_color
+}
+if _stale_or_missing_styles:
+    raise RuntimeError(
+        "The kernel has stale project plotting styles "
+        f"({_stale_or_missing_styles}). Restart the kernel and rerun Section 1. "
+        "UA-HIPA q75 must be magenta and AIRS must be #d62728 red."
+    )
+
 
 #%%
 # =============================================================================
