@@ -28,11 +28,7 @@ from comparative_uahipa_airs_common_period_utils import (
     basin_mean_annual_table,
     cosine_weighted_regional_series,
     paired_product_metrics,
-    plot_figure2_basin_maps,
     plot_figure4_seasonal,
-    plot_figure5_interannual,
-    plot_figure6_basin_scatter,
-    plot_figure7_basin_spread,
     plot_regional_mean_annual_comparison,
     plot_regional_monthly_comparison,
     prepare_all_product_common_period,
@@ -485,9 +481,50 @@ print("Saved:", monthly_plot_path)
 figure2_path = PLOT_DIR / (
     f"Figure_2_basin_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
-figure2, figure2_axes = plot_figure2_basin_maps(
-    figure2_basin_mean_annual, basin_mask_01deg, output_path=figure2_path,
+figure2_fields = [
+    (r"P$_{MB}$", common_products[r"$P_{\mathrm{MB}}$"]),
+    ("ERA5", common_products["ERA5"]),
+    ("GPCP V3.3", common_products["GPCP V3.3"]),
+    ("UA-HIPA q75", common_products["UA-HIPA q75"]),
+    ("AIRS", common_products["AIRS"]),
+]
+for family_name, family_field in gpm_v8_family_monthly_dict.items():
+    figure2_fields.append((f"{family_name} V08", family_field.sel(time=common_months)))
+figure2_fields.append(("GPM PMW V08", common_products["GPM PMW V08"]))
+
+figure2_packs = [
+    build_basin_mean_plot_product(
+        field,
+        basin_mask_01deg.where(basin_mask_01deg.isin(AIS_BASINS)),
+        AIS_BASINS,
+        label,
+        year_start=common_months.min().year,
+        year_end=common_months.max().year,
+    )
+    for label, field in figure2_fields
+]
+figure2_arr = [
+    (pack["product"], pack["plot_grid"], pack["panel_mean"])
+    for pack in figure2_packs
+]
+figure2, figure2_axes, figure2_colorbar = (
+    compare_mean_precip_basin_v7_v8_common_cbar(
+        arr_lst_mean=figure2_arr,
+        basin_mask_latlon=basin_mask_01deg,
+        row1_idx=[0, 1, 2],
+        row2_idx=[3, 4],
+        row3_idx=list(range(5, len(figure2_arr))),
+        ncols=5,
+        gamma=0.6,
+        vmin=0,
+        vmax=400,
+        cbar_ticks=[0, 25, 50, 100, 200, 300, 400],
+        cbar_label=r"Mean annual precipitation (mm yr$^{-1}$)",
+        panel_letters=True,
+        show_panel_mean=True,
+    )
 )
+figure2.savefig(figure2_path, dpi=300, bbox_inches="tight")
 print("Saved:", figure2_path)
 
 
@@ -499,14 +536,31 @@ print("Saved:", figure2_path)
 figure3_path = PLOT_DIR / (
     f"Figure_3_regional_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
-(
-    figure3,
-    figure3_axis,
-    regional_annual_values,
-    regional_annual_climatology,
-) = plot_regional_mean_annual_comparison(
-    regional_monthly_common, output_path=figure3_path,
+regional_annual_r1 = compute_annual_totals_from_regional_series(
+    regional_monthly_common.rename(columns={"precipitation_mm_month": "precipitation"})
 )
+regional_annual_climatology_r1 = compute_regional_mean_annual_precip(
+    regional_annual_r1,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=tuple(common_products),
+)
+regional_annual_values = regional_annual_r1.rename(
+    columns={"precipitation": "precipitation_mm_year"}
+)
+regional_annual_climatology = regional_annual_climatology_r1.rename(
+    columns={"precipitation": "precipitation_mm_year"}
+)
+figure3, figure3_axis = plot_regional_mean_annual_bars(
+    regional_annual_climatology_r1,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=tuple(common_products),
+    product_colors=product_styles_corr,
+    figsize=(10, 6),
+    ylabel="[mm/year]",
+    title=f"{common_months.min().year}–{common_months.max().year} mean annual precipitation",
+    annotate=True,
+)
+figure3.savefig(figure3_path, dpi=300, bbox_inches="tight")
 regional_annual_values.to_csv(
     TABLE_DIR / f"regional_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
     index=False,
@@ -566,11 +620,34 @@ print("Saved:", figure4_path)
 figure5_path = PLOT_DIR / (
     f"Figure_5_PLACEHOLDER_interannual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
-figure5, figure5_axes, regional_annual_for_figure5 = plot_figure5_interannual(
-    regional_monthly_common,
-    pmb_uncertainty_monthly=regional_annual_pmb_uncertainty,
-    output_path=figure5_path,
+regional_annual_for_figure5 = compute_annual_totals_from_regional_series(
+    regional_monthly_for_r1
 )
+figure5, figure5_axes = plot_interannual_variability(
+    regional_annual_for_figure5,
+    region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+    product_order=tuple(common_products),
+    product_styles=product_styles_corr,
+    figsize=(10, 9),
+    ylabel="mm/year",
+    y_nbins=4,
+    legend_ncol=3,
+)
+for axis, region in zip(figure5_axes, ("Antarctica", "West Antarctica", "East Antarctica")):
+    pmb = regional_annual_for_figure5[
+        (regional_annual_for_figure5.region == region) &
+        (regional_annual_for_figure5["product"] == r"$P_{\mathrm{MB}}$")
+    ].set_index("year")
+    unc = regional_annual_pmb_uncertainty[
+        regional_annual_pmb_uncertainty.region == region
+    ].set_index("year")
+    years = pmb.index.intersection(unc.index)
+    axis.fill_between(years, pmb.loc[years, "precipitation"] - unc.loc[years, "pmb_uncertainty"],
+                      pmb.loc[years, "precipitation"] + unc.loc[years, "pmb_uncertainty"],
+                      color="0.8", alpha=0.6, linewidth=0, zorder=1)
+    axis.text(0.5, 0.08, "PLACEHOLDER: interannual variability requires ≥2 complete years",
+              transform=axis.transAxes, ha="center", fontsize=9)
+figure5.savefig(figure5_path, dpi=300, bbox_inches="tight")
 print("Saved:", figure5_path)
 
 
@@ -582,9 +659,24 @@ print("Saved:", figure5_path)
 figure6_path = PLOT_DIR / (
     f"Figure_6_basin_scatter_against_PMB_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
-figure6, figure6_axes = plot_figure6_basin_scatter(
-    basin_mean_annual_common, output_path=figure6_path,
+basin_mean_annual_r1 = basin_mean_annual_common.rename(
+    columns={"basin_id": "basin"}
+).drop(columns="region")
+figure6, figure6_axes, figure6_stats = plot_pmb_scatter_oldstyle(
+    df_mean_yr_acc=basin_mean_annual_r1,
+    ref=r"$P_{\mathrm{MB}}$",
+    products=["ERA5", "GPCP V3.3", "GPM PMW V08", "UA-HIPA q75", "AIRS"],
+    high_thresh=500.0,
+    scale="log",
+    log_min=2,
+    log_ticks=(5, 10, 20, 50, 100, 200, 500, 1000, 2000),
+    ncols=3,
+    figsize_per_col=4.8,
+    figsize_per_row=4.5,
+    share_axes=False,
+    show_ylabel_only_left=False,
 )
+figure6.savefig(figure6_path, dpi=300, bbox_inches="tight")
 print("Saved:", figure6_path)
 
 
@@ -596,16 +688,24 @@ print("Saved:", figure6_path)
 figure7_path = PLOT_DIR / (
     f"Figure_7_basin_product_spread_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
-figure7, figure7_axes, basin_spread_common = plot_figure7_basin_spread(
-    basin_mean_annual_common,
+figure7, figure7_axes, figure7_spreads = plot_basin_spread_points_by_region(
+    df=basin_mean_annual_r1,
+    basin_col="basin",
+    ref_col=r"$P_{\mathrm{MB}}$",
+    prod_cols=("ERA5", "GPCP V3.3", "GPM PMW V08", "UA-HIPA q75", "AIRS"),
+    product_styles=product_styles_corr,
+    non_gpm_group=(r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V08", "UA-HIPA q75", "AIRS"),
+    gpm_group=(r"$P_{\mathrm{MB}}$", "GPM PMW V08"),
     wais_basins=WAIS_BASINS,
     eais_basins=EAIS_BASINS,
-    output_path=figure7_path,
+    figsize=(13, 7.2),
+    legend_ncol=6,
+    spread_key_label=(
+        r"% = spread($P_{\mathrm{MB}}$, ERA5, GPCP V3.3, "
+        "GPM PMW V08, UA-HIPA q75, AIRS)"
+    ),
 )
-basin_spread_common.to_csv(
-    TABLE_DIR / f"imbie_basin_product_spread_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
-    index=False,
-)
+figure7.savefig(figure7_path, dpi=300, bbox_inches="tight")
 print("Saved:", figure7_path)
 
 

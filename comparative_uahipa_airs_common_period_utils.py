@@ -332,7 +332,10 @@ def plot_figure4_seasonal(regional_monthly: pd.DataFrame,
     backward compatibility, but must contain the already propagated seasonal
     uncertainty table produced by the established uncertainty helpers.
     """
-    from program_utile_13Apr2026 import plot_seasonal_climatology_with_pmb_uncertainty
+    from program_utile_13Apr2026 import (
+        plot_seasonal_climatology_with_pmb_uncertainty,
+        product_styles_corr,
+    )
 
     seasonal = regional_monthly.rename(
         columns={"precipitation_mm_season": "precipitation"}
@@ -343,7 +346,7 @@ def plot_figure4_seasonal(regional_monthly: pd.DataFrame,
         pmb_unc_df=pmb_uncertainty_monthly,
         region_order=("Antarctica", "West Antarctica", "East Antarctica"),
         product_order=product_order,
-        product_styles=PRODUCT_STYLES,
+        product_styles=product_styles_corr,
         figsize=(10, 8),
         ylabel="mm/season",
         y_nbins=4,

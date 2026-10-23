@@ -94,6 +94,8 @@ product_styles_corr = {
     "GPM PMW V08 (corr.)": {"color": "green", "ls": "--", "lw": 3.5},
 
     "UA-HIPA": {"color": "magenta", "lw": 2.5},
+    "UA-HIPA q75": {"color": "magenta", "marker": "o", "lw": 2.5},
+    "AIRS": {"color": "red", "marker": "o", "lw": 2.5},
 }
 #---------------------------------------------------------------------------------
 
@@ -1879,36 +1881,16 @@ def compute_seasonal_climatology_from_regional_series(df, drop_incomplete=True):
 
 # =============================================================================
 
-# def compute_annual_totals_from_regional_series(df):
-#     """
-#     Annual totals [mm/year] from monthly regional series.
-#     """
-#     out = df.copy()
-#     out["year"] = pd.to_datetime(out["time"]).dt.year
-
-#     annual = (
-#         out.groupby(["region", "product", "year"], as_index=False)["precipitation"]
-#         .sum()
-#         .sort_values(["region", "product", "year"])
-#     )
-#     return annual
-
 def compute_annual_totals_from_regional_series(df):
     """
-    Annual totals [mm/year], requiring 12 valid monthly values.
-
-    Incomplete years remain NaN and are excluded from multiyear means,
-    consistent with the annual gridded calculation.
+    Annual totals [mm/year] from monthly regional series.
     """
     out = df.copy()
     out["year"] = pd.to_datetime(out["time"]).dt.year
 
     annual = (
-        out.groupby(
-            ["region", "product", "year"],
-            as_index=False,
-        )["precipitation"]
-        .sum(min_count=12)
+        out.groupby(["region", "product", "year"], as_index=False)["precipitation"]
+        .sum()
         .sort_values(["region", "product", "year"])
     )
     return annual
@@ -3795,11 +3777,7 @@ def plot_seasonal_climatology_with_pmb_uncertainty(
                 **style
             )
 
-        ax.set_title(
-            region_name2short.get(region, region),
-            fontweight="bold",
-            fontsize=18,
-        )
+        ax.set_title(region, fontweight="bold", fontsize=18)
         ax.grid(True, alpha=0.3)
         ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
         ax.set_xticks(season_x)
@@ -4982,6 +4960,7 @@ def plot_basin_spread_points_by_region(
     annotate_gpm_color="dimgray",
     legend_ncol=5,
     place_key=True,
+    spread_key_label=None,
 ):
     """
     Basin-scale precipitation comparison split into WAIS and EAIS panels.
@@ -5185,9 +5164,11 @@ def plot_basin_spread_points_by_region(
     # Spread key
     # -------------------------------------------------------------------------
     if place_key:
+        if spread_key_label is None:
+            spread_key_label = "% = spread(" + ", ".join(non_gpm_group) + ")"
         axes[0].text(
             0.01, 0.96,
-            "% = spread($P_{\mathrm{MB}}$, ERA5, GPCP V3.3, GPM PMW V08)",
+            spread_key_label,
             transform=axes[0].transAxes,
             ha="left",
             va="top",
