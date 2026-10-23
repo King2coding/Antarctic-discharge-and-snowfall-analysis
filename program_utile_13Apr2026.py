@@ -3795,7 +3795,11 @@ def plot_seasonal_climatology_with_pmb_uncertainty(
                 **style
             )
 
-        ax.set_title(region, fontweight="bold", fontsize=18)
+        ax.set_title(
+            region_name2short.get(region, region),
+            fontweight="bold",
+            fontsize=18,
+        )
         ax.grid(True, alpha=0.3)
         ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=y_nbins))
         ax.set_xticks(season_x)
