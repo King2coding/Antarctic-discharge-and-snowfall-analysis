@@ -13,6 +13,7 @@ timestamps and complete calendar years only.
 # =============================================================================
 
 from datetime import date
+import importlib
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,16 @@ from rasterio.enums import Resampling
 
 from program_utils import *
 from Extra_util_functions import *
+
+# This workflow is normally run cell-by-cell in a persistent kernel. Reload
+# the edited project modules so saved utility/style updates are used rather
+# than an older object retained in Python's import cache.
+import program_utile_13Apr2026 as manuscript_utils
+import comparative_uahipa_airs_common_period_utils as comparison_utils
+
+importlib.reload(manuscript_utils)
+importlib.reload(comparison_utils)
+
 from program_utile_13Apr2026 import *
 from comparative_uahipa_airs_common_period_utils import (
     basin_mean_annual_table,
@@ -51,6 +62,10 @@ if _stale_or_missing_styles:
         f"({_stale_or_missing_styles}). Restart the kernel and rerun Section 1. "
         "UA-HIPA q75 must be magenta and AIRS must be #d62728 red."
     )
+print(
+    "Extended-product plot colors:",
+    {name: product_styles_corr[name]["color"] for name in _required_extended_colors},
+)
 
 
 #%%
