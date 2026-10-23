@@ -425,6 +425,22 @@ basin_mean_annual_common.to_csv(
     index=False,
 )
 
+# Figure 2 in R1 also shows the individual V08 sensor-family estimates.  Add
+# those panels here while retaining the six-product constellation comparison
+# used everywhere else.  The family fields are restricted to the same exact
+# common months, so they cannot extend the comparison period silently.
+figure2_products = dict(common_products)
+for family_name, family_field in gpm_v8_family_monthly_dict.items():
+    figure2_products[f"{family_name} V08"] = family_field.sel(time=common_months)
+figure2_basin_monthly = cosine_weighted_regional_series(
+    products=figure2_products, region_masks=basin_masks_01deg,
+)
+figure2_basin_mean_annual = basin_mean_annual_table(figure2_basin_monthly)
+figure2_basin_mean_annual.to_csv(
+    TABLE_DIR / f"Figure_2_basin_mean_annual_with_V08_families_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+
 # Regional PMB uncertainty uses the same masks and cosine-latitude weighting as
 # the precipitation products.  Its product label is PMB so the plotting
 # functions can align the uncertainty envelope with the PMB central estimate.
@@ -461,7 +477,7 @@ figure2_path = PLOT_DIR / (
     f"Figure_2_basin_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
 figure2, figure2_axes = plot_figure2_basin_maps(
-    basin_mean_annual_common, basin_mask_01deg, output_path=figure2_path,
+    figure2_basin_mean_annual, basin_mask_01deg, output_path=figure2_path,
 )
 print("Saved:", figure2_path)
 
