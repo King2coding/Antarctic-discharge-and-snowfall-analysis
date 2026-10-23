@@ -705,9 +705,10 @@ figure6, figure6_axes, figure6_stats = plot_pmb_scatter_oldstyle(
     figsize_per_row=5.0,
     share_axes=False,
     show_ylabel_only_left=False,
-    subplot_wspace=0.20,
-    subplot_hspace=0.38,
 )
+# Preserve the established function signature; make this figure-specific
+# spacing adjustment only after the reusable function returns.
+figure6.subplots_adjust(wspace=0.20, hspace=0.38)
 figure6.savefig(figure6_path, dpi=300, bbox_inches="tight")
 print("Saved:", figure6_path)
 
