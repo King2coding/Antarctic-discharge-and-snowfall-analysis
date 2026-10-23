@@ -1,21 +1,15 @@
 #%%
-"""Focused PMB/UA-HIPA q75/AIRS all-product comparison.
+"""Standalone monthly PMB/product comparison including UA-HIPA q75 and AIRS.
 
-Interactive use
----------------
-1. Run the established GPM V7/V8 comparison workflow through preparation of
-   ``pmb_mon_01``, ``era5_mnth_01``, ``gpcp_mon_01``,
-   ``gpm_pmw_v08_mon_01``, ``target_template_01deg``,
-   ``basin_mask_01deg``, and ``region_masks_01deg``.
-2. Run this file one numbered cell at a time.
-
-This file writes only to a new UA-HIPA/AIRS analysis directory. It does not
-write into the existing JGR-Atmospheres manuscript figure directories.
+Run the numbered cells manually in one Python kernel. This file loads and
+prepares every required product itself; it does not depend on variables created
+by another analysis script. The final comparison uses exact common monthly
+timestamps and complete calendar years only.
 """
 
 #%%
 # =============================================================================
-# SECTION 1. IMPORTS AND ISOLATED OUTPUT PATHS
+# SECTION 1. IMPORTS
 # =============================================================================
 
 from datetime import date
@@ -23,147 +17,308 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import rioxarray  # noqa: F401 - activates the xarray ``rio`` accessor
+import rioxarray  # noqa: F401
 import xarray as xr
 from rasterio.enums import Resampling
 
+from program_utils import *
+from Extra_util_functions import *
+from program_utile_13Apr2026 import *
 from comparative_uahipa_airs_common_period_utils import (
+    cosine_weighted_regional_series,
     paired_product_metrics,
     plot_regional_mean_annual_comparison,
     plot_regional_monthly_comparison,
     prepare_all_product_common_period,
-    cosine_weighted_regional_series,
 )
 
 
-RUN_DATE = date.today().strftime("%Y%m%d")
-MONTHLY_DATA_DIR = Path(
+#%%
+# =============================================================================
+# SECTION 2. PATHS AND ISOLATED OUTPUT DIRECTORIES
+# =============================================================================
+
+GPM_ROOT = Path("/ra1/pubdat/GPM-Constellation-Satellites_MI_and_Sounders")
+GPCP_ROOT = Path(
+    "/ra1/pubdat/Satellite_eval_over_Oceans/data/GPCP/"
+    "GPCP_v3_pnt_3_monthly_1983_2024"
+)
+ERA5_FILE = Path(
+    "/ra1/pubdat/GPCP/GPCP_Reproduce_GJ/era5_tp_198001202412_monthly.nc"
+)
+BASIN_ROOT = Path(
+    "/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins"
+)
+PMB_FILE = BASIN_ROOT / (
+    "Monthly_mass_budget_precip_RignotBasin_in_mm_forward_deltaS_"
+    "uncorrected_positive_sublimation_loss_GRACE_updated_20260609.nc"
+)
+PMB_UNCERTAINTY_FILE = BASIN_ROOT / (
+    "Monthly_mass_budget_precip_RignotBasin_uncertainty_in_mm_forward_"
+    "deltaS_uncorrected_positive_sublimation_loss_GRACE_updated_20260609.nc"
+)
+MONTHLY_NEW_PRODUCT_ROOT = Path(
     "/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/"
     "data/uahipa_airs_monthly"
 )
+
+# These outputs are separate from the submitted-manuscript directories.
 ANALYSIS_ROOT = Path(
-    "/home/kkumah/Projects/Antarctic_discharge_work/"
-    "uahipa_airs_comparison"
+    "/home/kkumah/Projects/Antarctic_discharge_work/uahipa_airs_comparison"
 )
 PLOT_DIR = ANALYSIS_ROOT / "plots"
 TABLE_DIR = ANALYSIS_ROOT / "tables"
-PLOT_DIR.mkdir(parents=True, exist_ok=True)
-TABLE_DIR.mkdir(parents=True, exist_ok=True)
+QC_DIR = ANALYSIS_ROOT / "qc"
+for directory in [PLOT_DIR, TABLE_DIR, QC_DIR]:
+    directory.mkdir(parents=True, exist_ok=True)
+
+RUN_DATE = date.today().strftime("%Y%m%d")
 
 
 #%%
 # =============================================================================
-# SECTION 2. VERIFY PREREQUISITE WORKSPACE VARIABLES
+# SECTION 3. BASIN AND REGION DEFINITIONS
 # =============================================================================
 
-REQUIRED_EXISTING_VARIABLES = [
-    "pmb_mon_01",
-    "era5_mnth_01",
-    "gpcp_mon_01",
-    "gpm_pmw_v08_mon_01",
-    "target_template_01deg",
-    "basin_mask_01deg",
-    "region_masks_01deg",
-]
-
-missing_variables = [name for name in REQUIRED_EXISTING_VARIABLES if name not in globals()]
-if missing_variables:
-    raise RuntimeError(
-        "Run the established comparison workflow through monthly common-grid "
-        f"product preparation first. Missing variables: {missing_variables}"
-    )
+WAIS_BASINS = [10, 11, 12, 13, 14, 15, 16, 17]
+EAIS_BASINS = [2, 3, 4, 5, 6, 7, 8, 9, 18, 19]
+AIS_BASINS = WAIS_BASINS + EAIS_BASINS
+REGION_BASINS = {
+    "Antarctica": AIS_BASINS,
+    "West Antarctica": WAIS_BASINS,
+    "East Antarctica": EAIS_BASINS,
+}
 
 
 #%%
 # =============================================================================
-# SECTION 3. FIND THE LATEST MONTHLY UA-HIPA q75 AND AIRS PRODUCTS
+# SECTION 4. FIND AND INSPECT UA-HIPA q75 AND AIRS MONTHLY FILES
 # =============================================================================
 
-def latest_matching_file(directory: Path, pattern: str) -> Path:
-    matches = sorted(directory.glob(pattern), key=lambda path: path.stat().st_mtime)
+def latest_matching_file(directory, pattern):
+    matches = sorted(Path(directory).glob(pattern), key=lambda path: path.stat().st_mtime)
     if not matches:
         raise FileNotFoundError(f"No files matching {pattern!r} in {directory}")
     return matches[-1]
 
 
 UAHIPA_MONTHLY_FILE = latest_matching_file(
-    MONTHLY_DATA_DIR,
-    "uahipa_q75_equal_platform_monthly_*.nc",
+    MONTHLY_NEW_PRODUCT_ROOT, "uahipa_q75_equal_platform_monthly_*.nc"
 )
-AIRS_MONTHLY_FILE = latest_matching_file(MONTHLY_DATA_DIR, "airs_monthly_*.nc")
-
-print("UA-HIPA monthly input:", UAHIPA_MONTHLY_FILE)
-print("AIRS monthly input:    ", AIRS_MONTHLY_FILE)
-
-
-#%%
-# =============================================================================
-# SECTION 4. LOAD AND REMAP UA-HIPA q75 TO THE COMMON 0.1-DEGREE GRID
-# =============================================================================
+AIRS_MONTHLY_FILE = latest_matching_file(
+    MONTHLY_NEW_PRODUCT_ROOT, "airs_monthly_*.nc"
+)
 
 with xr.open_dataset(UAHIPA_MONTHLY_FILE) as dataset:
-    uahipa_q75_monthly = dataset["uahipa_q75_mm_month"].load()
-
-uahipa_q75_monthly = (
-    uahipa_q75_monthly
-    .rename({"y": "lat", "x": "lon"})
-    .sortby("lon")
-    .sortby("lat", ascending=False)
-)
-uahipa_q75_monthly = uahipa_q75_monthly.rio.set_spatial_dims(
-    x_dim="lon", y_dim="lat", inplace=False
-)
-uahipa_q75_monthly = uahipa_q75_monthly.rio.write_crs("EPSG:4326", inplace=False)
-
-uahipa_q75_mon_01 = uahipa_q75_monthly.rio.reproject_match(
-    target_template_01deg,
-    resampling=Resampling.nearest,
-)
-uahipa_q75_mon_01 = uahipa_q75_mon_01.rename(
-    {name: replacement for name, replacement in {"x": "lon", "y": "lat"}.items()
-     if name in uahipa_q75_mon_01.dims}
-)
-uahipa_q75_mon_01 = (
-    uahipa_q75_mon_01
-    .sortby("lon")
-    .sortby("lat", ascending=False)
-    .where(basin_mask_01deg.notnull())
-    .where(lambda field: field.lat < -60)
-)
-
-
-#%%
-# =============================================================================
-# SECTION 5. LOAD AND REMAP AIRS TO THE COMMON 0.1-DEGREE GRID
-# =============================================================================
-
+    uahipa_q75_native = dataset["uahipa_q75_mm_month"].load()
+    uahipa_valid_platform_count = dataset["valid_platform_count"].load()
 with xr.open_dataset(AIRS_MONTHLY_FILE) as dataset:
-    airs_monthly = dataset["airs_precip_mm_month"].load()
+    airs_native = dataset["airs_precip_mm_month"].load()
+    airs_valid_day_count = dataset["airs_valid_day_count"].load()
 
-airs_monthly = airs_monthly.sortby("lon").sortby("lat", ascending=False)
-airs_monthly = airs_monthly.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=False)
-airs_monthly = airs_monthly.rio.write_crs("EPSG:4326", inplace=False)
+uahipa_available_months = pd.DatetimeIndex(
+    pd.to_datetime(uahipa_q75_native.time.values)
+).to_period("M").to_timestamp()
+airs_available_months = pd.DatetimeIndex(
+    pd.to_datetime(airs_native.time.values)
+).to_period("M").to_timestamp()
+CANDIDATE_MONTHS = uahipa_available_months.intersection(airs_available_months)
+if len(CANDIDATE_MONTHS) == 0:
+    raise RuntimeError("UA-HIPA and AIRS have no common monthly timestamps")
+CANDIDATE_START = CANDIDATE_MONTHS.min()
+CANDIDATE_END = CANDIDATE_MONTHS.max()
 
-airs_mon_01 = airs_monthly.rio.reproject_match(
-    target_template_01deg,
-    resampling=Resampling.nearest,
-)
-airs_mon_01 = airs_mon_01.rename(
-    {name: replacement for name, replacement in {"x": "lon", "y": "lat"}.items()
-     if name in airs_mon_01.dims}
-)
-airs_mon_01 = (
-    airs_mon_01
-    .sortby("lon")
-    .sortby("lat", ascending=False)
-    .where(basin_mask_01deg.notnull())
-    .where(lambda field: field.lat < -60)
+print("UA-HIPA file:", UAHIPA_MONTHLY_FILE)
+print("AIRS file:    ", AIRS_MONTHLY_FILE)
+print(
+    "Initial candidate period:", CANDIDATE_START.strftime("%Y-%m"), "to",
+    CANDIDATE_END.strftime("%Y-%m"), f"({len(CANDIDATE_MONTHS)} months)"
 )
 
 
 #%%
 # =============================================================================
-# SECTION 6. SELECT THE STRICT ALL-PRODUCT COMMON PERIOD
+# SECTION 5. COMMON 0.1-DEGREE WGS84 BASIN GRID
+# =============================================================================
+
+basins = load_basin_grid(str(BASIN_ROOT), crs_stereo)
+print_basin_grid_info(basins)
+target_template_01deg = build_target_latlon_template_from_basin_grid(basins)
+basin_mask_01deg = reproject_basin_ids_to_target_grid(basins, target_template_01deg)
+region_masks_01deg = make_region_masks_from_basin_mask(
+    basin_mask_01deg, REGION_BASINS
+)
+print("Common comparison CRS:", target_template_01deg.rio.crs)
+print("Common target dimensions:", target_template_01deg.sizes)
+
+
+#%%
+# =============================================================================
+# SECTION 6. SHARED GEOGRAPHIC REMAPPING FUNCTION
+# =============================================================================
+
+def remap_geographic_monthly_to_common_grid(
+    field,
+    target_template,
+    basin_mask,
+    lat_name="lat",
+    lon_name="lon",
+    resampling=Resampling.nearest,
+):
+    """Remap monthly WGS84 lat-lon data to the established 0.1-degree grid."""
+
+    field = field.assign_coords(
+        time=pd.to_datetime(field.time.values).to_period("M").to_timestamp()
+    )
+    field = field.sortby(lon_name).sortby(lat_name, ascending=False)
+    field = field.rio.set_spatial_dims(
+        x_dim=lon_name, y_dim=lat_name, inplace=False
+    )
+    field = field.rio.write_crs("EPSG:4326", inplace=False)
+    remapped = field.rio.reproject_match(target_template, resampling=resampling)
+    rename_map = {}
+    if "x" in remapped.dims:
+        rename_map["x"] = "lon"
+    if "y" in remapped.dims:
+        rename_map["y"] = "lat"
+    if rename_map:
+        remapped = remapped.rename(rename_map)
+    remapped = remapped.sortby("lon").sortby("lat", ascending=False)
+    remapped = remapped.where(basin_mask.notnull())
+    return remapped.where(remapped.lat < -60)
+
+
+#%%
+# =============================================================================
+# SECTION 7. LOAD AND PREPARE PMB AND PMB UNCERTAINTY
+# =============================================================================
+
+P_mm_mnth = xr.open_dataarray(PMB_FILE)
+P_unc_mm_mnth = xr.open_dataarray(PMB_UNCERTAINTY_FILE)
+pmb_mon_01 = prepare_pmb_monthly_on_target(
+    P_mm_mnth, target_template_01deg
+).sel(time=slice(CANDIDATE_START, CANDIDATE_END))
+pmb_unc_mon_01 = abs(
+    prepare_pmb_monthly_on_target(P_unc_mm_mnth, target_template_01deg)
+    .sel(time=slice(CANDIDATE_START, CANDIDATE_END))
+)
+pmb_mon_01 = pmb_mon_01.where(basin_mask_01deg.notnull())
+pmb_unc_mon_01 = pmb_unc_mon_01.where(basin_mask_01deg.notnull())
+
+
+#%%
+# =============================================================================
+# SECTION 8. LOAD AND PREPARE GPCP V3.3
+# =============================================================================
+
+gpcp_files = []
+for path in sorted(GPCP_ROOT.glob("*.nc4")):
+    try:
+        file_year = int(path.name.split("_")[2][:4])
+    except (IndexError, ValueError):
+        continue
+    if CANDIDATE_START.year <= file_year <= CANDIDATE_END.year:
+        gpcp_files.append(str(path))
+if not gpcp_files:
+    raise FileNotFoundError("No GPCP v3.3 files found for the candidate years")
+
+gpcp_dataset = xr.open_mfdataset(
+    gpcp_files, combine="nested", concat_dim="time", coords="minimal",
+    compat="override", parallel=True, engine="netcdf4", cache=False,
+)
+gpcp_dataset = ds_swaplon(gpcp_dataset)
+gpcp_monthly = gpcp_dataset["sat_gauge_precip"].copy()
+gpcp_monthly = gpcp_monthly.assign_coords(
+    time=pd.to_datetime(gpcp_monthly.time.values).to_period("M").to_timestamp()
+)
+gpcp_days = xr.DataArray(
+    pd.to_datetime(gpcp_monthly.time.values).days_in_month,
+    dims=["time"], coords={"time": gpcp_monthly.time},
+)
+gpcp_monthly = (gpcp_monthly * gpcp_days).where(np.isfinite(gpcp_monthly))
+gpcp_monthly = gpcp_monthly.sel(time=slice(CANDIDATE_START, CANDIDATE_END))
+gpcp_mon_01 = remap_geographic_monthly_to_common_grid(
+    gpcp_monthly.sel(lat=slice(-60, -90)),
+    target_template_01deg, basin_mask_01deg,
+)
+
+
+#%%
+# =============================================================================
+# SECTION 9. LOAD AND PREPARE ERA5
+# =============================================================================
+
+era5_dataset = xr.open_dataset(ERA5_FILE, engine="netcdf4")[["tp"]]
+era5_dataset = ds_swaplon(era5_dataset)
+era5_dataset = replace_fill_with_nan(era5_dataset)
+if "valid_time" in era5_dataset.dims or "valid_time" in era5_dataset.coords:
+    era5_dataset = era5_dataset.rename({"valid_time": "time"})
+era5_dataset = era5_dataset.assign_coords(
+    time=pd.to_datetime(era5_dataset.time.values).to_period("M").to_timestamp()
+)
+era5_days = xr.DataArray(
+    era5_dataset.time.dt.days_in_month,
+    dims=["time"], coords={"time": era5_dataset.time},
+)
+era5_monthly = era5_dataset["tp"] * 1000.0 * era5_days
+era5_monthly = era5_monthly.rename({"latitude": "lat", "longitude": "lon"})
+era5_monthly = era5_monthly.sel(time=slice(CANDIDATE_START, CANDIDATE_END))
+era5_monthly = era5_monthly.sel(lat=slice(-60, -90))
+era5_mnth_01 = remap_geographic_monthly_to_common_grid(
+    era5_monthly, target_template_01deg, basin_mask_01deg,
+)
+
+
+#%%
+# =============================================================================
+# SECTION 10. PREPARE UA-HIPA q75 AND AIRS ON THE COMMON GRID
+# =============================================================================
+
+uahipa_q75_native = uahipa_q75_native.rename({"y": "lat", "x": "lon"})
+uahipa_q75_mon_01 = remap_geographic_monthly_to_common_grid(
+    uahipa_q75_native, target_template_01deg, basin_mask_01deg,
+)
+airs_mon_01 = remap_geographic_monthly_to_common_grid(
+    airs_native, target_template_01deg, basin_mask_01deg,
+)
+
+
+#%%
+# =============================================================================
+# SECTION 11. BUILD GPM/GPROF V08 PMW FOR THE CANDIDATE PERIOD
+# =============================================================================
+
+gpm_time_axis = pd.date_range(CANDIDATE_START, CANDIDATE_END, freq="MS")
+(
+    gpm_v8_family_monthly_dict,
+    gpm_v8_platform_monthly_dict,
+    gpm_v8_inventory_df,
+) = build_gpm_v8_family_monthly_dict(
+    gpm_satellites_path=str(GPM_ROOT),
+    target_template_01deg=target_template_01deg,
+    basin_mask_01deg=basin_mask_01deg,
+    start_time=CANDIDATE_START.strftime("%Y-%m-%d"),
+    end_time=CANDIDATE_END.strftime("%Y-%m-%d"),
+    convert_rate_to_month=True,
+    min_valid_platforms_by_family={
+        "ATMS": 1, "MHS": 1, "DMSP-SSMIS": 1, "AMSR2": 1,
+    },
+    return_platform_dict=True,
+)
+gpm_pmw_v08_mon_01 = build_gpm_pmw_v8_mean(
+    gpm_v8_family_dict=gpm_v8_family_monthly_dict,
+    mean_name="GPM PMW V08",
+    common_months=gpm_time_axis,
+    min_valid_families=4,
+)
+gpm_v8_inventory_df.to_csv(
+    QC_DIR / f"gpm_v8_platform_inventory_{RUN_DATE}.csv", index=False,
+)
+
+
+#%%
+# =============================================================================
+# SECTION 12. STRICT SIX-PRODUCT TEMPORAL COINCIDENCE
 # =============================================================================
 
 common_products, common_months = prepare_all_product_common_period(
@@ -174,77 +329,139 @@ common_products, common_months = prepare_all_product_common_period(
     uahipa_q75=uahipa_q75_mon_01,
     airs=airs_mon_01,
 )
-
-COMMON_PERIOD_TAG = (
-    f"{common_months.min():%Y%m}_{common_months.max():%Y%m}"
-)
-
-print("\nMonths used in every product:")
+COMMON_PERIOD_TAG = f"{common_months.min():%Y%m}_{common_months.max():%Y%m}"
+print("\nExact months used by every product:")
 print([timestamp.strftime("%Y-%m") for timestamp in common_months])
 
 
 #%%
 # =============================================================================
-# SECTION 7. BUILD REGIONAL MONTHLY SERIES AND PAIRED METRICS
+# SECTION 13. MONTHLY COVERAGE AND SAMPLING QC
+# =============================================================================
+
+coverage_rows = []
+for product, field in common_products.items():
+    for timestamp in common_months:
+        monthly_field = field.sel(time=timestamp)
+        coverage_rows.append({
+            "product": product,
+            "time": timestamp,
+            "valid_pixels": int(monthly_field.notnull().sum()),
+            "total_pixels": int(monthly_field.size),
+            "valid_fraction": float(monthly_field.notnull().mean()),
+        })
+coverage_df = pd.DataFrame(coverage_rows)
+coverage_df.to_csv(
+    QC_DIR / f"all_product_monthly_coverage_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+uahipa_valid_platform_count.max(("y", "x")).to_dataframe(
+    name="maximum_valid_platforms"
+).reset_index().to_csv(QC_DIR / f"uahipa_platform_coverage_{RUN_DATE}.csv", index=False)
+airs_valid_day_count.min(("lat", "lon")).to_dataframe(
+    name="minimum_valid_days"
+).reset_index().to_csv(QC_DIR / f"airs_daily_coverage_{RUN_DATE}.csv", index=False)
+print(coverage_df.groupby("product")["valid_fraction"].agg(["min", "mean", "max"]))
+
+
+#%%
+# =============================================================================
+# SECTION 14. REGIONAL MONTHLY SERIES AND PAIRED METRICS
 # =============================================================================
 
 regional_monthly_common = cosine_weighted_regional_series(
-    products=common_products,
-    region_masks=region_masks_01deg,
+    products=common_products, region_masks=region_masks_01deg,
 )
-paired_metrics_common = paired_product_metrics(regional_monthly_common)
-
-regional_monthly_output = TABLE_DIR / (
-    f"regional_monthly_all_products_common_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv"
+regional_metrics_common = paired_product_metrics(regional_monthly_common)
+regional_monthly_common.to_csv(
+    TABLE_DIR / f"regional_monthly_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
 )
-paired_metrics_output = TABLE_DIR / (
-    f"paired_metrics_against_PMB_common_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv"
+regional_metrics_common.to_csv(
+    TABLE_DIR / f"regional_metrics_against_PMB_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
 )
-
-regional_monthly_common.to_csv(regional_monthly_output, index=False)
-paired_metrics_common.to_csv(paired_metrics_output, index=False)
-
-print("Saved:", regional_monthly_output)
-print("Saved:", paired_metrics_output)
-print(paired_metrics_common.to_string(index=False))
+print(regional_metrics_common.to_string(index=False))
 
 
 #%%
 # =============================================================================
-# SECTION 8. PLOT STRICTLY COINCIDENT MONTHLY SERIES
+# SECTION 15. IMBIE BASIN MONTHLY SERIES AND PAIRED METRICS
 # =============================================================================
 
-monthly_plot_output = PLOT_DIR / (
-    f"regional_monthly_all_products_common_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+BASIN_NAMES = {
+    2: "A-Ap", 3: "Ap-B", 4: "B-C", 5: "C-Cp", 6: "Cp-D",
+    7: "D-Dp", 8: "Dp-E", 9: "E-Ep", 10: "Ep-F", 11: "F-G",
+    12: "G-H", 13: "H-Hp", 14: "Hp-I", 15: "I-Ipp", 16: "Ipp-J",
+    17: "J-Jpp", 18: "Jpp-K", 19: "K-A",
+}
+basin_masks_01deg = {
+    f"{basin_id:02d} {basin_name}": basin_mask_01deg == basin_id
+    for basin_id, basin_name in BASIN_NAMES.items()
+}
+basin_monthly_common = cosine_weighted_regional_series(
+    products=common_products, region_masks=basin_masks_01deg,
+)
+basin_metrics_common = paired_product_metrics(basin_monthly_common)
+basin_monthly_common.to_csv(
+    TABLE_DIR / f"imbie_basin_monthly_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+basin_metrics_common.to_csv(
+    TABLE_DIR / f"imbie_basin_metrics_against_PMB_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+
+
+#%%
+# =============================================================================
+# SECTION 16. REGIONAL MONTHLY COMPARISON PLOT
+# =============================================================================
+
+monthly_plot_path = PLOT_DIR / (
+    f"regional_monthly_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
 monthly_figure, monthly_axes = plot_regional_monthly_comparison(
-    regional_monthly_common,
-    output_path=monthly_plot_output,
+    regional_monthly_common, output_path=monthly_plot_path,
 )
-print("Saved:", monthly_plot_output)
+print("Saved:", monthly_plot_path)
 
 
 #%%
 # =============================================================================
-# SECTION 9. PLOT MEAN ANNUAL TOTALS FOR COMPLETE COMMON YEARS
+# SECTION 17. REGIONAL MEAN-ANNUAL COMPARISON PLOT AND TABLES
 # =============================================================================
 
-annual_plot_output = PLOT_DIR / (
-    f"regional_mean_annual_all_products_common_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+annual_plot_path = PLOT_DIR / (
+    f"regional_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
-annual_figure, annual_axis, annual_values, annual_climatology = (
-    plot_regional_mean_annual_comparison(
-        regional_monthly_common,
-        output_path=annual_plot_output,
-    )
+(
+    annual_figure,
+    annual_axis,
+    regional_annual_values,
+    regional_annual_climatology,
+) = plot_regional_mean_annual_comparison(
+    regional_monthly_common, output_path=annual_plot_path,
 )
+regional_annual_values.to_csv(
+    TABLE_DIR / f"regional_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+regional_annual_climatology.to_csv(
+    TABLE_DIR / f"regional_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+print("Saved:", annual_plot_path)
 
-annual_values.to_csv(
-    TABLE_DIR / f"regional_annual_all_products_common_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
-    index=False,
-)
-annual_climatology.to_csv(
-    TABLE_DIR / f"regional_mean_annual_all_products_common_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
-    index=False,
-)
-print("Saved:", annual_plot_output)
+
+#%%
+# =============================================================================
+# SECTION 18. FINAL RUN SUMMARY
+# =============================================================================
+
+print("\nComparison completed.")
+print("Common period:", COMMON_PERIOD_TAG)
+print("Products:", list(common_products))
+print("Plots:", PLOT_DIR)
+print("Tables:", TABLE_DIR)
+print("QC outputs:", QC_DIR)

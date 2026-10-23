@@ -32,9 +32,10 @@ JGR-Atmospheres manuscript.
    preprocessing driver. Run it interactively.
 3. `comparative_uahipa_airs_common_period_utils.py` contains regional series,
    paired metrics, and plotting functions.
-4. `Comparative_assessment_PMB_UAHIPA_q75_AIRS_common_period.py` integrates the
-   new products with monthly common-grid fields from the established PMB/GPM
-   workflow.
+4. `Comparative_assessment_PMB_UAHIPA_q75_AIRS_common_period.py` is a standalone
+   analogous comparison driver. It directly loads PMB, ERA5, GPCP v3.3,
+   GPM/GPROF V08, UA-HIPA q75, AIRS, and the basin data; it does not depend on
+   another comparison script having been run first.
 
 ## Recommended execution order
 
@@ -42,11 +43,11 @@ JGR-Atmospheres manuscript.
    initial controlled run. Inspect the inventories before running aggregation.
 2. Run the UA-HIPA q75 cell and inspect valid orbit/platform counts.
 3. Run the AIRS cell and inspect valid-day counts.
-4. Run the established GPM V7/V8 comparison file through creation of the seven
-   prerequisite common-grid variables listed in Section 2 of the focused
-   comparison file.
-5. Run `Comparative_assessment_PMB_UAHIPA_q75_AIRS_common_period.py` one cell at
-   a time. Confirm that it prints exactly 12 common months for the current data.
+4. Open `Comparative_assessment_PMB_UAHIPA_q75_AIRS_common_period.py` in a clean
+   kernel and run Sections 1-18 sequentially. The file recreates the established
+   0.1-degree WGS84 basin grid and prepares every comparison product itself.
+5. In Section 12, confirm that the strict six-product period contains exactly
+   the 12 months from January through December 2018 for the current inputs.
 
 When additional UA-HIPA year folders arrive, use `YEARS = None` to discover all
 available years or specify a reviewed list. The comparison selects only years
