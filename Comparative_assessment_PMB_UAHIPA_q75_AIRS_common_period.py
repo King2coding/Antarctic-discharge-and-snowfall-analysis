@@ -488,8 +488,20 @@ figure2_fields = [
     ("UA-HIPA q75", common_products["UA-HIPA q75"]),
     ("AIRS", common_products["AIRS"]),
 ]
-for family_name, family_field in gpm_v8_family_monthly_dict.items():
-    figure2_fields.append((f"{family_name} V08", family_field.sel(time=common_months)))
+# Preserve the R1 sensor-family order and avoid appending "V08" when it is
+# already part of the dictionary key.
+for requested_family in ("ATMS", "MHS", "DMSP SSMIS", "AMSR2"):
+    matching_keys = [
+        key for key in gpm_v8_family_monthly_dict
+        if requested_family.replace("-", " ") in key.replace("-", " ")
+    ]
+    if not matching_keys:
+        raise KeyError(f"Missing expected GPM V08 family: {requested_family}")
+    family_key = matching_keys[0]
+    family_label = family_key if "V08" in family_key else f"{family_key} V08"
+    figure2_fields.append(
+        (family_label, gpm_v8_family_monthly_dict[family_key].sel(time=common_months))
+    )
 figure2_fields.append(("GPM PMW V08", common_products["GPM PMW V08"]))
 
 figure2_packs = [
@@ -511,9 +523,9 @@ figure2, figure2_axes, figure2_colorbar = (
     compare_mean_precip_basin_v7_v8_common_cbar(
         arr_lst_mean=figure2_arr,
         basin_mask_latlon=basin_mask_01deg,
-        row1_idx=[0, 1, 2],
-        row2_idx=[3, 4],
-        row3_idx=list(range(5, len(figure2_arr))),
+        row1_idx=list(range(0, 5)),
+        row2_idx=list(range(5, len(figure2_arr))),
+        row3_idx=[],
         ncols=5,
         gamma=0.6,
         vmin=0,

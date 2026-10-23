@@ -5771,19 +5771,12 @@ def compare_mean_precip_basin_v7_v8_common_cbar(
     mean_fontsize=18,
 ):
     """
-    Three-row Antarctic basin precipitation figure with a common color scale.
+    Antarctic basin precipitation figure with a common color scale.
 
-    Row 1:
-        PMB, ERA5, GPCP v3.3
-
-    Row 2:
-        GPM PMW V08 constellation members and mean
-
-    Row 3:
-        GPM PMW V07 constellation members and mean
-
-    All panels share a common 0-400 mm yr-1 color scale to allow direct
-    visual comparison of V07 and V08 magnitudes.
+    ``row1_idx``, ``row2_idx``, and ``row3_idx`` define the panel grouping.
+    Empty rows are omitted and every populated row is centered. The default
+    arguments retain the R1 3-5-5 layout; a 5-5 layout can be requested for
+    the six-product UA-HIPA/AIRS comparison. All panels share one color scale.
     """
 
     if len(arr_lst_mean) == 0:
@@ -5818,8 +5811,14 @@ def compare_mean_precip_basin_v7_v8_common_cbar(
     if cbar_ticks is None:
         cbar_ticks = [0, 25, 50, 100, 200, 300, 400]
 
-    nrows = 3
-    ncols = 5
+    # Keep the established three-row R1 layout by default, while allowing
+    # shorter analyses to omit an empty row and use the requested column count.
+    row_groups = [row1_idx, row2_idx, row3_idx]
+    row_groups = [row for row in row_groups if len(row) > 0]
+    nrows = len(row_groups)
+    ncols = int(ncols)
+    if any(len(row) > ncols for row in row_groups):
+        raise ValueError("Each row index group must contain at most ncols panels.")
 
     if figsize is None:
         figsize = (4.25 * ncols + 1.3, 4.25 * nrows)
@@ -5840,24 +5839,19 @@ def compare_mean_precip_basin_v7_v8_common_cbar(
         hspace=0.20,
     )
 
-    axes2d = np.asarray(axes2d)
+    axes2d = np.asarray(axes2d).reshape(nrows, ncols)
 
     for ax in axes2d.ravel():
         ax.set_visible(False)
 
     layout_positions = {}
 
-    # Row 1 has 3 panels centered in columns 1, 2, 3.
-    row1_cols = [1, 2, 3]
-    for idx, col in zip(row1_idx, row1_cols):
-        layout_positions[idx] = (0, col)
-
-    # Rows 2 and 3 use all five columns.
-    for idx, col in zip(row2_idx, range(5)):
-        layout_positions[idx] = (1, col)
-
-    for idx, col in zip(row3_idx, range(5)):
-        layout_positions[idx] = (2, col)
+    # Center every populated row. Defaults still produce the manuscript's
+    # centered 3-panel first row followed by two full 5-panel rows.
+    for row_number, row_indices in enumerate(row_groups):
+        first_col = (ncols - len(row_indices)) // 2
+        for idx, col in zip(row_indices, range(first_col, first_col + len(row_indices))):
+            layout_positions[idx] = (row_number, col)
 
     letters = list("abcdefghijklmnopqrstuvwxyz")
     axes_out = []
