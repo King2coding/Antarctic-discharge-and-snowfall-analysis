@@ -441,16 +441,25 @@ figure2_basin_mean_annual.to_csv(
     index=False,
 )
 
-# Regional PMB uncertainty uses the same masks and cosine-latitude weighting as
-# the precipitation products.  Its product label is PMB so the plotting
-# functions can align the uncertainty envelope with the PMB central estimate.
-regional_pmb_uncertainty = cosine_weighted_regional_series(
-    products={r"$P_{\mathrm{MB}}$": pmb_unc_mon_01.sel(time=common_months)},
-    region_masks=region_masks_01deg,
+# Reuse the established PMB uncertainty propagation.  The field is constant
+# within each basin, so its pixels are not independent: recover one uncertainty
+# per basin and propagate the regional weighted mean in quadrature.
+regional_pmb_uncertainty = build_region_monthly_uncertainty_from_basin_painted_field(
+    unc_da=pmb_unc_mon_01.sel(time=common_months),
+    basin_mask=basin_mask_01deg,
+    region_defs=REGION_BASINS,
+    lat_name="lat",
+    lon_name="lon",
+    time_name="time",
+    value_name="pmb_uncertainty",
 )
 regional_pmb_uncertainty.to_csv(
     TABLE_DIR / f"regional_PMB_uncertainty_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
     index=False,
+)
+regional_annual_pmb_uncertainty = compute_annual_uncertainty_from_monthly_unc_df(
+    regional_pmb_uncertainty,
+    min_months_per_year=12,
 )
 
 
@@ -514,12 +523,32 @@ print("Saved:", figure3_path)
 # SECTION 19. FIGURE 4 ANALOGUE: REGIONAL SEASONAL CLIMATOLOGY
 # =============================================================================
 
+# Use the same conventional season-year and uncertainty functions as R1.
+# With January-December 2018 alone, MAM/JJA/SON are complete but DJF is not;
+# DJF is therefore omitted rather than combining non-contiguous months.
+regional_monthly_for_r1 = regional_monthly_common.rename(
+    columns={"precipitation_mm_month": "precipitation"}
+)
+regional_seasonal_climatology = compute_seasonal_climatology_from_regional_series(
+    regional_monthly_for_r1,
+    drop_incomplete=True,
+)
+seasonal_pmb_uncertainty = monthly_uncertainty_df_to_conventional_seasonal_uncertainty(
+    regional_pmb_uncertainty,
+    require_complete_season=True,
+)
+regional_seasonal_pmb_uncertainty = (
+    compute_seasonal_climatology_uncertainty_from_seasonal_unc_df(
+        seasonal_pmb_uncertainty
+    )
+)
+
 figure4_path = PLOT_DIR / (
     f"Figure_4_regional_seasonal_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
 figure4, figure4_axes, regional_seasonal_climatology = plot_figure4_seasonal(
-    regional_monthly_common,
-    pmb_uncertainty_monthly=regional_pmb_uncertainty,
+    regional_seasonal_climatology,
+    pmb_uncertainty_monthly=regional_seasonal_pmb_uncertainty,
     output_path=figure4_path,
 )
 regional_seasonal_climatology.to_csv(
@@ -539,7 +568,7 @@ figure5_path = PLOT_DIR / (
 )
 figure5, figure5_axes, regional_annual_for_figure5 = plot_figure5_interannual(
     regional_monthly_common,
-    pmb_uncertainty_monthly=regional_pmb_uncertainty,
+    pmb_uncertainty_monthly=regional_annual_pmb_uncertainty,
     output_path=figure5_path,
 )
 print("Saved:", figure5_path)

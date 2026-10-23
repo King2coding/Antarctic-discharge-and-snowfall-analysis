@@ -27,12 +27,14 @@ from uahipa_airs_monthly_utils import subset_products_to_common_months
 
 
 PRODUCT_STYLES = {
-    r"$P_{\mathrm{MB}}$": {"color": "black", "linewidth": 2.8},
-    "ERA5": {"color": "tab:blue", "linewidth": 2.2},
-    "GPCP V3.3": {"color": "tab:orange", "linewidth": 2.2},
-    "GPM PMW V08": {"color": "tab:green", "linewidth": 2.2},
-    "UA-HIPA q75": {"color": "magenta", "linewidth": 2.2},
-    "AIRS": {"color": "tab:red", "linewidth": 2.2},
+    # Preserve the R1 manuscript/code styles; only the two new products need
+    # new entries.  Use the same Matplotlib keyword names as product_styles_corr.
+    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.5},
+    "ERA5": {"color": "blue", "marker": "s", "lw": 2.5},
+    "GPCP V3.3": {"color": "orange", "marker": "D", "lw": 2.5},
+    "GPM PMW V08": {"color": "green", "lw": 3.5},
+    "UA-HIPA q75": {"color": "magenta", "marker": "o", "lw": 2.5},
+    "AIRS": {"color": "red", "marker": "o", "lw": 2.5},
 }
 
 SEASON_MONTHS = {"DJF": (12, 1, 2), "MAM": (3, 4, 5),
@@ -324,31 +326,30 @@ def plot_figure2_basin_maps(basin_annual: pd.DataFrame, basin_mask: xr.DataArray
 def plot_figure4_seasonal(regional_monthly: pd.DataFrame,
                           pmb_uncertainty_monthly: pd.DataFrame | None = None,
                           output_path: str | Path | None = None):
-    """Figure 4 analogue: seasonal climatology for AIS, WAIS, and EAIS."""
-    seasonal = seasonal_climatology(regional_monthly)
-    uncertainty = (seasonal_climatology(pmb_uncertainty_monthly)
-                   if pmb_uncertainty_monthly is not None else None)
-    regions = regional_monthly["region"].drop_duplicates().tolist()
-    order = list(SEASON_MONTHS)
-    figure, axes = plt.subplots(len(regions), 1, figsize=(11, 9), sharex=True,
-                                constrained_layout=True)
-    for axis, region in zip(np.atleast_1d(axes), regions):
-        sub = seasonal[seasonal.region == region]
-        if uncertainty is not None:
-            center = sub[sub["product"] == r"$P_{\mathrm{MB}}$"].set_index("season").reindex(order)
-            spread = uncertainty[uncertainty.region == region].set_index("season").reindex(order)
-            y = center["precipitation_mm_season"].to_numpy(float)
-            s = spread["precipitation_mm_season"].to_numpy(float)
-            axis.fill_between(order, y - s, y + s, color="0.85", label=r"$P_{MB}$ uncertainty")
-        for product, frame in sub.groupby("product", sort=False):
-            values = frame.set_index("season").reindex(order)["precipitation_mm_season"]
-            axis.plot(order, values, marker="o", label=product,
-                      **PRODUCT_STYLES.get(product, {}))
-        axis.set_title(region)
-        axis.set_ylabel("mm season$^{-1}$")
-        axis.grid(alpha=0.25)
-    axes[0].legend(ncol=4, frameon=False, fontsize=8)
-    figure.suptitle("Seasonal climatology (DJF uses the within-period month climatology)")
+    """Figure 4 adapter using the established R1 seasonal plotting function.
+
+    ``pmb_uncertainty_monthly`` is retained as the public argument name for
+    backward compatibility, but must contain the already propagated seasonal
+    uncertainty table produced by the established uncertainty helpers.
+    """
+    from program_utile_13Apr2026 import plot_seasonal_climatology_with_pmb_uncertainty
+
+    seasonal = regional_monthly.rename(
+        columns={"precipitation_mm_season": "precipitation"}
+    )
+    product_order = tuple(seasonal["product"].drop_duplicates())
+    figure, axes = plot_seasonal_climatology_with_pmb_uncertainty(
+        seasonal,
+        pmb_unc_df=pmb_uncertainty_monthly,
+        region_order=("Antarctica", "West Antarctica", "East Antarctica"),
+        product_order=product_order,
+        product_styles=PRODUCT_STYLES,
+        figsize=(10, 8),
+        ylabel="mm/season",
+        y_nbins=4,
+        legend_ncol=3,
+        unc_label=r"$P_{\mathrm{MB}}$ uncertainty ($\pm 1\sigma$)",
+    )
     if output_path is not None:
         figure.savefig(Path(output_path), dpi=300, bbox_inches="tight")
     return figure, axes, seasonal
@@ -359,7 +360,9 @@ def plot_figure5_interannual(regional_monthly: pd.DataFrame,
                              output_path: str | Path | None = None):
     """Figure 5 analogue; explicitly marked as a placeholder for one year."""
     annual, _ = annual_and_mean_annual(regional_monthly)
-    unc_annual = annual_and_mean_annual(pmb_uncertainty_monthly)[0] if pmb_uncertainty_monthly is not None else None
+    # Accept the annual uncertainty table returned by the established
+    # compute_annual_uncertainty_from_monthly_unc_df helper.
+    unc_annual = pmb_uncertainty_monthly
     regions = regional_monthly["region"].drop_duplicates().tolist()
     years = sorted(annual.year.unique())
     figure, axes = plt.subplots(len(regions), 1, figsize=(11, 8.5), sharex=True,
@@ -370,8 +373,9 @@ def plot_figure5_interannual(regional_monthly: pd.DataFrame,
             center = sub[sub["product"] == r"$P_{\mathrm{MB}}$"].set_index("year")
             spread = unc_annual[unc_annual.region == region].set_index("year")
             common = center.index.intersection(spread.index)
-            axis.fill_between(common, center.loc[common, "precipitation_mm_year"] - spread.loc[common, "precipitation_mm_year"],
-                              center.loc[common, "precipitation_mm_year"] + spread.loc[common, "precipitation_mm_year"], color="0.85")
+            sigma = spread.loc[common, "pmb_uncertainty"]
+            axis.fill_between(common, center.loc[common, "precipitation_mm_year"] - sigma,
+                              center.loc[common, "precipitation_mm_year"] + sigma, color="0.85")
         for product, frame in sub.groupby("product", sort=False):
             axis.plot(frame.year, frame.precipitation_mm_year, marker="o",
                       label=product, **PRODUCT_STYLES.get(product, {}))
