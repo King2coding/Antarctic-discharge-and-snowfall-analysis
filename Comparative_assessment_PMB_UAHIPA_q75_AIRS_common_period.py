@@ -701,10 +701,12 @@ figure6, figure6_axes, figure6_stats = plot_pmb_scatter_oldstyle(
     log_min=2,
     log_ticks=(5, 10, 20, 50, 100, 200, 500, 1000, 2000),
     ncols=3,
-    figsize_per_col=4.8,
-    figsize_per_row=4.5,
+    figsize_per_col=5.0,
+    figsize_per_row=5.0,
     share_axes=False,
     show_ylabel_only_left=False,
+    subplot_wspace=0.20,
+    subplot_hspace=0.38,
 )
 figure6.savefig(figure6_path, dpi=300, bbox_inches="tight")
 print("Saved:", figure6_path)

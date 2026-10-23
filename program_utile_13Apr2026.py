@@ -4489,6 +4489,8 @@ def plot_pmb_scatter_oldstyle(
     share_axes=False,
     show_ylabel_only_left=False,
     global_max=2000.0,
+    subplot_wspace=0.03,
+    subplot_hspace=0.20,
 ):
     """
     Old-style basin scatter:
@@ -4632,7 +4634,7 @@ def plot_pmb_scatter_oldstyle(
         ax.axis("off")
 
     fig.tight_layout()
-    fig.subplots_adjust(wspace=0.03, hspace=0.2)
+    fig.subplots_adjust(wspace=subplot_wspace, hspace=subplot_hspace)
     return fig, axes, stats_out
 
 
