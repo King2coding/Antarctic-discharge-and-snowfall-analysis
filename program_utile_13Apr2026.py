@@ -95,7 +95,9 @@ product_styles_corr = {
 
     "UA-HIPA": {"color": "magenta", "lw": 2.5},
     "UA-HIPA q75": {"color": "magenta", "marker": "o", "lw": 2.5},
-    "AIRS": {"color": "red", "marker": "o", "lw": 2.5},
+    # Fixed project-wide AIRS identity: explicit Tableau red, distinct from
+    # the orange used for GPCP V3.3.
+    "AIRS": {"color": "#d62728", "marker": "o", "lw": 2.5},
 }
 #---------------------------------------------------------------------------------
 

@@ -24,18 +24,12 @@ import pandas as pd
 import xarray as xr
 
 from uahipa_airs_monthly_utils import subset_products_to_common_months
+from program_utile_13Apr2026 import product_styles_corr
 
 
-PRODUCT_STYLES = {
-    # Preserve the R1 manuscript/code styles; only the two new products need
-    # new entries.  Use the same Matplotlib keyword names as product_styles_corr.
-    r"$P_{\mathrm{MB}}$": {"color": "k", "marker": "o", "lw": 2.5},
-    "ERA5": {"color": "blue", "marker": "s", "lw": 2.5},
-    "GPCP V3.3": {"color": "orange", "marker": "D", "lw": 2.5},
-    "GPM PMW V08": {"color": "green", "lw": 3.5},
-    "UA-HIPA q75": {"color": "magenta", "marker": "o", "lw": 2.5},
-    "AIRS": {"color": "red", "marker": "o", "lw": 2.5},
-}
+# One shared project style dictionary.  Keeping this alias avoids a second,
+# potentially divergent color definition in the UA-HIPA/AIRS helper module.
+PRODUCT_STYLES = product_styles_corr
 
 SEASON_MONTHS = {"DJF": (12, 1, 2), "MAM": (3, 4, 5),
                  "JJA": (6, 7, 8), "SON": (9, 10, 11)}
