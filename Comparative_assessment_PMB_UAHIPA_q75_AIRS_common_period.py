@@ -733,10 +733,19 @@ figure7, figure7_axes, figure7_spreads = plot_basin_spread_points_by_region(
     eais_basins=EAIS_BASINS,
     figsize=(13, 7.2),
     legend_ncol=6,
-    spread_key_label=(
-        r"% = spread($P_{\mathrm{MB}}$, ERA5, GPCP V3.3, "
-        "GPM PMW V08, UA-HIPA q75, AIRS)"
-    ),
+    place_key=False,
+)
+figure7_axes[0].text(
+    0.01,
+    0.96,
+    r"% = spread($P_{\mathrm{MB}}$, ERA5, GPCP V3.3, "
+    "GPM PMW V08, UA-HIPA q75, AIRS)",
+    transform=figure7_axes[0].transAxes,
+    ha="left",
+    va="top",
+    fontsize=14,
+    color="black",
+    fontweight="bold",
 )
 figure7.savefig(figure7_path, dpi=300, bbox_inches="tight")
 print("Saved:", figure7_path)

@@ -1885,14 +1885,20 @@ def compute_seasonal_climatology_from_regional_series(df, drop_incomplete=True):
 
 def compute_annual_totals_from_regional_series(df):
     """
-    Annual totals [mm/year] from monthly regional series.
+    Annual totals [mm/year], requiring 12 valid monthly values.
+
+    Incomplete years remain NaN and are excluded from multiyear means,
+    consistent with the annual gridded calculation.
     """
     out = df.copy()
     out["year"] = pd.to_datetime(out["time"]).dt.year
 
     annual = (
-        out.groupby(["region", "product", "year"], as_index=False)["precipitation"]
-        .sum()
+        out.groupby(
+            ["region", "product", "year"],
+            as_index=False,
+        )["precipitation"]
+        .sum(min_count=12)
         .sort_values(["region", "product", "year"])
     )
     return annual
@@ -3554,7 +3560,11 @@ def plot_monthly_climatology(
                 **style
             )
 
-        ax.set_title(region, fontweight="bold", fontsize=18)
+        ax.set_title(
+            region_name2short.get(region, region),
+            fontweight="bold",
+            fontsize=18,
+        )
         ax.grid(True, alpha=0.3)
         ax.set_xticks(range(1, 13))
         ax.set_xticklabels(month_labels)
@@ -4962,7 +4972,6 @@ def plot_basin_spread_points_by_region(
     annotate_gpm_color="dimgray",
     legend_ncol=5,
     place_key=True,
-    spread_key_label=None,
 ):
     """
     Basin-scale precipitation comparison split into WAIS and EAIS panels.
@@ -5166,11 +5175,9 @@ def plot_basin_spread_points_by_region(
     # Spread key
     # -------------------------------------------------------------------------
     if place_key:
-        if spread_key_label is None:
-            spread_key_label = "% = spread(" + ", ".join(non_gpm_group) + ")"
         axes[0].text(
             0.01, 0.96,
-            spread_key_label,
+            "% = spread($P_{\mathrm{MB}}$, ERA5, GPCP V3.3, GPM PMW V08)",
             transform=axes[0].transAxes,
             ha="left",
             va="top",
