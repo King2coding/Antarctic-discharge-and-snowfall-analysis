@@ -35,6 +35,9 @@ PRODUCT_STYLES = {
     "AIRS": {"color": "tab:red", "linewidth": 2.2},
 }
 
+SEASON_MONTHS = {"DJF": (12, 1, 2), "MAM": (3, 4, 5),
+                 "JJA": (6, 7, 8), "SON": (9, 10, 11)}
+
 
 #%%
 # =============================================================================
@@ -233,3 +236,216 @@ def plot_regional_mean_annual_comparison(
         output.parent.mkdir(parents=True, exist_ok=True)
         figure.savefig(output, dpi=300, bbox_inches="tight")
     return figure, axis, annual, climatology
+
+
+#%%
+# =============================================================================
+# SECTION 5. MANUSCRIPT-ANALOGOUS TABLES
+# =============================================================================
+
+def annual_and_mean_annual(monthly: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Sum monthly values by calendar year, then average complete years."""
+    annual = (monthly.groupby(["region", "product", "year"], as_index=False)
+              ["precipitation_mm_month"].sum()
+              .rename(columns={"precipitation_mm_month": "precipitation_mm_year"}))
+    mean_annual = (annual.groupby(["region", "product"], as_index=False)
+                   ["precipitation_mm_year"].mean())
+    return annual, mean_annual
+
+
+def seasonal_climatology(monthly: pd.DataFrame) -> pd.DataFrame:
+    """Return seasonal totals averaged across the strict common years.
+
+    DJF follows the manuscript climatology convention: all December, January,
+    and February monthly climatological values are summed. With one available
+    year this is Dec 2018 + Jan 2018 + Feb 2018, not a contiguous seasonal-year
+    DJF; the figure subtitle states this limitation.
+    """
+    rows = []
+    for (region, product), frame in monthly.groupby(["region", "product"], sort=False):
+        month_clim = frame.groupby("month")["precipitation_mm_month"].mean()
+        for season, months in SEASON_MONTHS.items():
+            values = month_clim.reindex(months)
+            rows.append({"region": region, "product": product, "season": season,
+                         "precipitation_mm_season": values.sum(min_count=len(months))})
+    return pd.DataFrame(rows)
+
+
+def basin_mean_annual_table(basin_monthly: pd.DataFrame) -> pd.DataFrame:
+    """Wide basin table of mean annual totals used by Figures 2, 6, and 7."""
+    annual, mean_annual = annual_and_mean_annual(basin_monthly)
+    wide = mean_annual.pivot(index="region", columns="product",
+                             values="precipitation_mm_year").reset_index()
+    wide["basin_id"] = pd.to_numeric(wide["region"].str.extract(r"^(\d+)")[0])
+    return wide.sort_values("basin_id").reset_index(drop=True)
+
+
+#%%
+# =============================================================================
+# SECTION 6. MANUSCRIPT-ANALOGOUS FIGURES 2, 4, 5, 6, AND 7
+# =============================================================================
+
+def plot_figure2_basin_maps(basin_annual: pd.DataFrame, basin_mask: xr.DataArray,
+                            output_path: str | Path | None = None):
+    """Figure 2 analogue: polar maps painted with basin mean annual values."""
+    import cartopy.crs as ccrs
+    from matplotlib.colors import BoundaryNorm
+
+    products = [column for column in basin_annual.columns
+                if column not in {"region", "basin_id"}]
+    ncols = 3
+    nrows = int(np.ceil(len(products) / ncols))
+    figure, axes = plt.subplots(nrows, ncols, figsize=(13, 4.4 * nrows),
+                                subplot_kw={"projection": ccrs.SouthPolarStereo()},
+                                constrained_layout=True)
+    axes = np.atleast_1d(axes).ravel()
+    bounds = np.array([0, 25, 50, 100, 150, 200, 300, 400, 600, 1000, 1600])
+    norm = BoundaryNorm(bounds, plt.get_cmap("turbo").N, extend="max")
+    mesh = None
+    for index, (axis, product) in enumerate(zip(axes, products)):
+        lookup = basin_annual.set_index("basin_id")[product]
+        painted = xr.full_like(basin_mask, np.nan, dtype=float)
+        for basin_id, value in lookup.items():
+            painted = xr.where(basin_mask == basin_id, value, painted)
+        mesh = axis.pcolormesh(painted.lon, painted.lat, painted,
+                               transform=ccrs.PlateCarree(), cmap="turbo", norm=norm)
+        axis.coastlines(linewidth=0.5)
+        axis.set_extent([-180, 180, -90, -60], ccrs.PlateCarree())
+        axis.set_title(f"({chr(97 + index)}) {product}\nMean: {np.nanmean(lookup):.0f}")
+    for axis in axes[len(products):]:
+        axis.set_visible(False)
+    figure.colorbar(mesh, ax=axes[:len(products)].tolist(), shrink=0.8,
+                    label="Mean annual precipitation [mm yr$^{-1}$]")
+    if output_path is not None:
+        figure.savefig(Path(output_path), dpi=300, bbox_inches="tight")
+    return figure, axes
+
+
+def plot_figure4_seasonal(regional_monthly: pd.DataFrame,
+                          pmb_uncertainty_monthly: pd.DataFrame | None = None,
+                          output_path: str | Path | None = None):
+    """Figure 4 analogue: seasonal climatology for AIS, WAIS, and EAIS."""
+    seasonal = seasonal_climatology(regional_monthly)
+    uncertainty = (seasonal_climatology(pmb_uncertainty_monthly)
+                   if pmb_uncertainty_monthly is not None else None)
+    regions = regional_monthly["region"].drop_duplicates().tolist()
+    order = list(SEASON_MONTHS)
+    figure, axes = plt.subplots(len(regions), 1, figsize=(11, 9), sharex=True,
+                                constrained_layout=True)
+    for axis, region in zip(np.atleast_1d(axes), regions):
+        sub = seasonal[seasonal.region == region]
+        if uncertainty is not None:
+            center = sub[sub["product"] == r"$P_{\mathrm{MB}}$"].set_index("season").reindex(order)
+            spread = uncertainty[uncertainty.region == region].set_index("season").reindex(order)
+            y = center["precipitation_mm_season"].to_numpy(float)
+            s = spread["precipitation_mm_season"].to_numpy(float)
+            axis.fill_between(order, y - s, y + s, color="0.85", label=r"$P_{MB}$ uncertainty")
+        for product, frame in sub.groupby("product", sort=False):
+            values = frame.set_index("season").reindex(order)["precipitation_mm_season"]
+            axis.plot(order, values, marker="o", label=product,
+                      **PRODUCT_STYLES.get(product, {}))
+        axis.set_title(region)
+        axis.set_ylabel("mm season$^{-1}$")
+        axis.grid(alpha=0.25)
+    axes[0].legend(ncol=4, frameon=False, fontsize=8)
+    figure.suptitle("Seasonal climatology (DJF uses the within-period month climatology)")
+    if output_path is not None:
+        figure.savefig(Path(output_path), dpi=300, bbox_inches="tight")
+    return figure, axes, seasonal
+
+
+def plot_figure5_interannual(regional_monthly: pd.DataFrame,
+                             pmb_uncertainty_monthly: pd.DataFrame | None = None,
+                             output_path: str | Path | None = None):
+    """Figure 5 analogue; explicitly marked as a placeholder for one year."""
+    annual, _ = annual_and_mean_annual(regional_monthly)
+    unc_annual = annual_and_mean_annual(pmb_uncertainty_monthly)[0] if pmb_uncertainty_monthly is not None else None
+    regions = regional_monthly["region"].drop_duplicates().tolist()
+    years = sorted(annual.year.unique())
+    figure, axes = plt.subplots(len(regions), 1, figsize=(11, 8.5), sharex=True,
+                                constrained_layout=True)
+    for axis, region in zip(np.atleast_1d(axes), regions):
+        sub = annual[annual.region == region]
+        if unc_annual is not None:
+            center = sub[sub["product"] == r"$P_{\mathrm{MB}}$"].set_index("year")
+            spread = unc_annual[unc_annual.region == region].set_index("year")
+            common = center.index.intersection(spread.index)
+            axis.fill_between(common, center.loc[common, "precipitation_mm_year"] - spread.loc[common, "precipitation_mm_year"],
+                              center.loc[common, "precipitation_mm_year"] + spread.loc[common, "precipitation_mm_year"], color="0.85")
+        for product, frame in sub.groupby("product", sort=False):
+            axis.plot(frame.year, frame.precipitation_mm_year, marker="o",
+                      label=product, **PRODUCT_STYLES.get(product, {}))
+        axis.set_title(region)
+        axis.set_ylabel("mm yr$^{-1}$")
+        axis.grid(alpha=0.25)
+        if len(years) < 2:
+            axis.text(0.5, 0.08, "PLACEHOLDER: interannual variability requires ≥2 complete years",
+                      transform=axis.transAxes, ha="center", fontsize=9,
+                      bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "0.6"})
+    axes[0].legend(ncol=3, frameon=False, fontsize=8)
+    axes[-1].set_xticks(years)
+    if output_path is not None:
+        figure.savefig(Path(output_path), dpi=300, bbox_inches="tight")
+    return figure, axes, annual
+
+
+def plot_figure6_basin_scatter(basin_annual: pd.DataFrame,
+                               output_path: str | Path | None = None,
+                               reference: str = r"$P_{\mathrm{MB}}$"):
+    """Figure 6 analogue: basin mean annual values against PMB."""
+    products = [c for c in basin_annual.columns if c not in {"region", "basin_id", reference}]
+    figure, axes = plt.subplots(2, 3, figsize=(13, 8.5), constrained_layout=True)
+    axes = axes.ravel()
+    for index, (axis, product) in enumerate(zip(axes, products)):
+        paired = basin_annual[["basin_id", reference, product]].dropna()
+        x, y = paired[reference].to_numpy(float), paired[product].to_numpy(float)
+        positive = (x > 0) & (y > 0)
+        x, y = x[positive], y[positive]
+        ids = paired.loc[positive, "basin_id"]
+        axis.scatter(x, y, c=ids, cmap="turbo", edgecolor="k", s=48)
+        limits = [max(1, min(x.min(), y.min()) * 0.7), max(x.max(), y.max()) * 1.3]
+        axis.plot(limits, limits, "k--", linewidth=1)
+        axis.set(xscale="log", yscale="log", xlim=limits, ylim=limits,
+                 xlabel=r"$P_{MB}$ [mm yr$^{-1}$]", ylabel=f"{product} [mm yr$^{{-1}}$]")
+        correlation = np.corrcoef(x, y)[0, 1] if len(x) >= 2 else np.nan
+        bias = 100 * (np.mean(y) - np.mean(x)) / np.mean(x)
+        axis.text(0.04, 0.95, f"CC = {correlation:.2f}\nBias = {bias:+.1f}%",
+                  transform=axis.transAxes, va="top")
+        axis.set_title(f"({chr(97 + index)}) {product}")
+        axis.grid(alpha=0.2, which="both")
+    for axis in axes[len(products):]:
+        axis.set_visible(False)
+    if output_path is not None:
+        figure.savefig(Path(output_path), dpi=300, bbox_inches="tight")
+    return figure, axes
+
+
+def plot_figure7_basin_spread(basin_annual: pd.DataFrame, wais_basins: list[int],
+                              eais_basins: list[int], output_path: str | Path | None = None,
+                              reference: str = r"$P_{\mathrm{MB}}$"):
+    """Figure 7 analogue with six-product normalized spread."""
+    products = [c for c in basin_annual.columns if c not in {"region", "basin_id"}]
+    values = basin_annual[products]
+    basin_annual = basin_annual.copy()
+    basin_annual["normalized_spread_pct"] = 100 * (values.max(axis=1) - values.min(axis=1)) / values.mean(axis=1)
+    figure, axes = plt.subplots(2, 1, figsize=(13, 8), constrained_layout=True)
+    markers = ["s", "D", "o", "^", "P"]
+    for axis, (title, basin_ids) in zip(axes, [("WAIS", wais_basins), ("EAIS", eais_basins)]):
+        sub = basin_annual[basin_annual.basin_id.isin(basin_ids)].set_index("basin_id").reindex(basin_ids)
+        x = np.arange(len(sub))
+        axis.bar(x, sub[reference], color="0.82", edgecolor="0.3", label=reference)
+        for marker, product in zip(markers, [p for p in products if p != reference]):
+            axis.scatter(x, sub[product], marker=marker, s=42,
+                         color=PRODUCT_STYLES.get(product, {}).get("color"), label=product)
+        top = sub[products].max(axis=1)
+        for xpos, value, spread in zip(x, top, sub.normalized_spread_pct):
+            axis.text(xpos, value * 1.08, f"{spread:.0f}%", ha="center", fontweight="bold", fontsize=8)
+        axis.set_title(title)
+        axis.set_xticks(x, sub.index.astype(int))
+        axis.set_ylabel("mm yr$^{-1}$")
+        axis.grid(axis="y", alpha=0.25)
+    axes[-1].set_xlabel("IMBIE basin ID")
+    axes[-1].legend(ncol=3, frameon=False, fontsize=8)
+    if output_path is not None:
+        figure.savefig(Path(output_path), dpi=300, bbox_inches="tight")
+    return figure, axes, basin_annual

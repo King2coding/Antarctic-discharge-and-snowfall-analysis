@@ -25,8 +25,14 @@ from program_utils import *
 from Extra_util_functions import *
 from program_utile_13Apr2026 import *
 from comparative_uahipa_airs_common_period_utils import (
+    basin_mean_annual_table,
     cosine_weighted_regional_series,
     paired_product_metrics,
+    plot_figure2_basin_maps,
+    plot_figure4_seasonal,
+    plot_figure5_interannual,
+    plot_figure6_basin_scatter,
+    plot_figure7_basin_spread,
     plot_regional_mean_annual_comparison,
     plot_regional_monthly_comparison,
     prepare_all_product_common_period,
@@ -412,10 +418,29 @@ basin_metrics_common.to_csv(
     index=False,
 )
 
+# Mean-annual basin table shared by manuscript-analogous Figures 2, 6, and 7.
+basin_mean_annual_common = basin_mean_annual_table(basin_monthly_common)
+basin_mean_annual_common.to_csv(
+    TABLE_DIR / f"imbie_basin_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+
+# Regional PMB uncertainty uses the same masks and cosine-latitude weighting as
+# the precipitation products.  Its product label is PMB so the plotting
+# functions can align the uncertainty envelope with the PMB central estimate.
+regional_pmb_uncertainty = cosine_weighted_regional_series(
+    products={r"$P_{\mathrm{MB}}$": pmb_unc_mon_01.sel(time=common_months)},
+    region_masks=region_masks_01deg,
+)
+regional_pmb_uncertainty.to_csv(
+    TABLE_DIR / f"regional_PMB_uncertainty_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+
 
 #%%
 # =============================================================================
-# SECTION 16. REGIONAL MONTHLY COMPARISON PLOT
+# SECTION 16. SUPPLEMENTAL MONTHLY COMPARISON DIAGNOSTIC
 # =============================================================================
 
 monthly_plot_path = PLOT_DIR / (
@@ -429,19 +454,33 @@ print("Saved:", monthly_plot_path)
 
 #%%
 # =============================================================================
-# SECTION 17. REGIONAL MEAN-ANNUAL COMPARISON PLOT AND TABLES
+# SECTION 17. FIGURE 2 ANALOGUE: BASIN-SCALE MEAN-ANNUAL MAPS
 # =============================================================================
 
-annual_plot_path = PLOT_DIR / (
-    f"regional_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+figure2_path = PLOT_DIR / (
+    f"Figure_2_basin_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+)
+figure2, figure2_axes = plot_figure2_basin_maps(
+    basin_mean_annual_common, basin_mask_01deg, output_path=figure2_path,
+)
+print("Saved:", figure2_path)
+
+
+#%%
+# =============================================================================
+# SECTION 18. FIGURE 3 ANALOGUE: REGIONAL MEAN-ANNUAL BARS
+# =============================================================================
+
+figure3_path = PLOT_DIR / (
+    f"Figure_3_regional_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
 (
-    annual_figure,
-    annual_axis,
+    figure3,
+    figure3_axis,
     regional_annual_values,
     regional_annual_climatology,
 ) = plot_regional_mean_annual_comparison(
-    regional_monthly_common, output_path=annual_plot_path,
+    regional_monthly_common, output_path=figure3_path,
 )
 regional_annual_values.to_csv(
     TABLE_DIR / f"regional_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
@@ -451,12 +490,83 @@ regional_annual_climatology.to_csv(
     TABLE_DIR / f"regional_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
     index=False,
 )
-print("Saved:", annual_plot_path)
+print("Saved:", figure3_path)
 
 
 #%%
 # =============================================================================
-# SECTION 18. FINAL RUN SUMMARY
+# SECTION 19. FIGURE 4 ANALOGUE: REGIONAL SEASONAL CLIMATOLOGY
+# =============================================================================
+
+figure4_path = PLOT_DIR / (
+    f"Figure_4_regional_seasonal_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+)
+figure4, figure4_axes, regional_seasonal_climatology = plot_figure4_seasonal(
+    regional_monthly_common,
+    pmb_uncertainty_monthly=regional_pmb_uncertainty,
+    output_path=figure4_path,
+)
+regional_seasonal_climatology.to_csv(
+    TABLE_DIR / f"regional_seasonal_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+print("Saved:", figure4_path)
+
+
+#%%
+# =============================================================================
+# SECTION 20. FIGURE 5 PLACEHOLDER: REGIONAL INTERANNUAL VARIABILITY
+# =============================================================================
+
+figure5_path = PLOT_DIR / (
+    f"Figure_5_PLACEHOLDER_interannual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+)
+figure5, figure5_axes, regional_annual_for_figure5 = plot_figure5_interannual(
+    regional_monthly_common,
+    pmb_uncertainty_monthly=regional_pmb_uncertainty,
+    output_path=figure5_path,
+)
+print("Saved:", figure5_path)
+
+
+#%%
+# =============================================================================
+# SECTION 21. FIGURE 6 ANALOGUE: BASIN SCATTERS AGAINST PMB
+# =============================================================================
+
+figure6_path = PLOT_DIR / (
+    f"Figure_6_basin_scatter_against_PMB_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+)
+figure6, figure6_axes = plot_figure6_basin_scatter(
+    basin_mean_annual_common, output_path=figure6_path,
+)
+print("Saved:", figure6_path)
+
+
+#%%
+# =============================================================================
+# SECTION 22. FIGURE 7 ANALOGUE: BASIN PRODUCT SPREAD
+# =============================================================================
+
+figure7_path = PLOT_DIR / (
+    f"Figure_7_basin_product_spread_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+)
+figure7, figure7_axes, basin_spread_common = plot_figure7_basin_spread(
+    basin_mean_annual_common,
+    wais_basins=WAIS_BASINS,
+    eais_basins=EAIS_BASINS,
+    output_path=figure7_path,
+)
+basin_spread_common.to_csv(
+    TABLE_DIR / f"imbie_basin_product_spread_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+print("Saved:", figure7_path)
+
+
+#%%
+# =============================================================================
+# SECTION 23. FINAL RUN SUMMARY
 # =============================================================================
 
 print("\nComparison completed.")
