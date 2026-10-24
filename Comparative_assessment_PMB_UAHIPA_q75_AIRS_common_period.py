@@ -43,6 +43,7 @@ from comparative_uahipa_airs_common_period_utils import (
     plot_regional_mean_annual_comparison,
     plot_regional_monthly_comparison,
     prepare_all_product_common_period,
+    seasonal_climatology_with_common_month_fallback,
 )
 
 # Fail early rather than silently falling back to Matplotlib's blue/orange
@@ -569,7 +570,7 @@ figure2, figure2_axes, figure2_colorbar = (
         show_panel_mean=True,
     )
 )
-figure2.savefig(figure2_path, dpi=300, bbox_inches="tight")
+figure2.savefig(figure2_path, dpi=150, bbox_inches="tight")
 print("Saved:", figure2_path)
 
 
@@ -605,7 +606,7 @@ figure3, figure3_axis = plot_regional_mean_annual_bars(
     title=f"{common_months.min().year}–{common_months.max().year} mean annual precipitation",
     annotate=True,
 )
-figure3.savefig(figure3_path, dpi=300, bbox_inches="tight")
+figure3.savefig(figure3_path, dpi=150, bbox_inches="tight")
 regional_annual_values.to_csv(
     TABLE_DIR / f"regional_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
     index=False,
@@ -622,24 +623,21 @@ print("Saved:", figure3_path)
 # SECTION 19. FIGURE 4 ANALOGUE: REGIONAL SEASONAL CLIMATOLOGY
 # =============================================================================
 
-# Use the same conventional season-year and uncertainty functions as R1.
-# With January-December 2018 alone, MAM/JJA/SON are complete but DJF is not;
-# DJF is therefore omitted rather than combining non-contiguous months.
+# Preserve the established complete-season calculation whenever complete
+# conventional seasons exist.  Only when a named season has no complete case
+# (currently DJF) use at least two jointly available months across all products
+# and estimate the seasonal total as 3 * their monthly mean.
+(
+    regional_seasonal_climatology,
+    regional_seasonal_pmb_uncertainty,
+    regional_seasonal_by_year,
+) = seasonal_climatology_with_common_month_fallback(
+    regional_monthly=regional_monthly_common,
+    regional_pmb_uncertainty=regional_pmb_uncertainty,
+    min_common_months=2,
+)
 regional_monthly_for_r1 = regional_monthly_common.rename(
     columns={"precipitation_mm_month": "precipitation"}
-)
-regional_seasonal_climatology = compute_seasonal_climatology_from_regional_series(
-    regional_monthly_for_r1,
-    drop_incomplete=True,
-)
-seasonal_pmb_uncertainty = monthly_uncertainty_df_to_conventional_seasonal_uncertainty(
-    regional_pmb_uncertainty,
-    require_complete_season=True,
-)
-regional_seasonal_pmb_uncertainty = (
-    compute_seasonal_climatology_uncertainty_from_seasonal_unc_df(
-        seasonal_pmb_uncertainty
-    )
 )
 
 figure4_path = PLOT_DIR / (
@@ -652,6 +650,10 @@ figure4, figure4_axes, regional_seasonal_climatology = plot_figure4_seasonal(
 )
 regional_seasonal_climatology.to_csv(
     TABLE_DIR / f"regional_seasonal_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    index=False,
+)
+regional_seasonal_by_year.to_csv(
+    TABLE_DIR / f"regional_seasonal_coverage_details_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
     index=False,
 )
 print("Saved:", figure4_path)
@@ -692,7 +694,7 @@ for axis, region in zip(figure5_axes, ("Antarctica", "West Antarctica", "East An
                       color="0.8", alpha=0.6, linewidth=0, zorder=1)
     axis.text(0.5, 0.08, "PLACEHOLDER: interannual variability requires ≥2 complete years",
               transform=axis.transAxes, ha="center", fontsize=9)
-figure5.savefig(figure5_path, dpi=300, bbox_inches="tight")
+figure5.savefig(figure5_path, dpi=150, bbox_inches="tight")
 print("Saved:", figure5_path)
 
 
@@ -724,7 +726,7 @@ figure6, figure6_axes, figure6_stats = plot_pmb_scatter_oldstyle(
 # Preserve the established function signature; make this figure-specific
 # spacing adjustment only after the reusable function returns.
 figure6.subplots_adjust(wspace=0.20, hspace=0.38)
-figure6.savefig(figure6_path, dpi=300, bbox_inches="tight")
+figure6.savefig(figure6_path, dpi=150, bbox_inches="tight")
 print("Saved:", figure6_path)
 
 
@@ -762,7 +764,7 @@ figure7_axes[0].text(
     color="black",
     fontweight="bold",
 )
-figure7.savefig(figure7_path, dpi=300, bbox_inches="tight")
+figure7.savefig(figure7_path, dpi=150, bbox_inches="tight")
 print("Saved:", figure7_path)
 
 

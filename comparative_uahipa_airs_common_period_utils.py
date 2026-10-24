@@ -267,6 +267,131 @@ def seasonal_climatology(monthly: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def seasonal_climatology_with_common_month_fallback(
+    regional_monthly: pd.DataFrame,
+    regional_pmb_uncertainty: pd.DataFrame,
+    min_common_months: int = 2,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Build seasonal totals, using a scaled partial season only as fallback.
+
+    Complete conventional seasons use their ordinary three-month sum. If a
+    named season has no complete season anywhere in the common record, a
+    season-year with at least ``min_common_months`` jointly valid months across
+    every product is estimated as ``3 * mean(available monthly totals)``.
+    PMB uncertainty is propagated as ``(3 / n) * sqrt(sum(sigma_month**2))``.
+    """
+    if not 2 <= min_common_months <= 3:
+        raise ValueError("min_common_months must be 2 or 3")
+
+    data = regional_monthly.copy()
+    data["time"] = pd.to_datetime(data["time"])
+    data["year"] = data["time"].dt.year
+    data["month"] = data["time"].dt.month
+    month_to_season = {month: season for season, months in SEASON_MONTHS.items() for month in months}
+    data["season"] = data["month"].map(month_to_season)
+    data["season_year"] = data["year"]
+    data.loc[data["month"] == 12, "season_year"] += 1
+
+    value_col = "precipitation_mm_month"
+    availability = data.pivot_table(
+        index=["region", "season", "season_year", "time", "month"],
+        columns="product", values=value_col, aggfunc="first",
+    )
+    common = availability.notna().all(axis=1).rename("jointly_valid").reset_index()
+    common = common[common["jointly_valid"]].drop(columns="jointly_valid")
+
+    selected_rows = []
+    for (region, season), season_months in common.groupby(["region", "season"], sort=False):
+        groups = list(season_months.groupby("season_year", sort=True))
+        complete = [(year, frame) for year, frame in groups if frame["month"].nunique() == 3]
+        chosen = complete if complete else [
+            (year, frame) for year, frame in groups
+            if frame["month"].nunique() >= min_common_months
+        ]
+        for season_year, frame in chosen:
+            months = sorted(frame["month"].unique().tolist())
+            selected_rows.append({
+                "region": region, "season": season, "season_year": int(season_year),
+                "n_months_used": len(months),
+                "months_used": ",".join(str(month) for month in months),
+                "is_partial_season": len(months) < 3,
+            })
+    selected = pd.DataFrame(selected_rows)
+    if selected.empty:
+        raise RuntimeError("No seasons meet the common-month coverage requirement")
+
+    seasonal_rows = []
+    for record in selected.itertuples(index=False):
+        months = [int(month) for month in record.months_used.split(",")]
+        subset = data[
+            (data["region"] == record.region)
+            & (data["season"] == record.season)
+            & (data["season_year"] == record.season_year)
+            & (data["month"].isin(months))
+        ]
+        scale = 3.0 / record.n_months_used
+        for product, frame in subset.groupby("product", sort=False):
+            seasonal_rows.append({
+                "region": record.region, "product": product,
+                "season": record.season, "season_year": record.season_year,
+                "precipitation": scale * frame[value_col].sum(min_count=record.n_months_used),
+                "n_months_used": record.n_months_used,
+                "months_used": record.months_used,
+                "is_partial_season": record.is_partial_season,
+            })
+    seasonal_by_year = pd.DataFrame(seasonal_rows)
+    seasonal_clim = (
+        seasonal_by_year.groupby(["region", "product", "season"], as_index=False)
+        .agg(
+            precipitation=("precipitation", "mean"),
+            n_seasons=("season_year", "nunique"),
+            minimum_months_used=("n_months_used", "min"),
+            used_partial_season=("is_partial_season", "any"),
+        )
+    )
+
+    uncertainty = regional_pmb_uncertainty.copy()
+    uncertainty["time"] = pd.to_datetime(uncertainty["time"])
+    uncertainty["year"] = uncertainty["time"].dt.year
+    uncertainty["month"] = uncertainty["time"].dt.month
+    uncertainty["season"] = uncertainty["month"].map(month_to_season)
+    uncertainty["season_year"] = uncertainty["year"]
+    uncertainty.loc[uncertainty["month"] == 12, "season_year"] += 1
+    uncertainty_rows = []
+    for record in selected.itertuples(index=False):
+        months = [int(month) for month in record.months_used.split(",")]
+        values = uncertainty[
+            (uncertainty["region"] == record.region)
+            & (uncertainty["season"] == record.season)
+            & (uncertainty["season_year"] == record.season_year)
+            & (uncertainty["month"].isin(months))
+        ]["pmb_uncertainty"].dropna().to_numpy(float)
+        sigma = ((3.0 / record.n_months_used) * np.sqrt(np.sum(values ** 2))
+                 if len(values) == record.n_months_used else np.nan)
+        uncertainty_rows.append({
+            "region": record.region, "season": record.season,
+            "season_year": record.season_year, "pmb_uncertainty": sigma,
+            "n_months_used": record.n_months_used,
+            "months_used": record.months_used,
+            "is_partial_season": record.is_partial_season,
+        })
+    uncertainty_by_year = pd.DataFrame(uncertainty_rows)
+    uncertainty_clim = (
+        uncertainty_by_year.groupby(["region", "season"], as_index=False)
+        .agg(
+            pmb_uncertainty=(
+                "pmb_uncertainty",
+                lambda values: (
+                    np.sqrt(np.sum(values.dropna() ** 2)) / len(values.dropna())
+                    if len(values.dropna()) else np.nan
+                ),
+            ),
+            n=("season_year", "nunique"),
+        )
+    )
+    return seasonal_clim, uncertainty_clim, seasonal_by_year
+
+
 def basin_mean_annual_table(basin_monthly: pd.DataFrame) -> pd.DataFrame:
     """Wide basin table of mean annual totals used by Figures 2, 6, and 7."""
     annual, mean_annual = annual_and_mean_annual(basin_monthly)
