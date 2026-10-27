@@ -47,8 +47,14 @@ def prepare_all_product_common_period(
     gpm_pmw_v08: xr.DataArray,
     uahipa_q75: xr.DataArray,
     airs: xr.DataArray,
+    require_complete_calendar_years: bool = False,
 ) -> tuple[dict[str, xr.DataArray], pd.DatetimeIndex]:
-    """Return all six products on their strict common complete-calendar-year months."""
+    """Return all six products on exact coincident months.
+
+    Set ``require_complete_calendar_years=True`` only for analyses that must
+    discard partial years. The main workflow retains partial common years for
+    monthly and seasonal work, then subsets complete years for annual figures.
+    """
 
     products = {
         r"$P_{\mathrm{MB}}$": pmb,
@@ -60,7 +66,7 @@ def prepare_all_product_common_period(
     }
     common_products, common_months = subset_products_to_common_months(
         products,
-        require_complete_calendar_years=True,
+        require_complete_calendar_years=require_complete_calendar_years,
     )
     print(
         "Strict common comparison period:",
@@ -240,9 +246,9 @@ def plot_regional_mean_annual_comparison(
 # =============================================================================
 
 def annual_and_mean_annual(monthly: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Sum monthly values by calendar year, then average complete years."""
+    """Sum monthly values by calendar year, requiring all 12 months."""
     annual = (monthly.groupby(["region", "product", "year"], as_index=False)
-              ["precipitation_mm_month"].sum()
+              ["precipitation_mm_month"].sum(min_count=12)
               .rename(columns={"precipitation_mm_month": "precipitation_mm_year"}))
     mean_annual = (annual.groupby(["region", "product"], as_index=False)
                    ["precipitation_mm_year"].mean())

@@ -114,8 +114,8 @@ RUN_DATE = date.today().strftime("%Y%m%d")
 #   None         -> use every complete year common to all six products
 #   [2018]       -> analyze 2018 only
 #   [2015, 2018] -> analyze those two years only (non-contiguous is allowed)
-# Requested years must contain all 12 common months because Figures 2, 3, 5,
-# 6, and 7 use annual totals.  A clear error is raised for incomplete years.
+# Every coincident month is retained. Annual figures subsequently use only
+# selected years containing all 12 coincident months.
 ANALYSIS_YEARS = None
 
 
@@ -187,17 +187,6 @@ if ANALYSIS_YEARS is not None:
         raise ValueError(
             "Requested ANALYSIS_YEARS have no common UA-HIPA/AIRS months: "
             f"{unavailable_years}"
-        )
-    incomplete_requested_years = {
-        year: int(candidate_counts_by_year.get(year, 0))
-        for year in requested_years
-        if int(candidate_counts_by_year.get(year, 0)) != 12
-    }
-    if incomplete_requested_years:
-        raise ValueError(
-            "Requested analysis years are incomplete across UA-HIPA and AIRS "
-            f"(year: common-month count): {incomplete_requested_years}. "
-            "Annual comparisons require 12 common months."
         )
     CANDIDATE_MONTHS = CANDIDATE_MONTHS[
         CANDIDATE_MONTHS.year.astype(int).isin(requested_years)
@@ -415,24 +404,51 @@ comparison_inputs = {
 }
 common_products, common_months = prepare_all_product_common_period(
     **comparison_inputs,
+    require_complete_calendar_years=False,
 )
 COMMON_YEARS = sorted({int(year) for year in common_months.year})
 if ANALYSIS_YEARS is not None:
     omitted_requested_years = sorted(set(requested_years) - set(COMMON_YEARS))
     if omitted_requested_years:
         raise ValueError(
-            "Requested years were removed by the strict six-product complete-year "
+            "Requested years were removed by the strict six-product monthly "
             f"intersection: {omitted_requested_years}. Check the per-product month "
             "inventory printed above."
         )
 
-# Use an explicit list because the retained years may be non-contiguous.
-COMMON_PERIOD_TAG = "years_" + "_".join(str(year) for year in COMMON_YEARS)
-COMMON_YEAR_LABEL = ", ".join(str(year) for year in COMMON_YEARS)
+# Separate the exact monthly comparison period from annual-capable years.
+common_month_counts = pd.Series(common_months.year).value_counts().sort_index()
+COMPLETE_COMMON_YEARS = sorted(
+    int(year) for year, count in common_month_counts.items() if int(count) == 12
+)
+if not COMPLETE_COMMON_YEARS:
+    raise ValueError(
+        "No selected year contains 12 coincident months across all six products. "
+        "Monthly and seasonal comparisons are possible, but Figures 2, 3, 5, 6, "
+        "and 7 require at least one complete year."
+    )
+annual_common_months = common_months[
+    common_months.year.astype(int).isin(COMPLETE_COMMON_YEARS)
+]
+annual_products = {
+    name: field.sel(time=annual_common_months)
+    for name, field in common_products.items()
+}
+
+# Explicit month counts avoid implying that non-contiguous years form one range.
+COMMON_PERIOD_TAG = "common_" + "_".join(
+    f"{int(year)}_{int(count):02d}m" for year, count in common_month_counts.items()
+)
+ANNUAL_PERIOD_TAG = "annual_years_" + "_".join(
+    str(year) for year in COMPLETE_COMMON_YEARS
+)
+COMMON_YEAR_LABEL = ", ".join(str(year) for year in COMPLETE_COMMON_YEARS)
 print("\nExact months used by every product:")
 print([timestamp.strftime("%Y-%m") for timestamp in common_months])
-print("Complete calendar years retained:", COMMON_YEARS)
+print("Coincident month counts by year:", common_month_counts.to_dict())
+print("Complete years used by annual figures:", COMPLETE_COMMON_YEARS)
 print("Output period tag:", COMMON_PERIOD_TAG)
+print("Annual-output tag:", ANNUAL_PERIOD_TAG)
 
 
 #%%
@@ -516,7 +532,7 @@ basin_metrics_common.to_csv(
 # Mean-annual basin table shared by manuscript-analogous Figures 2, 6, and 7.
 basin_mean_annual_common = basin_mean_annual_table(basin_monthly_common)
 basin_mean_annual_common.to_csv(
-    TABLE_DIR / f"imbie_basin_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    TABLE_DIR / f"imbie_basin_mean_annual_all_products_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.csv",
     index=False,
 )
 
@@ -532,7 +548,7 @@ figure2_basin_monthly = cosine_weighted_regional_series(
 )
 figure2_basin_mean_annual = basin_mean_annual_table(figure2_basin_monthly)
 figure2_basin_mean_annual.to_csv(
-    TABLE_DIR / f"Figure_2_basin_mean_annual_with_V08_families_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    TABLE_DIR / f"Figure_2_basin_mean_annual_with_V08_families_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.csv",
     index=False,
 )
 
@@ -578,14 +594,14 @@ print("Saved:", monthly_plot_path)
 # =============================================================================
 
 figure2_path = PLOT_DIR / (
-    f"Figure_2_basin_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+    f"Figure_2_basin_mean_annual_all_products_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.png"
 )
 figure2_fields = [
-    (r"P$_{MB}$", common_products[r"$P_{\mathrm{MB}}$"]),
-    ("ERA5", common_products["ERA5"]),
-    ("GPCP V3.3", common_products["GPCP V3.3"]),
-    ("UA-HIPA q75", common_products["UA-HIPA q75"]),
-    ("AIRS", common_products["AIRS"]),
+    (r"P$_{MB}$", annual_products[r"$P_{\mathrm{MB}}$"]),
+    ("ERA5", annual_products["ERA5"]),
+    ("GPCP V3.3", annual_products["GPCP V3.3"]),
+    ("UA-HIPA q75", annual_products["UA-HIPA q75"]),
+    ("AIRS", annual_products["AIRS"]),
 ]
 # Preserve the R1 sensor-family order and avoid appending "V08" when it is
 # already part of the dictionary key.
@@ -599,9 +615,12 @@ for requested_family in ("ATMS", "MHS", "DMSP SSMIS", "AMSR2"):
     family_key = matching_keys[0]
     family_label = family_key if "V08" in family_key else f"{family_key} V08"
     figure2_fields.append(
-        (family_label, gpm_v8_family_monthly_dict[family_key].sel(time=common_months))
+        (
+            family_label,
+            gpm_v8_family_monthly_dict[family_key].sel(time=annual_common_months),
+        )
     )
-figure2_fields.append(("GPM PMW V08", common_products["GPM PMW V08"]))
+figure2_fields.append(("GPM PMW V08", annual_products["GPM PMW V08"]))
 
 figure2_packs = [
     build_basin_mean_plot_product(
@@ -609,8 +628,8 @@ figure2_packs = [
         basin_mask_01deg.where(basin_mask_01deg.isin(AIS_BASINS)),
         AIS_BASINS,
         label,
-        year_start=common_months.min().year,
-        year_end=common_months.max().year,
+        year_start=min(COMPLETE_COMMON_YEARS),
+        year_end=max(COMPLETE_COMMON_YEARS),
     )
     for label, field in figure2_fields
 ]
@@ -645,7 +664,7 @@ print("Saved:", figure2_path)
 # =============================================================================
 
 figure3_path = PLOT_DIR / (
-    f"Figure_3_regional_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+    f"Figure_3_regional_mean_annual_all_products_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.png"
 )
 regional_annual_r1 = compute_annual_totals_from_regional_series(
     regional_monthly_common.rename(columns={"precipitation_mm_month": "precipitation"})
@@ -673,11 +692,11 @@ figure3, figure3_axis = plot_regional_mean_annual_bars(
 )
 figure3.savefig(figure3_path, dpi=150, bbox_inches="tight")
 regional_annual_values.to_csv(
-    TABLE_DIR / f"regional_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    TABLE_DIR / f"regional_annual_all_products_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.csv",
     index=False,
 )
 regional_annual_climatology.to_csv(
-    TABLE_DIR / f"regional_mean_annual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv",
+    TABLE_DIR / f"regional_mean_annual_all_products_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.csv",
     index=False,
 )
 print("Saved:", figure3_path)
@@ -729,13 +748,16 @@ print("Saved:", figure4_path)
 # SECTION 20. FIGURE 5 PLACEHOLDER: REGIONAL INTERANNUAL VARIABILITY
 # =============================================================================
 
-figure5_status = "PLACEHOLDER_" if len(COMMON_YEARS) < 2 else ""
+figure5_status = "PLACEHOLDER_" if len(COMPLETE_COMMON_YEARS) < 2 else ""
 figure5_path = PLOT_DIR / (
-    f"Figure_5_{figure5_status}interannual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+    f"Figure_5_{figure5_status}interannual_all_products_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.png"
 )
 regional_annual_for_figure5 = compute_annual_totals_from_regional_series(
     regional_monthly_for_r1
 )
+regional_annual_for_figure5 = regional_annual_for_figure5[
+    regional_annual_for_figure5["year"].isin(COMPLETE_COMMON_YEARS)
+].copy()
 figure5, figure5_axes = plot_interannual_variability(
     regional_annual_for_figure5,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
@@ -758,7 +780,7 @@ for axis, region in zip(figure5_axes, ("Antarctica", "West Antarctica", "East An
     axis.fill_between(years, pmb.loc[years, "precipitation"] - unc.loc[years, "pmb_uncertainty"],
                       pmb.loc[years, "precipitation"] + unc.loc[years, "pmb_uncertainty"],
                       color="0.8", alpha=0.6, linewidth=0, zorder=1)
-    if len(COMMON_YEARS) < 2:
+    if len(COMPLETE_COMMON_YEARS) < 2:
         axis.text(
             0.5, 0.08,
             "PLACEHOLDER: interannual variability requires ≥2 complete years",
@@ -774,7 +796,7 @@ print("Saved:", figure5_path)
 # =============================================================================
 
 figure6_path = PLOT_DIR / (
-    f"Figure_6_basin_scatter_against_PMB_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+    f"Figure_6_basin_scatter_against_PMB_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.png"
 )
 basin_mean_annual_r1 = basin_mean_annual_common.rename(
     columns={"basin_id": "basin"}
@@ -806,7 +828,7 @@ print("Saved:", figure6_path)
 # =============================================================================
 
 figure7_path = PLOT_DIR / (
-    f"Figure_7_basin_product_spread_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+    f"Figure_7_basin_product_spread_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.png"
 )
 figure7, figure7_axes, figure7_spreads = plot_basin_spread_points_by_region(
     df=basin_mean_annual_r1,
@@ -844,7 +866,8 @@ print("Saved:", figure7_path)
 # =============================================================================
 
 print("\nComparison completed.")
-print("Common period:", COMMON_PERIOD_TAG)
+print("Coincident monthly/seasonal period:", COMMON_PERIOD_TAG)
+print("Complete years used for annual figures:", COMPLETE_COMMON_YEARS)
 print("Products:", list(common_products))
 print("Plots:", PLOT_DIR)
 print("Tables:", TABLE_DIR)
