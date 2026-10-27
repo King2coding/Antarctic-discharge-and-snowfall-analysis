@@ -110,6 +110,14 @@ for directory in [PLOT_DIR, TABLE_DIR, QC_DIR]:
 
 RUN_DATE = date.today().strftime("%Y%m%d")
 
+# Select the calendar year(s) to analyze.
+#   None         -> use every complete year common to all six products
+#   [2018]       -> analyze 2018 only
+#   [2015, 2018] -> analyze those two years only (non-contiguous is allowed)
+# Requested years must contain all 12 common months because Figures 2, 3, 5,
+# 6, and 7 use annual totals.  A clear error is raised for incomplete years.
+ANALYSIS_YEARS = None
+
 
 #%%
 # =============================================================================
@@ -161,14 +169,48 @@ airs_available_months = pd.DatetimeIndex(
 CANDIDATE_MONTHS = uahipa_available_months.intersection(airs_available_months)
 if len(CANDIDATE_MONTHS) == 0:
     raise RuntimeError("UA-HIPA and AIRS have no common monthly timestamps")
+
+candidate_counts_by_year = (
+    pd.Series(CANDIDATE_MONTHS.year, dtype="int64").value_counts().sort_index()
+)
+print("UA-HIPA/AIRS common-month counts by year:")
+print(candidate_counts_by_year.to_string())
+
+if ANALYSIS_YEARS is not None:
+    requested_years = sorted({int(year) for year in ANALYSIS_YEARS})
+    if not requested_years:
+        raise ValueError("ANALYSIS_YEARS cannot be an empty list")
+    unavailable_years = [
+        year for year in requested_years if year not in candidate_counts_by_year.index
+    ]
+    if unavailable_years:
+        raise ValueError(
+            "Requested ANALYSIS_YEARS have no common UA-HIPA/AIRS months: "
+            f"{unavailable_years}"
+        )
+    incomplete_requested_years = {
+        year: int(candidate_counts_by_year.get(year, 0))
+        for year in requested_years
+        if int(candidate_counts_by_year.get(year, 0)) != 12
+    }
+    if incomplete_requested_years:
+        raise ValueError(
+            "Requested analysis years are incomplete across UA-HIPA and AIRS "
+            f"(year: common-month count): {incomplete_requested_years}. "
+            "Annual comparisons require 12 common months."
+        )
+    CANDIDATE_MONTHS = CANDIDATE_MONTHS[
+        CANDIDATE_MONTHS.year.astype(int).isin(requested_years)
+    ]
+
 CANDIDATE_START = CANDIDATE_MONTHS.min()
 CANDIDATE_END = CANDIDATE_MONTHS.max()
 
 print("UA-HIPA file:", UAHIPA_MONTHLY_FILE)
 print("AIRS file:    ", AIRS_MONTHLY_FILE)
 print(
-    "Initial candidate period:", CANDIDATE_START.strftime("%Y-%m"), "to",
-    CANDIDATE_END.strftime("%Y-%m"), f"({len(CANDIDATE_MONTHS)} months)"
+    "Selected candidate months:",
+    [timestamp.strftime("%Y-%m") for timestamp in CANDIDATE_MONTHS],
 )
 
 
@@ -357,17 +399,40 @@ gpm_v8_inventory_df.to_csv(
 # SECTION 12. STRICT SIX-PRODUCT TEMPORAL COINCIDENCE
 # =============================================================================
 
+comparison_inputs = {
+    "pmb": pmb_mon_01,
+    "era5": era5_mnth_01,
+    "gpcp_v33": gpcp_mon_01,
+    "gpm_pmw_v08": gpm_pmw_v08_mon_01,
+    "uahipa_q75": uahipa_q75_mon_01,
+    "airs": airs_mon_01,
+}
+# Apply the exact candidate-month selection before the strict six-product
+# intersection. This supports non-contiguous selections such as [2015, 2018].
+comparison_inputs = {
+    name: field.where(field.time.isin(CANDIDATE_MONTHS), drop=True)
+    for name, field in comparison_inputs.items()
+}
 common_products, common_months = prepare_all_product_common_period(
-    pmb=pmb_mon_01,
-    era5=era5_mnth_01,
-    gpcp_v33=gpcp_mon_01,
-    gpm_pmw_v08=gpm_pmw_v08_mon_01,
-    uahipa_q75=uahipa_q75_mon_01,
-    airs=airs_mon_01,
+    **comparison_inputs,
 )
-COMMON_PERIOD_TAG = f"{common_months.min():%Y%m}_{common_months.max():%Y%m}"
+COMMON_YEARS = sorted({int(year) for year in common_months.year})
+if ANALYSIS_YEARS is not None:
+    omitted_requested_years = sorted(set(requested_years) - set(COMMON_YEARS))
+    if omitted_requested_years:
+        raise ValueError(
+            "Requested years were removed by the strict six-product complete-year "
+            f"intersection: {omitted_requested_years}. Check the per-product month "
+            "inventory printed above."
+        )
+
+# Use an explicit list because the retained years may be non-contiguous.
+COMMON_PERIOD_TAG = "years_" + "_".join(str(year) for year in COMMON_YEARS)
+COMMON_YEAR_LABEL = ", ".join(str(year) for year in COMMON_YEARS)
 print("\nExact months used by every product:")
 print([timestamp.strftime("%Y-%m") for timestamp in common_months])
+print("Complete calendar years retained:", COMMON_YEARS)
+print("Output period tag:", COMMON_PERIOD_TAG)
 
 
 #%%
@@ -603,7 +668,7 @@ figure3, figure3_axis = plot_regional_mean_annual_bars(
     product_colors=product_styles_corr,
     figsize=(10, 6),
     ylabel="[mm/year]",
-    title=f"{common_months.min().year}–{common_months.max().year} mean annual precipitation",
+    title=f"{COMMON_YEAR_LABEL} mean annual precipitation",
     annotate=True,
 )
 figure3.savefig(figure3_path, dpi=150, bbox_inches="tight")
@@ -664,8 +729,9 @@ print("Saved:", figure4_path)
 # SECTION 20. FIGURE 5 PLACEHOLDER: REGIONAL INTERANNUAL VARIABILITY
 # =============================================================================
 
+figure5_status = "PLACEHOLDER_" if len(COMMON_YEARS) < 2 else ""
 figure5_path = PLOT_DIR / (
-    f"Figure_5_PLACEHOLDER_interannual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+    f"Figure_5_{figure5_status}interannual_all_products_{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
 )
 regional_annual_for_figure5 = compute_annual_totals_from_regional_series(
     regional_monthly_for_r1
@@ -692,8 +758,12 @@ for axis, region in zip(figure5_axes, ("Antarctica", "West Antarctica", "East An
     axis.fill_between(years, pmb.loc[years, "precipitation"] - unc.loc[years, "pmb_uncertainty"],
                       pmb.loc[years, "precipitation"] + unc.loc[years, "pmb_uncertainty"],
                       color="0.8", alpha=0.6, linewidth=0, zorder=1)
-    axis.text(0.5, 0.08, "PLACEHOLDER: interannual variability requires ≥2 complete years",
-              transform=axis.transAxes, ha="center", fontsize=9)
+    if len(COMMON_YEARS) < 2:
+        axis.text(
+            0.5, 0.08,
+            "PLACEHOLDER: interannual variability requires ≥2 complete years",
+            transform=axis.transAxes, ha="center", fontsize=9,
+        )
 figure5.savefig(figure5_path, dpi=150, bbox_inches="tight")
 print("Saved:", figure5_path)
 
