@@ -42,7 +42,7 @@ OUTPUT_ROOT = Path(
 )
 
 # None discovers all available years. Example test setting: YEARS = [2018]
-YEARS = [2018]
+YEARS = None  # Example test setting: [2018]
 
 # Parallel execution is intentionally not hidden inside this driver. Each file
 # is streamed sequentially so memory use and progress are easy to follow.
