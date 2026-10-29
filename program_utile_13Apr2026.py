@@ -99,6 +99,31 @@ product_styles_corr = {
     # the orange used for GPCP V3.3.
     "AIRS": {"color": "#d62728", "marker": "o", "lw": 2.5},
 }
+
+# Monochrome styles used only for multi-product line plots.  Keeping this
+# separate from ``product_styles_corr`` preserves the manuscript product
+# colors in maps, grouped bars, and scatter plots while making overlapping
+# temporal behaviour readable in grayscale and for color-vision deficiencies.
+product_line_styles_monochrome = {
+    r"$P_{\mathrm{MB}}$": {
+        "color": "0.10", "linestyle": "-", "marker": "o", "lw": 2.5,
+    },
+    "ERA5": {
+        "color": "0.10", "linestyle": "--", "marker": "s", "lw": 2.5,
+    },
+    "GPCP V3.3": {
+        "color": "0.10", "linestyle": "-.", "marker": "D", "lw": 2.5,
+    },
+    "GPM PMW V08": {
+        "color": "0.10", "linestyle": ":", "marker": "^", "lw": 2.5,
+    },
+    "UA-HIPA q75": {
+        "color": "0.10", "linestyle": (0, (5, 1)), "marker": "P", "lw": 2.5,
+    },
+    "AIRS": {
+        "color": "0.10", "linestyle": (0, (3, 1, 1, 1)), "marker": "X", "lw": 2.5,
+    },
+}
 #---------------------------------------------------------------------------------
 
 corr_targets = [
@@ -5077,9 +5102,6 @@ def plot_basin_spread_points_by_region(
             marker = st.get("marker", fallback_markers[i % len(fallback_markers)])
             ms = st.get("markersize", fallback_sizes[i % len(fallback_sizes)])
 
-            is_hollow = col in ["ERA5", "GPM PMW V08"]
-            mfc = "white" if is_hollow else color
-
             ax.plot(
                 x[mask],
                 y[mask],
@@ -5087,7 +5109,9 @@ def plot_basin_spread_points_by_region(
                 marker=marker,
                 markersize=ms,
                 color=color,
-                markerfacecolor=mfc,
+                # Open markers keep coincident/overlapping product estimates
+                # visible instead of allowing the top point to hide the rest.
+                markerfacecolor="none",
                 markeredgecolor=color,
                 markeredgewidth=1.6,
                 label=col,
