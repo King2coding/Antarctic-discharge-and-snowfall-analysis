@@ -116,7 +116,7 @@ RUN_DATE = date.today().strftime("%Y%m%d")
 #   [2015, 2018] -> analyze those two years only (non-contiguous is allowed)
 # Every coincident month is retained. Annual figures subsequently use only
 # selected years containing all 12 coincident months.
-ANALYSIS_YEARS = [2015, 2018, 2019]
+ANALYSIS_YEARS = None
 
 
 #%%
@@ -687,7 +687,9 @@ figure3, figure3_axis = plot_regional_mean_annual_bars(
     product_colors=product_styles_corr,
     figsize=(10, 6),
     ylabel="[mm/year]",
-    title=f"{COMMON_YEAR_LABEL} mean annual precipitation",
+    # Keep the plotting canvas title-free for slide assembly.  The complete
+    # annual years remain explicit in ``figure3_path`` via ANNUAL_PERIOD_TAG.
+    title=None,
     annotate=True,
 )
 figure3.savefig(figure3_path, dpi=150, bbox_inches="tight")
