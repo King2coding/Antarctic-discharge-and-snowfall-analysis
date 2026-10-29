@@ -459,7 +459,7 @@ def plot_figure4_seasonal(regional_monthly: pd.DataFrame,
     """
     from program_utile_13Apr2026 import (
         plot_seasonal_climatology_with_pmb_uncertainty,
-        product_line_styles_monochrome,
+        product_line_styles_distinct,
     )
 
     seasonal = regional_monthly.rename(
@@ -471,7 +471,7 @@ def plot_figure4_seasonal(regional_monthly: pd.DataFrame,
         pmb_unc_df=pmb_uncertainty_monthly,
         region_order=("Antarctica", "West Antarctica", "East Antarctica"),
         product_order=product_order,
-        product_styles=product_line_styles_monochrome,
+        product_styles=product_line_styles_distinct,
         figsize=(10, 8),
         ylabel="mm/season",
         y_nbins=4,

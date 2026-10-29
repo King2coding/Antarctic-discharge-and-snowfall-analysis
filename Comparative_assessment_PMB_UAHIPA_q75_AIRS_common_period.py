@@ -764,9 +764,9 @@ figure5, figure5_axes = plot_interannual_variability(
     regional_annual_for_figure5,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
     product_order=tuple(common_products),
-    # Use a single ink color and product-specific line/marker patterns for
-    # direct comparison of temporal behaviour and grayscale readability.
-    product_styles=product_line_styles_monochrome,
+    # Preserve established product colors and add product-specific line and
+    # marker patterns for overlapping temporal behaviour.
+    product_styles=product_line_styles_distinct,
     figsize=(10, 9),
     ylabel="mm/year",
     y_nbins=4,

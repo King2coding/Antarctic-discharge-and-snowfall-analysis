@@ -100,28 +100,27 @@ product_styles_corr = {
     "AIRS": {"color": "#d62728", "marker": "o", "lw": 2.5},
 }
 
-# Monochrome styles used only for multi-product line plots.  Keeping this
-# separate from ``product_styles_corr`` preserves the manuscript product
-# colors in maps, grouped bars, and scatter plots while making overlapping
-# temporal behaviour readable in grayscale and for color-vision deficiencies.
-product_line_styles_monochrome = {
+# Product-specific styles used only for multi-product line plots.  Each
+# product retains its established manuscript color and also receives a unique
+# line pattern and marker so overlapping temporal behaviour remains readable.
+product_line_styles_distinct = {
     r"$P_{\mathrm{MB}}$": {
-        "color": "0.10", "linestyle": "-", "marker": "o", "lw": 2.5,
+        "color": "k", "linestyle": "-", "marker": "o", "lw": 2.5,
     },
     "ERA5": {
-        "color": "0.10", "linestyle": "--", "marker": "s", "lw": 2.5,
+        "color": "blue", "linestyle": "--", "marker": "s", "lw": 2.5,
     },
     "GPCP V3.3": {
-        "color": "0.10", "linestyle": "-.", "marker": "D", "lw": 2.5,
+        "color": "orange", "linestyle": "-.", "marker": "D", "lw": 2.5,
     },
     "GPM PMW V08": {
-        "color": "0.10", "linestyle": ":", "marker": "^", "lw": 2.5,
+        "color": "green", "linestyle": ":", "marker": "^", "lw": 2.5,
     },
     "UA-HIPA q75": {
-        "color": "0.10", "linestyle": (0, (5, 1)), "marker": "P", "lw": 2.5,
+        "color": "magenta", "linestyle": (0, (5, 1)), "marker": "P", "lw": 2.5,
     },
     "AIRS": {
-        "color": "0.10", "linestyle": (0, (3, 1, 1, 1)), "marker": "X", "lw": 2.5,
+        "color": "#d62728", "linestyle": (0, (3, 1, 1, 1)), "marker": "X", "lw": 2.5,
     },
 }
 #---------------------------------------------------------------------------------
