@@ -116,7 +116,7 @@ RUN_DATE = date.today().strftime("%Y%m%d")
 #   [2015, 2018] -> analyze those two years only (non-contiguous is allowed)
 # Every coincident month is retained. Annual figures subsequently use only
 # selected years containing all 12 coincident months.
-ANALYSIS_YEARS = None
+ANALYSIS_YEARS = [2015, 2018, 2019]
 
 
 #%%
