@@ -166,7 +166,8 @@ def plot_conditional_precipitation_by_temperature(
 
     regions = conditional_means["region"].drop_duplicates().tolist()
     figure, axes = plt.subplots(
-        len(regions), 1, figsize=(10.5, 4.0 * len(regions)), sharex=True,
+        len(regions), 1, figsize=(10.5, 4.0 * len(regions)),
+        sharex=True, sharey=True,
         constrained_layout=True,
     )
     axes = np.atleast_1d(axes)
@@ -196,7 +197,7 @@ def plot_conditional_precipitation_by_temperature(
         axis.set_title(region_name)
         axis.grid(alpha=0.25)
     axes[-1].set_xlabel("ERA5 2-m air temperature [K]")
-    figure.supylabel("Conditional mean precipitation [mm day$^{-1}$]")
+    figure.supylabel("Mean precipitation [mm day$^{-1}$]")
     axes[0].legend(frameon=False, fontsize=9)
     if output_path is not None:
         output = Path(output_path)
