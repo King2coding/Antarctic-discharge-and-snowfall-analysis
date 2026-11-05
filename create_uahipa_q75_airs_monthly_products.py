@@ -12,7 +12,16 @@ list such as ``[2018]`` for a targeted test run.
 # =============================================================================
 
 from datetime import date
+import importlib
+import inspect
 from pathlib import Path
+
+import uahipa_airs_monthly_utils as monthly_utils
+
+# This script is normally run cell-by-cell in a persistent kernel. Reload the
+# utility module so a previously imported q75-only function cannot remain
+# active after q70 support is added or edited.
+importlib.reload(monthly_utils)
 
 from uahipa_airs_monthly_utils import (
     build_all_airs_months,
@@ -21,6 +30,14 @@ from uahipa_airs_monthly_utils import (
     discover_uahipa_files,
     write_monthly_dataset,
 )
+
+if "precipitation_statistic" not in inspect.signature(
+    build_all_uahipa_months
+).parameters:
+    raise RuntimeError(
+        "The kernel still has an outdated UA-HIPA monthly utility. "
+        "Restart the kernel and rerun Section 1."
+    )
 
 
 #%%
