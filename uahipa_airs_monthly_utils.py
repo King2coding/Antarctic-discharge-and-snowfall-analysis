@@ -218,10 +218,20 @@ def _streaming_mean(
 def read_uahipa_q75(
     path: str | os.PathLike,
     group: str = "SH",
-    variable: str = "retrieved_precip_q75",
+    variable: str | None = None,
+    precipitation_statistic: str = "q75",
     maximum_valid_rate_mm_h: float | None = None,
 ) -> xr.DataArray:
-    """Read and decode one gridded UA-HIPA q75 orbital rate field."""
+    """Read one UA-HIPA orbital rate field; q75 remains the default."""
+
+    statistic = str(precipitation_statistic).lower().strip()
+    supported = {"mean", "q70", "q75", "q80"}
+    if statistic not in supported:
+        raise ValueError(
+            f"Unsupported UA-HIPA statistic {statistic!r}; choose {sorted(supported)}"
+        )
+    if variable is None:
+        variable = f"retrieved_precip_{statistic}"
 
     with xr.open_dataset(path, group=group, cache=False) as dataset:
         if variable not in dataset:
@@ -234,9 +244,10 @@ def read_uahipa_q75(
     field = _clean_field(field, maximum_valid=maximum_valid_rate_mm_h)
     field.attrs.update(
         {
-            "long_name": "UA-HIPA q75 orbital surface precipitation rate",
+            "long_name": f"UA-HIPA {statistic} orbital surface precipitation rate",
             "units": "mm h-1",
             "source_variable": variable,
+            "precipitation_statistic": statistic,
         }
     )
     return field
@@ -244,9 +255,10 @@ def read_uahipa_q75(
 
 def build_uahipa_platform_month(
     platform_inventory: pd.DataFrame,
+    precipitation_statistic: str = "q75",
     maximum_valid_rate_mm_h: float | None = None,
 ) -> xr.Dataset:
-    """Average orbital q75 fields for one platform-month."""
+    """Average one orbital UA-HIPA statistic for one platform-month."""
 
     if platform_inventory.empty:
         raise ValueError("platform_inventory is empty")
@@ -257,6 +269,7 @@ def build_uahipa_platform_month(
 
     reader = lambda path: read_uahipa_q75(  # noqa: E731
         path,
+        precipitation_statistic=precipitation_statistic,
         maximum_valid_rate_mm_h=maximum_valid_rate_mm_h,
     )
     mean_rate, valid_orbit_count, used, failed = _streaming_mean(
@@ -265,6 +278,7 @@ def build_uahipa_platform_month(
     month_start = pd.Timestamp(months[0])
     days_in_month = month_start.days_in_month
     platform = str(platforms[0])
+    statistic = str(precipitation_statistic).lower().strip()
 
     mean_rate = mean_rate.expand_dims(time=[month_start])
     valid_orbit_count = valid_orbit_count.expand_dims(time=[month_start])
@@ -272,8 +286,8 @@ def build_uahipa_platform_month(
 
     dataset = xr.Dataset(
         {
-            "uahipa_q75_rate_mm_h": mean_rate,
-            "uahipa_q75_mm_month": accumulation.astype("float32"),
+            f"uahipa_{statistic}_rate_mm_h": mean_rate,
+            f"uahipa_{statistic}_mm_month": accumulation.astype("float32"),
             "valid_orbit_count": valid_orbit_count,
         }
     )
@@ -285,6 +299,7 @@ def build_uahipa_platform_month(
             "n_input_files": int(len(platform_inventory)),
             "n_orbits_used": int(used),
             "n_files_failed": int(failed),
+            "precipitation_statistic": statistic,
             "rate_to_month_conversion": "monthly mean sampled rate * 24 * calendar days",
         }
     )
@@ -293,10 +308,11 @@ def build_uahipa_platform_month(
 
 def build_uahipa_month(
     month_inventory: pd.DataFrame,
+    precipitation_statistic: str = "q75",
     minimum_valid_platforms: int = 1,
     maximum_valid_rate_mm_h: float | None = None,
 ) -> xr.Dataset:
-    """Build one equal-platform-weight UA-HIPA q75 monthly estimate."""
+    """Build one equal-platform-weight monthly UA-HIPA statistic."""
 
     if month_inventory.empty:
         raise ValueError("month_inventory is empty")
@@ -307,6 +323,7 @@ def build_uahipa_month(
         platform_datasets.append(
             build_uahipa_platform_month(
                 group,
+                precipitation_statistic=precipitation_statistic,
                 maximum_valid_rate_mm_h=maximum_valid_rate_mm_h,
             )
         )
@@ -319,8 +336,9 @@ def build_uahipa_month(
         coords="minimal",
         combine_attrs="drop_conflicts",
     )
-    rates = combined["uahipa_q75_rate_mm_h"]
-    totals = combined["uahipa_q75_mm_month"]
+    statistic = str(precipitation_statistic).lower().strip()
+    rates = combined[f"uahipa_{statistic}_rate_mm_h"]
+    totals = combined[f"uahipa_{statistic}_mm_month"]
     valid_platform_count = rates.notnull().sum("platform").astype("int16")
 
     equal_platform_rate = rates.mean("platform", skipna=True)
@@ -329,22 +347,23 @@ def build_uahipa_month(
 
     output = xr.Dataset(
         {
-            "uahipa_q75_rate_mm_h": equal_platform_rate.where(keep).astype("float32"),
-            "uahipa_q75_mm_month": equal_platform_total.where(keep).astype("float32"),
+            f"uahipa_{statistic}_rate_mm_h": equal_platform_rate.where(keep).astype("float32"),
+            f"uahipa_{statistic}_mm_month": equal_platform_total.where(keep).astype("float32"),
             "valid_platform_count": valid_platform_count,
-            "platform_q75_rate_mm_h": rates.astype("float32"),
+            f"platform_{statistic}_rate_mm_h": rates.astype("float32"),
             "platform_valid_orbit_count": combined["valid_orbit_count"].astype("int32"),
         }
     )
     output.attrs.update(
         {
-            "title": "Monthly UA-HIPA q75 precipitation with equal platform weighting",
+            "title": f"Monthly UA-HIPA {statistic} precipitation with equal platform weighting",
             "aggregation": (
-                "pixelwise mean of orbital q75 rates within platform-month, followed by "
+                f"pixelwise mean of orbital {statistic} rates within platform-month, followed by "
                 "equal-weight mean across available platforms"
             ),
             "minimum_valid_platforms_per_pixel": int(minimum_valid_platforms),
             "platforms": ",".join(str(value) for value in combined.platform.values),
+            "precipitation_statistic": statistic,
             "important_sampling_note": (
                 "Multiplication by full calendar hours treats sampled orbital rates as "
                 "representative of the month; orbit and platform counts are retained for QC."
@@ -356,6 +375,7 @@ def build_uahipa_month(
 
 def build_all_uahipa_months(
     inventory: pd.DataFrame,
+    precipitation_statistic: str = "q75",
     minimum_valid_platforms: int = 1,
     maximum_valid_rate_mm_h: float | None = None,
 ) -> xr.Dataset:
@@ -363,10 +383,14 @@ def build_all_uahipa_months(
 
     monthly = []
     for month_start, group in inventory.groupby("month_start", sort=True):
-        print(f"\nBuilding UA-HIPA q75 month {month_start:%Y-%m}")
+        print(
+            f"\nBuilding UA-HIPA {precipitation_statistic} month "
+            f"{month_start:%Y-%m}"
+        )
         monthly.append(
             build_uahipa_month(
                 group,
+                precipitation_statistic=precipitation_statistic,
                 minimum_valid_platforms=minimum_valid_platforms,
                 maximum_valid_rate_mm_h=maximum_valid_rate_mm_h,
             )

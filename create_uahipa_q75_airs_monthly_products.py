@@ -1,5 +1,5 @@
 #%%
-"""Interactive driver for dynamic UA-HIPA q75 and AIRS monthly products.
+"""Interactive driver for dynamic UA-HIPA and AIRS monthly products.
 
 Run numbered cells manually. The default configuration discovers every year
 currently present; no analysis-year range is hard-coded. Set ``YEARS`` to a
@@ -41,8 +41,9 @@ OUTPUT_ROOT = Path(
     "data/uahipa_airs_monthly"
 )
 
-# None discovers all available years. Example test setting: YEARS = [2018]
-YEARS = None  # Example test setting: [2018]
+# Current q70 temperature-sensitivity experiment uses the same years as the
+# q75 comparison. Set to None to discover every available year.
+YEARS = [2015, 2018, 2019]
 
 # Parallel execution is intentionally not hidden inside this driver. Each file
 # is streamed sequentially so memory use and progress are easy to follow.
@@ -50,8 +51,13 @@ MINIMUM_VALID_UAHIPA_PLATFORMS = 1
 MAXIMUM_VALID_UAHIPA_RATE_MM_H = None
 MINIMUM_AIRS_DAILY_COVERAGE_FRACTION = 0.90
 
+# Process each statistic independently; never average quantiles together.
+# For the current temperature-only sensitivity test, q70 is the only new
+# product required. q75 remains supported by changing this to ["q75"].
+UAHIPA_STATISTICS = ["q70"]
+
 RUN_UAHIPA = True
-RUN_AIRS = True
+RUN_AIRS = False
 
 RUN_DATE = date.today().strftime("%Y%m%d")
 
@@ -77,22 +83,27 @@ airs_inventory.to_csv(OUTPUT_ROOT / f"airs_daily_inventory_{RUN_DATE}.csv", inde
 
 #%%
 # =============================================================================
-# SECTION 4. BUILD EQUAL-PLATFORM-WEIGHT UA-HIPA q75 MONTHLY PRODUCT
+# SECTION 4. BUILD EQUAL-PLATFORM-WEIGHT UA-HIPA MONTHLY PRODUCT(S)
 # =============================================================================
 
 if RUN_UAHIPA:
-    uahipa_monthly = build_all_uahipa_months(
-        uahipa_inventory,
-        minimum_valid_platforms=MINIMUM_VALID_UAHIPA_PLATFORMS,
-        maximum_valid_rate_mm_h=MAXIMUM_VALID_UAHIPA_RATE_MM_H,
-    )
-    uahipa_start = str(uahipa_monthly.time.dt.year.min().item())
-    uahipa_end = str(uahipa_monthly.time.dt.year.max().item())
-    uahipa_output = OUTPUT_ROOT / (
-        f"uahipa_q75_equal_platform_monthly_{uahipa_start}_{uahipa_end}_{RUN_DATE}.nc"
-    )
-    write_monthly_dataset(uahipa_monthly, uahipa_output)
-    print("Saved:", uahipa_output)
+    uahipa_monthly_by_statistic = {}
+    for statistic in UAHIPA_STATISTICS:
+        uahipa_monthly = build_all_uahipa_months(
+            uahipa_inventory,
+            precipitation_statistic=statistic,
+            minimum_valid_platforms=MINIMUM_VALID_UAHIPA_PLATFORMS,
+            maximum_valid_rate_mm_h=MAXIMUM_VALID_UAHIPA_RATE_MM_H,
+        )
+        uahipa_monthly_by_statistic[statistic] = uahipa_monthly
+        uahipa_start = str(uahipa_monthly.time.dt.year.min().item())
+        uahipa_end = str(uahipa_monthly.time.dt.year.max().item())
+        uahipa_output = OUTPUT_ROOT / (
+            f"uahipa_{statistic}_equal_platform_monthly_"
+            f"{uahipa_start}_{uahipa_end}_{RUN_DATE}.nc"
+        )
+        write_monthly_dataset(uahipa_monthly, uahipa_output)
+        print("Saved:", uahipa_output)
 
 
 #%%
@@ -119,14 +130,16 @@ if RUN_AIRS:
 # =============================================================================
 
 if RUN_UAHIPA:
-    print(uahipa_monthly)
-    print("\nUA-HIPA platforms:", uahipa_monthly.platform.values.tolist())
-    print("UA-HIPA valid-platform count by month:")
-    print(
-        uahipa_monthly["valid_platform_count"]
-        .max(("y", "x"))
-        .to_series()
-    )
+    for statistic, uahipa_monthly in uahipa_monthly_by_statistic.items():
+        print(f"\nUA-HIPA {statistic}:")
+        print(uahipa_monthly)
+        print("UA-HIPA platforms:", uahipa_monthly.platform.values.tolist())
+        print("UA-HIPA valid-platform count by month:")
+        print(
+            uahipa_monthly["valid_platform_count"]
+            .max(("y", "x"))
+            .to_series()
+        )
 
 if RUN_AIRS:
     print(airs_monthly)

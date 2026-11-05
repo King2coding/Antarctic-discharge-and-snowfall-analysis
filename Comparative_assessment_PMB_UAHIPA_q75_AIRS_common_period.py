@@ -535,21 +535,53 @@ era5_t2m_monthly_01 = remap_geographic_monthly_to_common_grid(
     resampling=Resampling.nearest,
 ).sel(time=common_months)
 
+# q70 is included only in this temperature-sensitivity diagnostic. It does not
+# enter the six-product common-period selection or Figures 2-7.
+UAHIPA_Q70_MONTHLY_FILE = latest_matching_file(
+    MONTHLY_NEW_PRODUCT_ROOT, "uahipa_q70_equal_platform_monthly_*.nc"
+)
+with xr.open_dataset(UAHIPA_Q70_MONTHLY_FILE) as dataset:
+    uahipa_q70_native = dataset["uahipa_q70_mm_month"].load()
+uahipa_q70_native = uahipa_q70_native.rename({"y": "lat", "x": "lon"})
+uahipa_q70_mon_01 = remap_geographic_monthly_to_common_grid(
+    uahipa_q70_native,
+    target_template_01deg,
+    basin_mask_01deg,
+)
+q70_months = pd.DatetimeIndex(
+    pd.to_datetime(uahipa_q70_mon_01.time.values)
+).to_period("M").to_timestamp()
+missing_q70_months = common_months.difference(q70_months)
+if len(missing_q70_months):
+    raise ValueError(
+        "UA-HIPA q70 is missing common temperature-analysis months: "
+        f"{[value.strftime('%Y-%m') for value in missing_q70_months]}"
+    )
+uahipa_q70_mon_01 = uahipa_q70_mon_01.sel(time=common_months)
+print("UA-HIPA q70 temperature-only file:", UAHIPA_Q70_MONTHLY_FILE)
+
 # PMB is intentionally excluded here.  Its native support is one value per
 # drainage basin; painting that value over every 0.1-degree grid cell would
 # multiply non-independent observations and distort temperature-bin means.
 temperature_product_names = [
-    "ERA5", "GPCP V3.3", "GPM PMW V08", "UA-HIPA q75", "AIRS",
+    "ERA5", "GPCP V3.3", "GPM PMW V08", "UA-HIPA q70",
+    "UA-HIPA q75", "AIRS",
 ]
 days_in_month = xr.DataArray(
     common_months.days_in_month.astype(float),
     dims="time",
     coords={"time": common_months},
 )
-temperature_precip_mm_day = {
-    product_name: common_products[product_name] / days_in_month
-    for product_name in temperature_product_names
-}
+temperature_precip_mm_day = {}
+for product_name in temperature_product_names:
+    if product_name == "UA-HIPA q70":
+        temperature_precip_mm_day[product_name] = (
+            uahipa_q70_mon_01 / days_in_month
+        )
+    else:
+        temperature_precip_mm_day[product_name] = (
+            common_products[product_name] / days_in_month
+        )
 
 temperature_min = float(era5_t2m_monthly_01.min(skipna=True))
 temperature_max = float(era5_t2m_monthly_01.max(skipna=True))

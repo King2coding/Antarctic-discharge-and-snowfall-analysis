@@ -94,6 +94,7 @@ product_styles_corr = {
     "GPM PMW V08 (corr.)": {"color": "green", "ls": "--", "lw": 3.5},
 
     "UA-HIPA": {"color": "magenta", "lw": 2.5},
+    "UA-HIPA q70": {"color": "darkviolet", "marker": "v", "lw": 2.5},
     "UA-HIPA q75": {"color": "magenta", "marker": "o", "lw": 2.5},
     # Fixed project-wide AIRS identity: explicit Tableau red, distinct from
     # the orange used for GPCP V3.3.
@@ -115,6 +116,10 @@ product_line_styles_distinct = {
     },
     "GPM PMW V08": {
         "color": "green", "linestyle": ":", "marker": "^", "lw": 2.5,
+    },
+    "UA-HIPA q70": {
+        "color": "darkviolet", "linestyle": (0, (7, 2)),
+        "marker": "v", "lw": 2.5,
     },
     "UA-HIPA q75": {
         "color": "magenta", "linestyle": (0, (5, 1)), "marker": "P", "lw": 2.5,
