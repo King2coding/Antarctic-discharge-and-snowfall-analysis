@@ -37,6 +37,169 @@ SEASON_MONTHS = {"DJF": (12, 1, 2), "MAM": (3, 4, 5),
 
 #%%
 # =============================================================================
+# SECTION 1A. MONTHLY PRECIPITATION AS A FUNCTION OF TEMPERATURE
+# =============================================================================
+
+def conditional_mean_precip_by_temperature_bins(
+    temperature: xr.DataArray,
+    precipitation_products: Mapping[str, xr.DataArray],
+    region_masks: Mapping[str, xr.DataArray],
+    temperature_bin_edges: np.ndarray,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Apply the established UA-HIPA conditional-mean temperature method.
+
+    The input products must already be monthly and on the same geographic
+    grid.  Samples are grid-cell months.  A single joint finite mask is used
+    within each region so every product is evaluated at exactly the same
+    monthly grid cells.  Precipitation is expected in mm day-1.
+
+    This retains the earlier analysis technique: flatten the gridded samples,
+    assign temperature intervals with ``pandas.cut``, and calculate the
+    arithmetic mean precipitation in each temperature bin.  Counts are
+    returned separately so sparsely sampled bins remain visible during QC.
+    """
+
+    edges = np.asarray(temperature_bin_edges, dtype=float)
+    if edges.ndim != 1 or edges.size < 2 or np.any(np.diff(edges) <= 0):
+        raise ValueError("temperature_bin_edges must be strictly increasing")
+    if not np.allclose(np.diff(edges), np.diff(edges)[0]):
+        raise ValueError("temperature_bin_edges must have a fixed width")
+
+    product_names = list(precipitation_products)
+    aligned = xr.align(
+        temperature,
+        *[precipitation_products[name] for name in product_names],
+        join="exact",
+    )
+    temperature_aligned = aligned[0]
+    products_aligned = dict(zip(product_names, aligned[1:]))
+
+    bin_midpoints = (edges[:-1] + edges[1:]) / 2.0
+    result_rows = []
+    count_rows = []
+    for region_name, region_mask in region_masks.items():
+        joint_valid = np.isfinite(temperature_aligned) & region_mask.astype(bool)
+        for field in products_aligned.values():
+            joint_valid = joint_valid & np.isfinite(field)
+
+        temperature_flat = temperature_aligned.where(joint_valid).values.ravel()
+        finite = np.isfinite(temperature_flat)
+        temperature_flat = temperature_flat[finite]
+        bin_codes = pd.cut(
+            temperature_flat,
+            bins=edges,
+            labels=False,
+            include_lowest=True,
+            right=True,
+        )
+
+        counts = pd.Series(bin_codes).value_counts().reindex(
+            range(len(bin_midpoints)), fill_value=0
+        )
+        for bin_index, midpoint in enumerate(bin_midpoints):
+            count_rows.append(
+                {
+                    "region": region_name,
+                    "temperature_bin_midpoint_K": float(midpoint),
+                    "sample_count": int(counts.loc[bin_index]),
+                }
+            )
+
+        for product_name, field in products_aligned.items():
+            precipitation_flat = field.where(joint_valid).values.ravel()[finite]
+            frame = pd.DataFrame(
+                {
+                    "bin_index": bin_codes,
+                    "precipitation_mm_day": precipitation_flat,
+                }
+            ).dropna(subset=["bin_index"])
+            conditional_means = frame.groupby("bin_index", observed=True)[
+                "precipitation_mm_day"
+            ].mean()
+            for bin_index, midpoint in enumerate(bin_midpoints):
+                result_rows.append(
+                    {
+                        "region": region_name,
+                        "product": product_name,
+                        "temperature_bin_midpoint_K": float(midpoint),
+                        "mean_precipitation_mm_day": float(
+                            conditional_means.get(bin_index, np.nan)
+                        ),
+                    }
+                )
+
+    return pd.DataFrame(result_rows), pd.DataFrame(count_rows)
+
+
+def temperature_bin_bias_against_reference(
+    conditional_means: pd.DataFrame,
+    reference_product: str = "ERA5",
+) -> pd.DataFrame:
+    """Return product-minus-reference conditional-mean bias in mm day-1."""
+
+    index_columns = ["region", "temperature_bin_midpoint_K"]
+    wide = conditional_means.pivot(
+        index=index_columns,
+        columns="product",
+        values="mean_precipitation_mm_day",
+    )
+    if reference_product not in wide:
+        raise KeyError(f"Reference product {reference_product!r} is unavailable")
+    bias = wide.subtract(wide[reference_product], axis=0)
+    return (
+        bias.drop(columns=reference_product)
+        .stack(dropna=False)
+        .rename("bias_vs_era5_mm_day")
+        .reset_index()
+    )
+
+
+def plot_conditional_precipitation_by_temperature(
+    conditional_means: pd.DataFrame,
+    sample_counts: pd.DataFrame,
+    output_path: str | Path | None = None,
+):
+    """Plot established conditional mean precipitation-temperature curves."""
+
+    regions = conditional_means["region"].drop_duplicates().tolist()
+    figure, axes = plt.subplots(
+        1, len(regions), figsize=(5.2 * len(regions), 4.8), sharey=True,
+        constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes)
+    for axis, region_name in zip(axes, regions):
+        region_frame = conditional_means[
+            conditional_means["region"] == region_name
+        ]
+        counts = sample_counts[sample_counts["region"] == region_name]
+        populated_bins = counts.loc[counts["sample_count"] > 0,
+                                    "temperature_bin_midpoint_K"]
+        for product_name, product_frame in region_frame.groupby(
+            "product", sort=False
+        ):
+            style = PRODUCT_STYLES.get(product_name, {})
+            axis.plot(
+                product_frame["temperature_bin_midpoint_K"],
+                product_frame["mean_precipitation_mm_day"],
+                label=product_name,
+                **style,
+            )
+        if not populated_bins.empty:
+            axis.set_xlim(populated_bins.min() - 1.0, populated_bins.max() + 1.0)
+        axis.set_title(region_name)
+        axis.set_xlabel("ERA5 2-m air temperature [K]")
+        axis.grid(alpha=0.25)
+    axes[0].set_ylabel("Conditional mean precipitation [mm day$^{-1}$]")
+    axes[0].legend(frameon=False, fontsize=9)
+    if output_path is not None:
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(output, dpi=300, bbox_inches="tight")
+    return figure, axes
+
+
+#%%
+# =============================================================================
 # SECTION 2. STRICT TEMPORAL COINCIDENCE
 # =============================================================================
 

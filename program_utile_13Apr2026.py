@@ -241,34 +241,57 @@ def print_basin_grid_info(basins):
 
 # =============================================================================
 
-def build_target_latlon_template_from_basin_grid(basins):
+def build_target_latlon_template_from_basin_grid(
+    basins,
+    resolution=0.1,
+    west=-180.0,
+    east=180.0,
+    south=-90.0,
+    north=-60.0,
+):
     """
-    Build the common 0.1° lat-lon target grid from the basin raster itself.
+    Build an explicit regular WGS84 target grid for Antarctic comparisons.
 
     Important:
-    - The basin raster is native in polar stereographic.
-    - We convert/reproject just the geometry to EPSG:4326 to define the
-      comparison grid.
-    - This grid becomes the common support for all products.
+    Grid coordinates are cell centres.  The default domain has 3,600
+    longitudes and 300 latitudes south of 60°S, both at exactly 0.1°
+    spacing.  ``basins`` is retained in the signature for compatibility and
+    is subsequently reprojected to this template by
+    ``reproject_basin_ids_to_target_grid``.
+
+    This explicit construction is important: asking rasterio to reproject the
+    native polar-stereographic basin raster without specifying a destination
+    resolution lets it choose an approximately 0.19° geographic grid.
     """
-    basins_2d = basins.squeeze(drop=True)
+    del basins  # The target geometry is explicit, not inferred from reprojection.
+    resolution = float(resolution)
+    if resolution <= 0:
+        raise ValueError("resolution must be positive")
 
-    basins_2d = basins_2d.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=False)
+    nlon_float = (east - west) / resolution
+    nlat_float = (north - south) / resolution
+    nlon = int(round(nlon_float))
+    nlat = int(round(nlat_float))
+    if not np.isclose(nlon, nlon_float) or not np.isclose(nlat, nlat_float):
+        raise ValueError("Grid bounds must be exactly divisible by resolution")
 
-    # Reproject basin IDs to EPSG:4326 just to establish the target geometry
-    basin_latlon = basins_2d.rio.reproject("EPSG:4326", resampling=Resampling.nearest)
-
-    # Rename spatial dims to lat/lon for consistency
-    if "x" in basin_latlon.dims or "y" in basin_latlon.dims:
-        basin_latlon = basin_latlon.rename({"x": "lon", "y": "lat"})
-
-    # Ensure ascending lon / descending lat are handled consistently later
-    basin_latlon = basin_latlon.sortby("lon")
-    basin_latlon = basin_latlon.sortby("lat", ascending=False)
-
-    # Use one 2D slice as template
-    target_template = basin_latlon.copy()
+    lon = west + resolution / 2.0 + np.arange(nlon) * resolution
+    lat = north - resolution / 2.0 - np.arange(nlat) * resolution
+    target_template = xr.DataArray(
+        np.full((nlat, nlon), np.nan, dtype=np.float32),
+        dims=("lat", "lon"),
+        coords={"lat": lat, "lon": lon},
+        name="target_grid_template",
+    )
+    target_template = target_template.rio.set_spatial_dims(
+        x_dim="lon", y_dim="lat", inplace=False
+    )
     target_template = target_template.rio.write_crs("EPSG:4326", inplace=False)
+
+    if not np.allclose(np.abs(np.diff(lon)), resolution, atol=1e-10):
+        raise RuntimeError("Longitude spacing does not match requested resolution")
+    if not np.allclose(np.abs(np.diff(lat)), resolution, atol=1e-10):
+        raise RuntimeError("Latitude spacing does not match requested resolution")
 
     return target_template
 # =============================================================================

@@ -37,13 +37,16 @@ importlib.reload(comparison_utils)
 from program_utile_13Apr2026 import *
 from comparative_uahipa_airs_common_period_utils import (
     basin_mean_annual_table,
+    conditional_mean_precip_by_temperature_bins,
     cosine_weighted_regional_series,
     paired_product_metrics,
+    plot_conditional_precipitation_by_temperature,
     plot_figure4_seasonal,
     plot_regional_mean_annual_comparison,
     plot_regional_monthly_comparison,
     prepare_all_product_common_period,
     seasonal_climatology_with_common_month_fallback,
+    temperature_bin_bias_against_reference,
 )
 
 # Fail early rather than silently falling back to Matplotlib's blue/orange
@@ -82,6 +85,7 @@ GPCP_ROOT = Path(
 ERA5_FILE = Path(
     "/ra1/pubdat/GPCP/GPCP_Reproduce_GJ/era5_tp_198001202412_monthly.nc"
 )
+ERA5_T2M_DAILY_ROOT = Path("/ra1/pubdat/ECMWF/ERA5/daily/globe/t2m")
 BASIN_ROOT = Path(
     "/ra1/pubdat/AVHRR_CloudSat_proj/Antarctic_discharge_analysis/data/basins"
 )
@@ -105,7 +109,11 @@ ANALYSIS_ROOT = Path(
 PLOT_DIR = ANALYSIS_ROOT / "plots"
 TABLE_DIR = ANALYSIS_ROOT / "tables"
 QC_DIR = ANALYSIS_ROOT / "qc"
-for directory in [PLOT_DIR, TABLE_DIR, QC_DIR]:
+TEMPERATURE_PLOT_DIR = PLOT_DIR / "monthly_temperature_diagnostic"
+TEMPERATURE_TABLE_DIR = TABLE_DIR / "monthly_temperature_diagnostic"
+for directory in [
+    PLOT_DIR, TABLE_DIR, QC_DIR, TEMPERATURE_PLOT_DIR, TEMPERATURE_TABLE_DIR,
+]:
     directory.mkdir(parents=True, exist_ok=True)
 
 RUN_DATE = date.today().strftime("%Y%m%d")
@@ -117,6 +125,11 @@ RUN_DATE = date.today().strftime("%Y%m%d")
 # Every coincident month is retained. Annual figures subsequently use only
 # selected years containing all 12 coincident months.
 ANALYSIS_YEARS = [2015, 2018, 2019]
+
+# Established UA-HIPA/JHM method: conditional mean precipitation in fixed
+# 2-K ERA5 near-surface-temperature bins.  The explicit range comfortably
+# covers Antarctic monthly-mean T2M and remains unchanged as new years arrive.
+TEMPERATURE_BIN_EDGES_K = np.arange(198.0, 284.0 + 2.0, 2.0)
 
 
 #%%
@@ -217,6 +230,17 @@ region_masks_01deg = make_region_masks_from_basin_mask(
 )
 print("Common comparison CRS:", target_template_01deg.rio.crs)
 print("Common target dimensions:", target_template_01deg.sizes)
+lon_spacing = np.abs(np.diff(target_template_01deg.lon.values))
+lat_spacing = np.abs(np.diff(target_template_01deg.lat.values))
+if target_template_01deg.sizes != {"lat": 300, "lon": 3600}:
+    raise RuntimeError(
+        "The common Antarctic target must be 300 x 3600 at 0.1 degree"
+    )
+if not np.allclose(lon_spacing, 0.1, atol=1e-10) or not np.allclose(
+    lat_spacing, 0.1, atol=1e-10
+):
+    raise RuntimeError("The common target coordinate spacing is not 0.1 degree")
+print("Verified common-grid spacing: 0.1 degree latitude/longitude")
 
 
 #%%
@@ -449,6 +473,136 @@ print("Coincident month counts by year:", common_month_counts.to_dict())
 print("Complete years used by annual figures:", COMPLETE_COMMON_YEARS)
 print("Output period tag:", COMMON_PERIOD_TAG)
 print("Annual-output tag:", ANNUAL_PERIOD_TAG)
+
+
+#%%
+# =============================================================================
+# SECTION 12A. MONTHLY PRECIPITATION AS A FUNCTION OF ERA5 2-M TEMPERATURE
+# =============================================================================
+
+def load_era5_daily_t2m_as_monthly_mean(
+    daily_root,
+    requested_months,
+):
+    """Load only requested Antarctic days and return monthly-mean ERA5 T2M."""
+
+    requested_months = pd.DatetimeIndex(requested_months)
+    monthly_fields = []
+    for year in sorted(set(requested_months.year)):
+        year_file = Path(daily_root) / f"era5_t2m_{int(year)}_daily.nc"
+        if not year_file.exists():
+            raise FileNotFoundError(f"Missing ERA5 T2M file: {year_file}")
+        year_months = requested_months[requested_months.year == year]
+        with xr.open_dataset(year_file, engine="netcdf4") as dataset:
+            temperature = dataset["t2m"]
+            rename_map = {}
+            if "valid_time" in temperature.dims or "valid_time" in temperature.coords:
+                rename_map["valid_time"] = "time"
+            if "latitude" in temperature.dims:
+                rename_map["latitude"] = "lat"
+            if "longitude" in temperature.dims:
+                rename_map["longitude"] = "lon"
+            if rename_map:
+                temperature = temperature.rename(rename_map)
+            temperature = temperature.assign_coords(
+                lon=(((temperature.lon + 180.0) % 360.0) - 180.0)
+            ).sortby("lon").sortby("lat", ascending=False)
+            temperature = temperature.sel(lat=slice(-60.0, -90.0))
+            start = year_months.min()
+            end = year_months.max() + pd.offsets.MonthEnd(1)
+            temperature = temperature.sel(time=slice(start, end))
+            monthly = temperature.resample(time="MS").mean(keep_attrs=True)
+            monthly = monthly.sel(time=year_months).load()
+            monthly_fields.append(monthly)
+
+    result = xr.concat(monthly_fields, dim="time").sortby("time")
+    result.name = "era5_t2m_monthly_mean_K"
+    result.attrs.update(
+        units="K",
+        aggregation="mean of daily ERA5 2-m air temperature within month",
+    )
+    return result
+
+
+era5_t2m_monthly_native = load_era5_daily_t2m_as_monthly_mean(
+    ERA5_T2M_DAILY_ROOT,
+    common_months,
+)
+era5_t2m_monthly_01 = remap_geographic_monthly_to_common_grid(
+    era5_t2m_monthly_native,
+    target_template_01deg,
+    basin_mask_01deg,
+    resampling=Resampling.nearest,
+).sel(time=common_months)
+
+# PMB is intentionally excluded here.  Its native support is one value per
+# drainage basin; painting that value over every 0.1-degree grid cell would
+# multiply non-independent observations and distort temperature-bin means.
+temperature_product_names = [
+    "ERA5", "GPCP V3.3", "GPM PMW V08", "UA-HIPA q75", "AIRS",
+]
+days_in_month = xr.DataArray(
+    common_months.days_in_month.astype(float),
+    dims="time",
+    coords={"time": common_months},
+)
+temperature_precip_mm_day = {
+    product_name: common_products[product_name] / days_in_month
+    for product_name in temperature_product_names
+}
+
+temperature_min = float(era5_t2m_monthly_01.min(skipna=True))
+temperature_max = float(era5_t2m_monthly_01.max(skipna=True))
+if temperature_min < TEMPERATURE_BIN_EDGES_K[0] or temperature_max > TEMPERATURE_BIN_EDGES_K[-1]:
+    raise ValueError(
+        "ERA5 monthly T2M falls outside the configured fixed-bin range: "
+        f"observed {temperature_min:.2f}-{temperature_max:.2f} K versus "
+        f"configured {TEMPERATURE_BIN_EDGES_K[0]:.1f}-"
+        f"{TEMPERATURE_BIN_EDGES_K[-1]:.1f} K"
+    )
+
+temperature_conditional_means, temperature_sample_counts = (
+    conditional_mean_precip_by_temperature_bins(
+        temperature=era5_t2m_monthly_01,
+        precipitation_products=temperature_precip_mm_day,
+        region_masks=region_masks_01deg,
+        temperature_bin_edges=TEMPERATURE_BIN_EDGES_K,
+    )
+)
+temperature_bias_vs_era5 = temperature_bin_bias_against_reference(
+    temperature_conditional_means,
+    reference_product="ERA5",
+)
+
+temperature_table_path = TEMPERATURE_TABLE_DIR / (
+    f"conditional_mean_precipitation_by_ERA5_T2M_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv"
+)
+temperature_count_path = TEMPERATURE_TABLE_DIR / (
+    f"temperature_bin_sample_counts_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv"
+)
+temperature_bias_path = TEMPERATURE_TABLE_DIR / (
+    f"precipitation_bias_vs_ERA5_by_T2M_bin_{COMMON_PERIOD_TAG}_{RUN_DATE}.csv"
+)
+temperature_conditional_means.to_csv(temperature_table_path, index=False)
+temperature_sample_counts.to_csv(temperature_count_path, index=False)
+temperature_bias_vs_era5.to_csv(temperature_bias_path, index=False)
+
+temperature_figure_path = TEMPERATURE_PLOT_DIR / (
+    f"conditional_mean_precipitation_vs_ERA5_T2M_"
+    f"{COMMON_PERIOD_TAG}_{RUN_DATE}.png"
+)
+temperature_figure, temperature_axes = (
+    plot_conditional_precipitation_by_temperature(
+        conditional_means=temperature_conditional_means,
+        sample_counts=temperature_sample_counts,
+        output_path=temperature_figure_path,
+    )
+)
+print("ERA5 monthly T2M range [K]:", (temperature_min, temperature_max))
+print("Saved:", temperature_figure_path)
+print("Saved:", temperature_table_path)
+print("Saved:", temperature_count_path)
+print("Saved:", temperature_bias_path)
 
 
 #%%
@@ -876,3 +1030,5 @@ print("Products:", list(common_products))
 print("Plots:", PLOT_DIR)
 print("Tables:", TABLE_DIR)
 print("QC outputs:", QC_DIR)
+print("Temperature diagnostic plots:", TEMPERATURE_PLOT_DIR)
+print("Temperature diagnostic tables:", TEMPERATURE_TABLE_DIR)
