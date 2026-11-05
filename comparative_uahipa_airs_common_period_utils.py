@@ -24,7 +24,10 @@ import pandas as pd
 import xarray as xr
 
 from uahipa_airs_monthly_utils import subset_products_to_common_months
-from program_utile_13Apr2026 import product_styles_corr
+from program_utile_13Apr2026 import (
+    product_line_styles_distinct,
+    product_styles_corr,
+)
 
 
 # One shared project style dictionary.  Keeping this alias avoids a second,
@@ -163,7 +166,7 @@ def plot_conditional_precipitation_by_temperature(
 
     regions = conditional_means["region"].drop_duplicates().tolist()
     figure, axes = plt.subplots(
-        1, len(regions), figsize=(5.2 * len(regions), 4.8), sharey=True,
+        len(regions), 1, figsize=(10.5, 4.0 * len(regions)), sharex=True,
         constrained_layout=True,
     )
     axes = np.atleast_1d(axes)
@@ -177,7 +180,11 @@ def plot_conditional_precipitation_by_temperature(
         for product_name, product_frame in region_frame.groupby(
             "product", sort=False
         ):
-            style = PRODUCT_STYLES.get(product_name, {})
+            # Reuse the established multi-product line identity: manuscript
+            # color plus a unique linestyle and marker for every product.
+            style = product_line_styles_distinct.get(
+                product_name, PRODUCT_STYLES.get(product_name, {})
+            )
             axis.plot(
                 product_frame["temperature_bin_midpoint_K"],
                 product_frame["mean_precipitation_mm_day"],
@@ -187,9 +194,9 @@ def plot_conditional_precipitation_by_temperature(
         if not populated_bins.empty:
             axis.set_xlim(populated_bins.min() - 1.0, populated_bins.max() + 1.0)
         axis.set_title(region_name)
-        axis.set_xlabel("ERA5 2-m air temperature [K]")
         axis.grid(alpha=0.25)
-    axes[0].set_ylabel("Conditional mean precipitation [mm day$^{-1}$]")
+    axes[-1].set_xlabel("ERA5 2-m air temperature [K]")
+    figure.supylabel("Conditional mean precipitation [mm day$^{-1}$]")
     axes[0].legend(frameon=False, fontsize=9)
     if output_path is not None:
         output = Path(output_path)
