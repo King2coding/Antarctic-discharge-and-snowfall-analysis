@@ -850,15 +850,33 @@ print("Saved:", figure2_path)
 # =============================================================================
 
 figure3_path = PLOT_DIR / (
-    f"Figure_3_regional_mean_annual_all_products_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.png"
+    f"Figure_3_regional_mean_annual_with_UAHIPA_q70_"
+    f"{ANNUAL_PERIOD_TAG}_{RUN_DATE}.png"
+)
+# Minimal q70 sensitivity extension: add q70 only to the regional Figure 3
+# input. The shared six-product products, metrics, and Figures 2/4-7 remain
+# unchanged.
+figure3_q70_regional_monthly = cosine_weighted_regional_series(
+    products={"UA-HIPA q70": uahipa_q70_mon_01},
+    region_masks=region_masks_01deg,
+)
+figure3_regional_monthly = pd.concat(
+    [regional_monthly_common, figure3_q70_regional_monthly],
+    ignore_index=True,
+)
+figure3_product_order = (
+    r"$P_{\mathrm{MB}}$", "ERA5", "GPCP V3.3", "GPM PMW V08",
+    "UA-HIPA q70", "UA-HIPA q75", "AIRS",
 )
 regional_annual_r1 = compute_annual_totals_from_regional_series(
-    regional_monthly_common.rename(columns={"precipitation_mm_month": "precipitation"})
+    figure3_regional_monthly.rename(
+        columns={"precipitation_mm_month": "precipitation"}
+    )
 )
 regional_annual_climatology_r1 = compute_regional_mean_annual_precip(
     regional_annual_r1,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=tuple(common_products),
+    product_order=figure3_product_order,
 )
 regional_annual_values = regional_annual_r1.rename(
     columns={"precipitation": "precipitation_mm_year"}
@@ -869,7 +887,7 @@ regional_annual_climatology = regional_annual_climatology_r1.rename(
 figure3, figure3_axis = plot_regional_mean_annual_bars(
     regional_annual_climatology_r1,
     region_order=("Antarctica", "West Antarctica", "East Antarctica"),
-    product_order=tuple(common_products),
+    product_order=figure3_product_order,
     product_colors=product_styles_corr,
     figsize=(10, 6),
     ylabel="[mm/year]",
@@ -880,11 +898,16 @@ figure3, figure3_axis = plot_regional_mean_annual_bars(
 )
 figure3.savefig(figure3_path, dpi=150, bbox_inches="tight")
 regional_annual_values.to_csv(
-    TABLE_DIR / f"regional_annual_all_products_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.csv",
+    TABLE_DIR / (
+        f"regional_annual_with_UAHIPA_q70_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.csv"
+    ),
     index=False,
 )
 regional_annual_climatology.to_csv(
-    TABLE_DIR / f"regional_mean_annual_all_products_{ANNUAL_PERIOD_TAG}_{RUN_DATE}.csv",
+    TABLE_DIR / (
+        f"regional_mean_annual_with_UAHIPA_q70_"
+        f"{ANNUAL_PERIOD_TAG}_{RUN_DATE}.csv"
+    ),
     index=False,
 )
 print("Saved:", figure3_path)
